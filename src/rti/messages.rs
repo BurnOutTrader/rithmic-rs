@@ -63,4 +63,5 @@ pub enum RithmicMessage {
     RithmicOrderNotification(RithmicOrderNotification),
     TickBar(TickBar),
     TimeBar(TimeBar),
+    Unknown,
 }

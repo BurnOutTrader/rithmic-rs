@@ -1,6 +1,6 @@
 use prost::{Message, bytes::Bytes};
 use std::io::Cursor;
-use tracing::{Level, event};
+use tracing::{Level, error, event};
 
 use crate::rti::{
     AccountPnLPositionUpdate, BestBidOffer, BracketUpdates, DepthByOrder,
@@ -701,7 +701,24 @@ impl RithmicReceiverApi {
                 }
             }
             _ => {
-                panic!("Unknown message type: {:#01x?}", parsed_message)
+                error!(
+                    "Unknown message type received - template_id: {:?}, data_size: {} bytes",
+                    parsed_message.as_ref().map(|m| m.template_id),
+                    data.len()
+                );
+
+                return Err(RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::Unknown,
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error: Some(format!(
+                        "Unknown message type: template_id={:?}",
+                        parsed_message.as_ref().map(|m| m.template_id)
+                    )),
+                    source: self.source.clone(),
+                });
             }
         };
 
