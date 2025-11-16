@@ -37,9 +37,27 @@ pub struct RithmicReceiverApi {
 
 impl RithmicReceiverApi {
     pub fn buf_to_message(&self, data: Bytes) -> Result<RithmicResponse, RithmicResponse> {
-        let parsed_message = MessageType::decode(&mut Cursor::new(&data[4..]));
+        let parsed_message = match MessageType::decode(&mut Cursor::new(&data[4..])) {
+            Ok(msg) => msg,
+            Err(e) => {
+                error!(
+                    "Failed to decode MessageType: {} - data_size: {} bytes",
+                    e,
+                    data.len()
+                );
+                return Err(RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::Unknown,
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error: Some(format!("Failed to decode message: {}", e)),
+                    source: self.source.clone(),
+                });
+            }
+        };
 
-        let response = match parsed_message.clone().unwrap().template_id {
+        let response = match parsed_message.template_id {
             11 => {
                 let resp = ResponseLogin::decode(&mut Cursor::new(&data[4..])).unwrap();
                 let error = self.get_error(&resp.rp_code);
@@ -702,8 +720,8 @@ impl RithmicReceiverApi {
             }
             _ => {
                 error!(
-                    "Unknown message type received - template_id: {:?}, data_size: {} bytes",
-                    parsed_message.as_ref().map(|m| m.template_id),
+                    "Unknown message type received - template_id: {}, data_size: {} bytes",
+                    parsed_message.template_id,
                     data.len()
                 );
 
@@ -714,8 +732,8 @@ impl RithmicReceiverApi {
                     has_more: false,
                     multi_response: false,
                     error: Some(format!(
-                        "Unknown message type: template_id={:?}",
-                        parsed_message.as_ref().map(|m| m.template_id)
+                        "Unknown message type: template_id={}",
+                        parsed_message.template_id
                     )),
                     source: self.source.clone(),
                 });
