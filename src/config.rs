@@ -417,26 +417,17 @@ mod tests {
 
     #[test]
     fn test_rithmic_env_from_str() {
-        assert_eq!(
-            "demo".parse::<RithmicEnv>().unwrap(),
-            RithmicEnv::Demo
-        );
+        assert_eq!("demo".parse::<RithmicEnv>().unwrap(), RithmicEnv::Demo);
         assert_eq!(
             "development".parse::<RithmicEnv>().unwrap(),
             RithmicEnv::Demo
         );
-        assert_eq!(
-            "live".parse::<RithmicEnv>().unwrap(),
-            RithmicEnv::Live
-        );
+        assert_eq!("live".parse::<RithmicEnv>().unwrap(), RithmicEnv::Live);
         assert_eq!(
             "production".parse::<RithmicEnv>().unwrap(),
             RithmicEnv::Live
         );
-        assert_eq!(
-            "test".parse::<RithmicEnv>().unwrap(),
-            RithmicEnv::Test
-        );
+        assert_eq!("test".parse::<RithmicEnv>().unwrap(), RithmicEnv::Test);
 
         // Test invalid input
         let result = "invalid".parse::<RithmicEnv>();

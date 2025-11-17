@@ -1,7 +1,7 @@
 use tracing::{Level, event};
 
 use rithmic_rs::{
-    RithmicConfig, RithmicEnv, RithmicHistoryPlant,
+    ConnectStrategy, RithmicConfig, RithmicEnv, RithmicHistoryPlant,
     rti::{messages::RithmicMessage, request_time_bar_replay::BarType},
     ws::RithmicStream,
 };
@@ -58,7 +58,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing_subscriber::fmt().init();
 
-    let history_plant = RithmicHistoryPlant::new(&config).await;
+    let history_plant = RithmicHistoryPlant::connect(&config, ConnectStrategy::Simple).await?;
     let handle = history_plant.get_handle();
 
     handle.login().await?;

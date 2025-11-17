@@ -7,6 +7,7 @@ use tokio_tungstenite::{
 };
 
 use crate::{
+    ConnectStrategy,
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         sender_api::RithmicSenderApi,
@@ -16,7 +17,9 @@ use crate::{
     rti::{
         messages::RithmicMessage, request_login::SysInfraType, request_time_bar_replay::BarType,
     },
-    ws::{HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_retry, get_heartbeat_interval},
+    ws::{
+        HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_strategy, get_heartbeat_interval,
+    },
 };
 
 use futures_util::{
@@ -126,30 +129,35 @@ pub struct RithmicHistoryPlant {
 }
 
 impl RithmicHistoryPlant {
-    /// Create a new History Plant connection
+    /// Create a new History Plant connection to access historical market data.
     ///
     /// # Arguments
-    /// * `config` - Rithmic configuration with account credentials and environment settings
+    /// * `config` - Rithmic configuration
+    /// * `strategy` - Connection strategy (Simple, Retry, or AlternateWithRetry)
     ///
     /// # Returns
-    /// A new `RithmicHistoryPlant` instance connected to the Rithmic server
-    pub async fn new(config: &RithmicConfig) -> RithmicHistoryPlant {
+    /// A `Result` containing the connected `RithmicHistoryPlant` instance, or an error if the connection fails.
+    ///
+    /// # Errors
+    /// Returns an error if unable to establish WebSocket connection to the server.
+    pub async fn connect(
+        config: &RithmicConfig,
+        strategy: ConnectStrategy,
+    ) -> Result<RithmicHistoryPlant, Box<dyn std::error::Error>> {
         let (req_tx, req_rx) = mpsc::channel::<HistoryPlantCommand>(32);
         let (sub_tx, _sub_rx) = broadcast::channel::<RithmicResponse>(20_000);
 
-        let mut history_plant = HistoryPlant::new(req_rx, sub_tx.clone(), config)
-            .await
-            .unwrap();
+        let mut history_plant = HistoryPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
             history_plant.run().await;
         });
 
-        RithmicHistoryPlant {
+        Ok(RithmicHistoryPlant {
             connection_handle,
             sender: req_tx,
             subscription_sender: sub_tx,
-        }
+        })
     }
 }
 
@@ -188,10 +196,9 @@ impl HistoryPlant {
         request_receiver: mpsc::Receiver<HistoryPlantCommand>,
         subscription_sender: broadcast::Sender<RithmicResponse>,
         config: &RithmicConfig,
-    ) -> Result<HistoryPlant, ()> {
-        let ws_stream = connect_with_retry(&config.url, &config.beta_url, 15)
-            .await
-            .expect("failed to connect to history plant");
+        strategy: ConnectStrategy,
+    ) -> Result<HistoryPlant, Box<dyn std::error::Error>> {
+        let ws_stream = connect_with_strategy(&config.url, &config.beta_url, strategy).await?;
 
         let (rithmic_sender, rithmic_reader) = ws_stream.split();
 
@@ -225,7 +232,9 @@ impl PlantActor for HistoryPlant {
         loop {
             tokio::select! {
               _ = self.interval.tick() => {
-                self.handle_command(HistoryPlantCommand::SendHeartbeat {}).await;
+                if self.logged_in {
+                    self.handle_command(HistoryPlantCommand::SendHeartbeat {}).await;
+                }
               }
               Some(message) = self.request_receiver.recv() => {
                 self.handle_command(message).await;

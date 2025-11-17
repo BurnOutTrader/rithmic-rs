@@ -21,6 +21,17 @@ const CONNECT_TIMEOUT_SECS: u64 = 2;
 /// Base backoff in milliseconds multiplied by the attempt number.
 const BACKOFF_MS_BASE: u64 = 500;
 
+/// Connection strategy for connecting to Rithmic servers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectStrategy {
+    /// Single connection attempt. Recommended for most users.
+    Simple,
+    /// Retry same URL up to 15 times with exponential backoff.
+    Retry,
+    /// Alternates between primary and beta URLs. Useful when main server has issues.
+    AlternateWithRetry,
+}
+
 /// A generic stream over the Rithmic connection exposing a handle for external control.
 pub trait RithmicStream {
     type Handle;
@@ -46,17 +57,85 @@ pub fn get_heartbeat_interval(override_secs: Option<u64>) -> Interval {
     interval_at(start_offset, heartbeat_interval)
 }
 
-/// Sometimes the connection gets stuck and retrying seems to help.
+/// Connect to a single URL without retry.
 ///
-/// Arguments:
-/// * `primary_url`: Primary URL to connect to first
-/// * `secondary_url`: Beta URL to alternate with after the first failure
-/// * `max_attempts`: Total number of attempts to connect
+/// # Arguments
+/// * `url` - WebSocket URL to connect to
 ///
-/// Returns:
-/// * `Ok`: A WebSocketStream if the connection is successful.
-/// * `Err`: An error if the connection fails after the specified number of attempts.
-pub async fn connect_with_retry(
+/// # Returns
+/// WebSocketStream on success, error on failure.
+async fn connect(url: &str) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+    info!("Connecting to {}", url);
+
+    let (ws_stream, _) = connect_async_with_config(url, None, true).await?;
+
+    info!("Successfully connected to {}", url);
+
+    Ok(ws_stream)
+}
+
+/// Connect to a single URL with retry and exponential backoff.
+///
+/// # Arguments
+/// * `url` - WebSocket URL to connect to
+/// * `max_attempts` - Number of connection attempts
+///
+/// # Returns
+/// WebSocketStream on success, error if all attempts fail.
+async fn connect_with_retry_single_url(
+    url: &str,
+    max_attempts: u32,
+) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+    for attempt in 1..=max_attempts {
+        info!(
+            "Attempt {}/{}: connecting to {}",
+            attempt, max_attempts, url
+        );
+
+        match timeout(
+            Duration::from_secs(CONNECT_TIMEOUT_SECS),
+            connect_async_with_config(url, None, true),
+        )
+        .await
+        {
+            Ok(Ok((ws_stream, _))) => {
+                info!("Successfully connected to {}", url);
+                return Ok(ws_stream);
+            }
+            Ok(Err(e)) => warn!("connect_async failed for {}: {:?}", url, e),
+            Err(e) => warn!("connect_async to {} timed out: {:?}", url, e),
+        }
+
+        if attempt < max_attempts {
+            let backoff_ms: u64 = BACKOFF_MS_BASE * attempt as u64;
+
+            info!("Backing off for {}ms before retry", backoff_ms);
+
+            sleep(Duration::from_millis(backoff_ms)).await;
+        }
+    }
+
+    error!("max connection attempts reached for {}", url);
+
+    Err(Error::Io(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!(
+            "failed to connect to {} after {} attempts",
+            url, max_attempts
+        ),
+    )))
+}
+
+/// Alternate between primary and beta URLs with retry. Use when main server has issues.
+///
+/// # Arguments
+/// * `primary_url` - Primary WebSocket URL
+/// * `secondary_url` - Beta WebSocket URL (used after first failure)
+/// * `max_attempts` - Number of connection attempts
+///
+/// # Returns
+/// WebSocketStream on success, error if all attempts fail.
+async fn connect_with_retry(
     primary_url: &str,
     secondary_url: &str,
     max_attempts: u32,
@@ -98,4 +177,25 @@ pub async fn connect_with_retry(
         std::io::ErrorKind::Other,
         "max connection attempts reached",
     )))
+}
+
+/// Connect using the specified strategy.
+///
+/// # Arguments
+/// * `primary_url` - Primary WebSocket URL
+/// * `beta_url` - Beta WebSocket URL (only used for AlternateWithRetry)
+/// * `strategy` - Connection strategy to use
+///
+/// # Returns
+/// WebSocketStream on success, error on failure.
+pub async fn connect_with_strategy(
+    primary_url: &str,
+    beta_url: &str,
+    strategy: ConnectStrategy,
+) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
+    match strategy {
+        ConnectStrategy::Simple => connect(primary_url).await,
+        ConnectStrategy::Retry => connect_with_retry_single_url(primary_url, 15).await,
+        ConnectStrategy::AlternateWithRetry => connect_with_retry(primary_url, beta_url, 15).await,
+    }
 }

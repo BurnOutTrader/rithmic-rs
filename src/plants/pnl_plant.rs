@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use tracing::{Level, error, event, warn};
 
 use crate::{
+    ConnectStrategy,
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         sender_api::RithmicSenderApi,
@@ -9,7 +10,9 @@ use crate::{
     config::RithmicConfig,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType, request_pn_l_position_updates},
-    ws::{HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_retry, get_heartbeat_interval},
+    ws::{
+        HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_strategy, get_heartbeat_interval,
+    },
 };
 
 use futures_util::{
@@ -118,28 +121,35 @@ pub struct RithmicPnlPlant {
 }
 
 impl RithmicPnlPlant {
-    /// Create a new PnL Plant connection
+    /// Create a new PnL Plant connection to access profit and loss information.
     ///
     /// # Arguments
-    /// * `config` - Rithmic configuration with account credentials and environment settings
+    /// * `config` - Rithmic configuration
+    /// * `strategy` - Connection strategy (Simple, Retry, or AlternateWithRetry)
     ///
     /// # Returns
-    /// A new `RithmicPnlPlant` instance connected to the Rithmic server
-    pub async fn new(config: &RithmicConfig) -> RithmicPnlPlant {
+    /// A `Result` containing the connected `RithmicPnlPlant` instance, or an error if the connection fails.
+    ///
+    /// # Errors
+    /// Returns an error if unable to establish WebSocket connection to the server.
+    pub async fn connect(
+        config: &RithmicConfig,
+        strategy: ConnectStrategy,
+    ) -> Result<RithmicPnlPlant, Box<dyn std::error::Error>> {
         let (req_tx, req_rx) = mpsc::channel::<PnlPlantCommand>(64);
         let (sub_tx, _sub_rx) = broadcast::channel(10_000);
 
-        let mut pnl_plant = PnlPlant::new(req_rx, sub_tx.clone(), config).await.unwrap();
+        let mut pnl_plant = PnlPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
             pnl_plant.run().await;
         });
 
-        RithmicPnlPlant {
+        Ok(RithmicPnlPlant {
             connection_handle,
             sender: req_tx,
             subscription_sender: sub_tx,
-        }
+        })
     }
 }
 
@@ -176,10 +186,9 @@ impl PnlPlant {
         request_receiver: mpsc::Receiver<PnlPlantCommand>,
         subscription_sender: broadcast::Sender<RithmicResponse>,
         config: &RithmicConfig,
-    ) -> Result<PnlPlant, Error> {
-        let ws_stream = connect_with_retry(&config.url, &config.beta_url, 15)
-            .await
-            .expect("failed to connect to pnl plant");
+        strategy: ConnectStrategy,
+    ) -> Result<PnlPlant, Box<dyn std::error::Error>> {
+        let ws_stream = connect_with_strategy(&config.url, &config.beta_url, strategy).await?;
 
         let (rithmic_sender, rithmic_reader) = ws_stream.split();
 
