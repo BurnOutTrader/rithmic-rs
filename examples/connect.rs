@@ -1,6 +1,9 @@
 //! Example: Connect to the RithmicTickerPlant
-use rithmic_rs::{RithmicConfig, RithmicEnv, RithmicTickerPlant, ws::RithmicStream};
 use tracing::info;
+
+use rithmic_rs::{
+    ConnectStrategy, RithmicConfig, RithmicEnv, RithmicTickerPlant, ws::RithmicStream,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing_subscriber::fmt().init();
 
-    let ticker_plant = RithmicTickerPlant::new(&config).await;
+    let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Simple).await?;
     let ticker_plant_handle = ticker_plant.get_handle();
 
     let resp = ticker_plant_handle.login().await;

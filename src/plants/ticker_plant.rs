@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use tracing::{Level, error, event, warn};
 
 use crate::{
+    ConnectStrategy,
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         sender_api::RithmicSenderApi,
@@ -14,7 +15,9 @@ use crate::{
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
     },
-    ws::{HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_retry, get_heartbeat_interval},
+    ws::{
+        HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_strategy, get_heartbeat_interval,
+    },
 };
 
 use futures_util::{
@@ -97,16 +100,11 @@ pub enum TickerPlantCommand {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     // Create connection credentials
-///     let account_info = AccountInfo {
-///         account_id: "your_account".to_string(),
-///         env: rithmic_rs::connection_info::RithmicConnectionSystem::Demo,
-///         fcm_id: "your_fcm".to_string(),
-///         ib_id: "your_ib".to_string(),
-///     };
+///     // Load configuration from environment
+///     let config = RithmicConfig::from_dotenv(RithmicEnv::Demo)?;
 ///
-///     // Create the ticker plant instance
-///     let ticker_plant = RithmicTickerPlant::new(&account_info).await;
+///     // Connect to the ticker plant
+///     let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Simple).await?;
 ///     let handle = ticker_plant.get_handle();
 ///
 ///     // Login to the ticker plant
@@ -176,14 +174,9 @@ pub enum TickerPlantCommand {
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let account_info = AccountInfo {
-///         account_id: "your_account".to_string(),
-///         env: rithmic_rs::connection_info::RithmicConnectionSystem::Demo,
-///         fcm_id: "your_fcm".to_string(),
-///         ib_id: "your_ib".to_string(),
-///     };
+///     let config = RithmicConfig::from_dotenv(RithmicEnv::Demo)?;
 ///
-///     let ticker_plant = RithmicTickerPlant::new(&account_info).await;
+///     let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Simple).await?;
 ///     let handle = ticker_plant.get_handle();
 ///     handle.login().await?;
 ///     handle.subscribe("ESM1", "CME").await?;
@@ -238,30 +231,50 @@ pub struct RithmicTickerPlant {
 }
 
 impl RithmicTickerPlant {
-    /// Creates a new Ticker Plant connection to access real-time market data.
+    /// Connect to the Rithmic Ticker Plant to access real-time market data.
     ///
     /// # Arguments
-    /// * `config` - Rithmic configuration with account credentials and environment settings
+    /// * `config` - Rithmic configuration with credentials and server URLs
+    /// * `strategy` - Connection strategy (Simple or AlternateWithRetry)
     ///
     /// # Returns
-    /// A new `RithmicTickerPlant` instance connected to the Rithmic server
-    pub async fn new(config: &RithmicConfig) -> RithmicTickerPlant {
+    /// A `Result` containing the connected `RithmicTickerPlant` instance, or an error if the connection fails.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - Unable to establish WebSocket connection to the server
+    /// - Network timeout occurs
+    /// - Server rejects the connection
+    ///
+    /// # Example
+    /// ```no_run
+    /// use rithmic_rs::{RithmicConfig, RithmicEnv, RithmicTickerPlant, ConnectStrategy};
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let config = RithmicConfig::from_dotenv(RithmicEnv::Demo)?;
+    ///     let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Simple).await?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn connect(
+        config: &RithmicConfig,
+        strategy: ConnectStrategy,
+    ) -> Result<RithmicTickerPlant, Box<dyn std::error::Error>> {
         let (req_tx, req_rx) = mpsc::channel::<TickerPlantCommand>(64);
         let (sub_tx, _sub_rx) = broadcast::channel(10_000);
 
-        let mut ticker_plant = TickerPlant::new(req_rx, sub_tx.clone(), config)
-            .await
-            .unwrap();
+        let mut ticker_plant = TickerPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
             ticker_plant.run().await;
         });
 
-        RithmicTickerPlant {
+        Ok(RithmicTickerPlant {
             connection_handle,
             sender: req_tx,
             subscription_sender: sub_tx,
-        }
+        })
     }
 }
 
@@ -300,10 +313,9 @@ impl TickerPlant {
         request_receiver: mpsc::Receiver<TickerPlantCommand>,
         subscription_sender: broadcast::Sender<RithmicResponse>,
         config: &RithmicConfig,
-    ) -> Result<TickerPlant, ()> {
-        let ws_stream = connect_with_retry(&config.url, &config.beta_url, 15)
-            .await
-            .expect("failed to connect to ticker plant");
+        strategy: ConnectStrategy,
+    ) -> Result<TickerPlant, Box<dyn std::error::Error>> {
+        let ws_stream = connect_with_strategy(&config.url, &config.beta_url, strategy).await?;
 
         let (rithmic_sender, rithmic_reader) = ws_stream.split();
 

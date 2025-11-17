@@ -41,3 +41,6 @@ pub use plants::ticker_plant::{RithmicTickerPlant, RithmicTickerPlantHandle};
 
 // Re-export modern configuration types for convenience
 pub use config::{ConfigError, RithmicConfig, RithmicEnv};
+
+// Re-export connection strategy
+pub use ws::ConnectStrategy;

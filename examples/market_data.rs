@@ -3,7 +3,8 @@ use std::env;
 use tracing::{Level, event, info};
 
 use rithmic_rs::{
-    RithmicConfig, RithmicEnv, RithmicTickerPlant, rti::messages::RithmicMessage, ws::RithmicStream,
+    ConnectStrategy, RithmicConfig, RithmicEnv, RithmicTickerPlant, rti::messages::RithmicMessage,
+    ws::RithmicStream,
 };
 
 #[tokio::main]
@@ -20,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let symbol = env::var("SYMBOL").unwrap_or_else(|_| "ZNU5".to_string());
     let exchange = env::var("EXCHANGE").unwrap_or_else(|_| "CBOT".to_string());
 
-    let ticker_plant = RithmicTickerPlant::new(&config).await;
+    let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Simple).await?;
     let mut handle = ticker_plant.get_handle();
 
     handle.login().await?;

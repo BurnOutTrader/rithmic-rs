@@ -7,6 +7,7 @@ use tokio_tungstenite::{
 };
 
 use crate::{
+    ConnectStrategy,
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         rithmic_command_types::{RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder},
@@ -15,7 +16,9 @@ use crate::{
     config::RithmicConfig,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType},
-    ws::{HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_retry, get_heartbeat_interval},
+    ws::{
+        HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_strategy, get_heartbeat_interval,
+    },
 };
 
 use futures_util::{
@@ -198,28 +201,35 @@ pub struct RithmicOrderPlant {
 impl RithmicOrderPlant {
     /// Create a new Order Plant connection
     ///
+    /// Create a new Order Plant connection to manage trading orders.
+    ///
     /// # Arguments
-    /// * `config` - Rithmic configuration with account credentials and environment settings
+    /// * `config` - Rithmic configuration
+    /// * `strategy` - Connection strategy (Simple, Retry, or AlternateWithRetry)
     ///
     /// # Returns
-    /// A new `RithmicOrderPlant` instance connected to the Rithmic server
-    pub async fn new(config: &RithmicConfig) -> RithmicOrderPlant {
+    /// A `Result` containing the connected `RithmicOrderPlant` instance, or an error if the connection fails.
+    ///
+    /// # Errors
+    /// Returns an error if unable to establish WebSocket connection to the server.
+    pub async fn connect(
+        config: &RithmicConfig,
+        strategy: ConnectStrategy,
+    ) -> Result<RithmicOrderPlant, Box<dyn std::error::Error>> {
         let (req_tx, req_rx) = mpsc::channel::<OrderPlantCommand>(64);
         let (sub_tx, _sub_rx) = broadcast::channel(10_000);
 
-        let mut order_plant = OrderPlant::new(req_rx, sub_tx.clone(), config)
-            .await
-            .unwrap();
+        let mut order_plant = OrderPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
             order_plant.run().await;
         });
 
-        RithmicOrderPlant {
+        Ok(RithmicOrderPlant {
             connection_handle,
             sender: req_tx,
             subscription_sender: sub_tx,
-        }
+        })
     }
 }
 
@@ -255,10 +265,9 @@ impl OrderPlant {
         request_receiver: mpsc::Receiver<OrderPlantCommand>,
         subscription_sender: broadcast::Sender<RithmicResponse>,
         config: &RithmicConfig,
-    ) -> Result<OrderPlant, String> {
-        let ws_stream = connect_with_retry(&config.url, &config.beta_url, 15)
-            .await
-            .expect("failed to connect to order plant");
+        strategy: ConnectStrategy,
+    ) -> Result<OrderPlant, Box<dyn std::error::Error>> {
+        let ws_stream = connect_with_strategy(&config.url, &config.beta_url, strategy).await?;
 
         let (rithmic_sender, rithmic_reader) = ws_stream.split();
 
