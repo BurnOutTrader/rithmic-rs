@@ -16,3 +16,6 @@ Thumbs.db
 
 rapi/
 src/raw-proto/
+
+.claude/
+.cursor/

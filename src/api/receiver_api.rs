@@ -1,6 +1,6 @@
 use prost::{Message, bytes::Bytes};
 use std::io::Cursor;
-use tracing::{Level, error, event};
+use tracing::error;
 
 use crate::rti::{
     AccountPnLPositionUpdate, BestBidOffer, BracketUpdates, DepthByOrder,
@@ -744,12 +744,7 @@ impl RithmicReceiverApi {
         let err = self.check_message_error(&response);
 
         if let Some(error) = err {
-            event!(
-                Level::ERROR,
-                "receiver_api: error {:#?} {:?}",
-                response,
-                error
-            );
+            error!("receiver_api: error {:#?} {:?}", response, error);
 
             return Err(response);
         }
@@ -765,7 +760,7 @@ impl RithmicReceiverApi {
         if (rp_code.len() == 1 && rp_code[0] == "0") || (rp_code.is_empty()) {
             None
         } else {
-            event!(Level::ERROR, "receiver_api: error {:#?}", rp_code);
+            error!("receiver_api: error {:#?}", rp_code);
 
             Some(rp_code[1].clone())
         }

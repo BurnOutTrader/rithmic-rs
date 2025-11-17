@@ -110,8 +110,8 @@ async fn connect_with_retry_single_url(
         }
 
         let backoff_ms: u64 = BACKOFF_MS_BASE * attempt;
-        let backoff_duration = Duration::from_millis(backoff_ms)
-            .min(Duration::from_secs(MAX_BACKOFF_SECS));
+        let backoff_duration =
+            Duration::from_millis(backoff_ms).min(Duration::from_secs(MAX_BACKOFF_SECS));
 
         info!("Backing off for {:?} before retry", backoff_duration);
 
@@ -160,8 +160,8 @@ async fn connect_with_retry(
         }
 
         let backoff_ms: u64 = BACKOFF_MS_BASE * attempt;
-        let backoff_duration = Duration::from_millis(backoff_ms)
-            .min(Duration::from_secs(MAX_BACKOFF_SECS));
+        let backoff_duration =
+            Duration::from_millis(backoff_ms).min(Duration::from_secs(MAX_BACKOFF_SECS));
 
         info!("Backing off for {:?} before retry", backoff_duration);
 

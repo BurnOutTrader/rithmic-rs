@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::{Level, error, event, warn};
+use tracing::{error, info, warn};
 
 use tokio_tungstenite::{
     MaybeTlsStream,
@@ -328,11 +328,7 @@ impl PlantActor for OrderPlant {
 
         match message {
             Ok(Message::Close(frame)) => {
-                event!(
-                    Level::INFO,
-                    "order_plant: Received close frame: {:?}",
-                    frame
-                );
+                info!("order_plant: Received close frame: {:?}", frame);
 
                 stop = true;
             }
@@ -363,22 +359,19 @@ impl PlantActor for OrderPlant {
                 }
             },
             Err(Error::ConnectionClosed) => {
-                event!(Level::ERROR, "order_plant: Connection closed");
+                error!("order_plant: Connection closed");
 
                 stop = true;
             }
             Err(Error::Protocol(
                 tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
             )) => {
-                event!(
-                    Level::ERROR,
-                    "order_plant: connection reset without closing handshake"
-                );
+                error!("order_plant: connection reset without closing handshake");
 
                 stop = true;
             }
             _ => {
-                event!(Level::WARN, "order_plant: Unhandled message: {:?}", message);
+                warn!("order_plant: Unhandled message: {:?}", message);
             }
         }
 
@@ -415,7 +408,7 @@ impl PlantActor for OrderPlant {
                     &self.config.password,
                 );
 
-                event!(Level::INFO, "order_plant: sending login request {}", id);
+                info!("order_plant: sending login request {}", id);
 
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
@@ -637,7 +630,7 @@ impl RithmicOrderPlantHandle {
     /// # Returns
     /// The login response or an error message
     pub async fn login(&self) -> Result<RithmicResponse, String> {
-        event!(Level::INFO, "order_plant: logging in");
+        info!("order_plant: logging in");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
 
@@ -658,19 +651,15 @@ impl RithmicOrderPlantHandle {
                 }
 
                 if let Some(session_id) = &resp.unique_user_id {
-                    event!(Level::INFO, "order_plant: session id: {}", session_id);
+                    info!("order_plant: session id: {}", session_id);
                 }
             }
 
-            event!(Level::INFO, "order_plant: logged in");
+            info!("order_plant: logged in");
 
             Ok(response)
         } else {
-            event!(
-                Level::ERROR,
-                "order_plant: login failed {:?}",
-                response.error
-            );
+            error!("order_plant: login failed {:?}", response.error);
 
             Err(response.error.unwrap())
         }

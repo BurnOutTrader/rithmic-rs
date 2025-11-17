@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::{Level, error, event, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     ConnectStrategy,
@@ -380,11 +380,7 @@ impl PlantActor for TickerPlant {
 
         match message {
             Ok(Message::Close(frame)) => {
-                event!(
-                    Level::INFO,
-                    "ticker_plant received close frame: {:?}",
-                    frame
-                );
+                info!("ticker_plant received close frame: {:?}", frame);
 
                 stop = true;
             }
@@ -415,16 +411,12 @@ impl PlantActor for TickerPlant {
                 }
             },
             Err(Error::ConnectionClosed) => {
-                event!(Level::INFO, "ticker_plant connection closed");
+                info!("ticker_plant connection closed");
 
                 stop = true;
             }
             _ => {
-                event!(
-                    Level::WARN,
-                    "ticker_plant received unknown message {:?}",
-                    message
-                );
+                warn!("ticker_plant received unknown message {:?}", message);
             }
         }
 
@@ -461,7 +453,7 @@ impl PlantActor for TickerPlant {
                     &self.config.password,
                 );
 
-                event!(Level::INFO, "ticker_plant: sending login request {}", id);
+                info!("ticker_plant: sending login request {}", id);
 
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
@@ -598,7 +590,7 @@ impl RithmicTickerPlantHandle {
     /// # Returns
     /// The login response or an error message
     pub async fn login(&self) -> Result<RithmicResponse, String> {
-        event!(Level::INFO, "ticker_plant: logging in");
+        info!("ticker_plant: logging in");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
 
@@ -619,19 +611,15 @@ impl RithmicTickerPlantHandle {
                 }
 
                 if let Some(session_id) = &resp.unique_user_id {
-                    event!(Level::INFO, "ticker_plant: session id: {}", session_id);
+                    info!("ticker_plant: session id: {}", session_id);
                 }
             }
 
-            event!(Level::INFO, "ticker_plant: logged in");
+            info!("ticker_plant: logged in");
 
             Ok(response)
         } else {
-            event!(
-                Level::ERROR,
-                "ticker_plant: login failed {:?}",
-                response.error
-            );
+            error!("ticker_plant: login failed {:?}", response.error);
 
             Err(response.error.unwrap())
         }

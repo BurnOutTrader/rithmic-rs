@@ -25,90 +25,131 @@ Or manually add it to your `Cargo.toml` file.
 
 ```
 [dependencies]
-rithmic-rs = "0.4.2"
+rithmic-rs = "0.5.0"
 ```
+
+## Breaking Changes in 0.5.0
+
+Version 0.5.0 introduces breaking changes for improved stability and error handling:
+- Plant constructors changed from `new()` to `connect()` with explicit connection strategies
+- New unified `RithmicConfig` API replaces separate `AccountInfo` types
+- Heartbeat errors and forced logout events now delivered through subscription channel
+
+**📖 See [MIGRATION_0.5.0.md](MIGRATION_0.5.0.md) for step-by-step migration guide with code examples.**
+
+Also see [CHANGELOG.md](CHANGELOG.md) for complete list of changes.
 
 ## Usage
 
-Store your credentials in a `.env` file.
+### Configuration
 
-```sh
-# .env
-RITHMIC_TEST_USER=<USER_NAME>
-RITHMIC_TEST_PW=<PASSWORD>
+Rithmic supports three types of account environments: `RithmicEnv::Demo` for paper trading, `RithmicEnv::Live` for funded accounts, and `RithmicEnv::Test` for the test environment before app approval.
 
-RITHMIC_DEMO_USER=<USER_NAME>
-RITHMIC_DEMO_PW=<PASSWORD>
-
-RITHMIC_LIVE_USER=<USER_NAME>
-RITHMIC_LIVE_PW=<PASSWORD>
-```
-
-Rithmic supports three types of account environments, `RithmicConnectionSystem::Demo` is used for paper trading, `RithmicConnectionSystem::Live` will connect to your funded account, and `RithmicConnectionSystem::Test` connects to the test environment before your app is approved.
-
-To use this crate, pass in your account information to one of the plants. Doing so will spawn an actor in a new thread that listens to commands that you send via a handle. Some plants like the ticker plant will also include a broadcast channel that you can listen to for wire level updates.
+Configure your connection using the builder pattern:
 
 ```rust
-pub async fn stream_live_ticks(
-    &self,
-    account_info: &AccountInfo
-) -> Result<(), Box<dyn std::error::Error>> {
-    event!(Level::INFO, "market-data streaming ticks");
+use rithmic_rs::{RithmicConfig, RithmicEnv};
 
-    let ticker_plant = RithmicTickerPlant::new(account_info).await;
-    let ticker_plant_handle = ticker_plant.get_handle();
+let config = RithmicConfig::builder()
+    .user("your_username".to_string())
+    .password("your_password".to_string())
+    .system_name("Rithmic Paper Trading".to_string())
+    .env(RithmicEnv::Demo)
+    .build()?;
+```
 
-    let mut min_backoff_wait = 1;
+Alternatively, you can load from environment variables using `from_env()`:
 
-    while let Err(err) = ticker_plant_handle.login().await {
-        event!(Level::ERROR, "market-data: login failed: {}", err);
+```rust
+let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+```
 
-        sleep(Duration::from_secs(min_backoff_wait)).await;
+Required environment variables for `from_env()`:
+```sh
+# For Demo environment
+RITHMIC_DEMO_USER=your_username
+RITHMIC_DEMO_PW=your_password
 
-        min_backoff_wait *= 2;
+# For Live environment
+RITHMIC_LIVE_USER=your_username
+RITHMIC_LIVE_PW=your_password
 
-        if min_backoff_wait > 60 {
-            event!(Level::ERROR, "market-data: login exceeded max backoff");
+# For Test environment
+RITHMIC_TEST_USER=your_username
+RITHMIC_TEST_PW=your_password
+```
 
-            panic!("market-data: login exceeded max backoff")
-        }
-    }
+> **Note:** The `dotenv` dependency will become optional in version 0.6.0. The builder pattern is recommended for new projects.
 
+### Connection Strategies
+
+The library provides three connection strategies:
+- **`Simple`**: Single connection attempt (recommended default, fast-fail)
+- **`Retry`**: Indefinite retries with exponential backoff capped at 60 seconds
+- **`AlternateWithRetry`**: Alternates between primary and beta URLs with retries
+
+### Quick Start
+
+To use this crate, create a configuration and connect to a plant with your chosen strategy. Each plant uses the actor pattern and spawns a task that listens to commands via a handle. Plants like the ticker plant also include a broadcast channel for real-time updates.
+
+```rust
+use rithmic_rs::{RithmicConfig, RithmicEnv, ConnectStrategy, RithmicTickerPlant};
+
+async fn stream_live_ticks() -> Result<(), Box<dyn std::error::Error>> {
+    // Load configuration from environment variables
+    let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+
+    // Connect with retry strategy (indefinite retries with 60s max backoff)
+    let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?;
+    let handle = ticker_plant.get_handle();
+
+    // Login and subscribe
+    handle.login().await?;
     handle.subscribe("ESU5", "CME").await?;
 
+    // Process real-time updates
     loop {
-        let message = ticker_plant_handle.subscription_receiver.recv().await;
-
-        match message {
+        match handle.subscription_receiver.recv().await {
             Ok(update) => {
-                match update.message {
-                    RithmicMessage::LastTrade(u) => {
-                        let tick = Tick {
-                            dir: u.aggressor.unwrap(),
-                            price: u.trade_price.unwrap(),
-                            vol: u.trade_size.unwrap(),
-                            utime: u.ssboe.unwrap() as i64 * 1_000_000 + u.usecs.unwrap() as i64
-                        };
+                // IMPORTANT: Check for connection health issues
+                if let Some(error) = &update.error {
+                    eprintln!("Error from {}: {}", update.source, error);
 
-                        if let Some(s) = self.stream_map.get(&u.symbol.unwrap()) {
-                            if let Err(e) = s.send(tick) {
-                                event!(Level::ERROR, "market-data: failed to send tick: {}", e);
-                            };
-                        }
+                    // Handle heartbeat errors - may indicate connection degradation
+                    if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
+                        eprintln!("Heartbeat error - connection may be degraded");
+                        // Implement reconnection logic here
+                        break;
+                    }
+                }
+
+                // Handle forced logout events
+                if matches!(update.message, RithmicMessage::ForcedLogout(_)) {
+                    eprintln!("Forced logout - must reconnect");
+                    break;
+                }
+
+                // Process market data
+                match update.message {
+                    RithmicMessage::LastTrade(trade) => {
+                        println!("Trade: {} @ {}", trade.trade_size.unwrap(), trade.trade_price.unwrap());
+                    }
+                    RithmicMessage::BestBidOffer(bbo) => {
+                        println!("BBO: {}@{} / {}@{}",
+                            bbo.bid_size.unwrap(), bbo.bid_price.unwrap(),
+                            bbo.ask_price.unwrap(), bbo.ask_size.unwrap());
                     }
                     _ => {}
                 }
             }
-            Err(RecvError::Lagged(count)) => {
-                event!(Level::WARN, "{} messages lagged", count);
-            }
-            Err(err) => {
-                event!(Level::ERROR, "received error {:?}", err);
-
+            Err(e) => {
+                eprintln!("Channel error: {}", e);
                 break;
             }
         }
     }
+
+    Ok(())
 }
 ```
 

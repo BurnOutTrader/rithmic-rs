@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::{Level, error, event, warn};
+use tracing::{error, info, warn};
 
 use tokio_tungstenite::{
     MaybeTlsStream,
@@ -259,11 +259,7 @@ impl PlantActor for HistoryPlant {
 
         match message {
             Ok(Message::Close(frame)) => {
-                event!(
-                    Level::INFO,
-                    "history_plant: Received close frame: {:?}",
-                    frame
-                );
+                info!("history_plant: Received close frame: {:?}", frame);
                 stop = true;
             }
             Ok(Message::Binary(data)) => match self.rithmic_receiver_api.buf_to_message(data) {
@@ -293,15 +289,11 @@ impl PlantActor for HistoryPlant {
                 }
             },
             Err(Error::ConnectionClosed) => {
-                event!(Level::INFO, "history_plant: Connection closed");
+                info!("history_plant: Connection closed");
                 stop = true;
             }
             _ => {
-                event!(
-                    Level::WARN,
-                    "history_plant: Unhandled message {:?}",
-                    message
-                );
+                warn!("history_plant: Unhandled message {:?}", message);
             }
         }
 
@@ -338,7 +330,7 @@ impl PlantActor for HistoryPlant {
                     &self.config.password,
                 );
 
-                event!(Level::INFO, "history_plant: sending login request {}", id);
+                info!("history_plant: sending login request {}", id);
 
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
@@ -464,7 +456,7 @@ impl RithmicHistoryPlantHandle {
     /// # Returns
     /// The login response or an error message
     pub async fn login(&self) -> Result<RithmicResponse, String> {
-        event!(Level::INFO, "history_plant: logging in ");
+        info!("history_plant: logging in ");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
 
@@ -485,19 +477,15 @@ impl RithmicHistoryPlantHandle {
                 }
 
                 if let Some(session_id) = &resp.unique_user_id {
-                    event!(Level::INFO, "history_plant: session id: {}", session_id);
+                    info!("history_plant: session id: {}", session_id);
                 }
             }
 
-            event!(Level::INFO, "history_plant: logged in");
+            info!("history_plant: logged in");
 
             Ok(response)
         } else {
-            event!(
-                Level::ERROR,
-                "history_plant: login failed {:?}",
-                response.error
-            );
+            error!("history_plant: login failed {:?}", response.error);
 
             Err(response.error.unwrap())
         }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use tokio::sync::oneshot;
-use tracing::{Level, event};
+use tracing::error;
 
 use crate::{api::receiver_api::RithmicResponse, rti::messages::RithmicMessage};
 
@@ -38,11 +38,7 @@ impl RithmicRequestHandler {
                     if let Some(responder) = self.handle_map.remove(&response.request_id) {
                         responder.send(Ok(vec![response])).unwrap();
                     } else {
-                        event!(
-                            Level::ERROR,
-                            "No responder found for response: {:#?}",
-                            response
-                        );
+                        error!("No responder found for response: {:#?}", response);
                     }
                 } else {
                     // If response has more, we store it in a vector and wait for more messages
@@ -64,11 +60,7 @@ impl RithmicRequestHandler {
                         };
                         responder.send(Ok(response_vec)).unwrap();
                     } else {
-                        event!(
-                            Level::ERROR,
-                            "No responder found for response: {:#?}",
-                            response
-                        );
+                        error!("No responder found for response: {:#?}", response);
                     }
                 }
             }
