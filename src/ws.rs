@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use tokio::{
     net::TcpStream,
@@ -21,14 +21,17 @@ const CONNECT_TIMEOUT_SECS: u64 = 2;
 /// Base backoff in milliseconds multiplied by the attempt number.
 const BACKOFF_MS_BASE: u64 = 500;
 
+/// Maximum backoff duration in seconds (rate limit for login attempts).
+const MAX_BACKOFF_SECS: u64 = 60;
+
 /// Connection strategy for connecting to Rithmic servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectStrategy {
     /// Single connection attempt. Recommended for most users.
     Simple,
-    /// Retry same URL up to 15 times with exponential backoff.
+    /// Retry same URL indefinitely with exponential backoff (capped at 60s).
     Retry,
-    /// Alternates between primary and beta URLs. Useful when main server has issues.
+    /// Alternates between primary and beta URLs indefinitely. Useful when main server has issues.
     AlternateWithRetry,
 }
 
@@ -74,23 +77,23 @@ async fn connect(url: &str) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>
     Ok(ws_stream)
 }
 
-/// Connect to a single URL with retry and exponential backoff.
+/// Connect to a single URL with indefinite retry and exponential backoff.
+///
+/// Retries indefinitely with exponential backoff capped at 60 seconds.
+/// This ensures at most one connection attempt per minute after initial ramp-up.
 ///
 /// # Arguments
 /// * `url` - WebSocket URL to connect to
-/// * `max_attempts` - Number of connection attempts
 ///
 /// # Returns
-/// WebSocketStream on success, error if all attempts fail.
+/// WebSocketStream on success (never returns error as it retries indefinitely).
 async fn connect_with_retry_single_url(
     url: &str,
-    max_attempts: u32,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
-    for attempt in 1..=max_attempts {
-        info!(
-            "Attempt {}/{}: connecting to {}",
-            attempt, max_attempts, url
-        );
+    let mut attempt: u64 = 1;
+
+    loop {
+        info!("Attempt {}: connecting to {}", attempt, url);
 
         match timeout(
             Duration::from_secs(CONNECT_TIMEOUT_SECS),
@@ -106,41 +109,35 @@ async fn connect_with_retry_single_url(
             Err(e) => warn!("connect_async to {} timed out: {:?}", url, e),
         }
 
-        if attempt < max_attempts {
-            let backoff_ms: u64 = BACKOFF_MS_BASE * attempt as u64;
+        let backoff_ms: u64 = BACKOFF_MS_BASE * attempt;
+        let backoff_duration = Duration::from_millis(backoff_ms)
+            .min(Duration::from_secs(MAX_BACKOFF_SECS));
 
-            info!("Backing off for {}ms before retry", backoff_ms);
+        info!("Backing off for {:?} before retry", backoff_duration);
 
-            sleep(Duration::from_millis(backoff_ms)).await;
-        }
+        sleep(backoff_duration).await;
+        attempt += 1;
     }
-
-    error!("max connection attempts reached for {}", url);
-
-    Err(Error::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!(
-            "failed to connect to {} after {} attempts",
-            url, max_attempts
-        ),
-    )))
 }
 
-/// Alternate between primary and beta URLs with retry. Use when main server has issues.
+/// Alternate between primary and beta URLs with indefinite retry.
+///
+/// Retries indefinitely, alternating between primary and beta URLs.
+/// Use when main server has issues. Exponential backoff capped at 60 seconds.
 ///
 /// # Arguments
 /// * `primary_url` - Primary WebSocket URL
 /// * `secondary_url` - Beta WebSocket URL (used after first failure)
-/// * `max_attempts` - Number of connection attempts
 ///
 /// # Returns
-/// WebSocketStream on success, error if all attempts fail.
+/// WebSocketStream on success (never returns error as it retries indefinitely).
 async fn connect_with_retry(
     primary_url: &str,
     secondary_url: &str,
-    max_attempts: u32,
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
-    for attempt in 1..=max_attempts {
+    let mut attempt: u64 = 1;
+
+    loop {
         let selected_url = if attempt == 1 {
             primary_url
         } else if attempt % 2 == 0 {
@@ -162,21 +159,15 @@ async fn connect_with_retry(
             Err(e) => warn!("connect_async to {} timed out: {:?}", selected_url, e),
         }
 
-        if attempt < max_attempts {
-            let backoff_ms: u64 = BACKOFF_MS_BASE * attempt as u64;
+        let backoff_ms: u64 = BACKOFF_MS_BASE * attempt;
+        let backoff_duration = Duration::from_millis(backoff_ms)
+            .min(Duration::from_secs(MAX_BACKOFF_SECS));
 
-            info!("Backing off for {}ms before retry", backoff_ms,);
+        info!("Backing off for {:?} before retry", backoff_duration);
 
-            sleep(Duration::from_millis(backoff_ms)).await;
-        }
+        sleep(backoff_duration).await;
+        attempt += 1;
     }
-
-    error!("max connection attempts reached");
-
-    Err(Error::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        "max connection attempts reached",
-    )))
 }
 
 /// Connect using the specified strategy.
@@ -195,7 +186,7 @@ pub async fn connect_with_strategy(
 ) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Error> {
     match strategy {
         ConnectStrategy::Simple => connect(primary_url).await,
-        ConnectStrategy::Retry => connect_with_retry_single_url(primary_url, 15).await,
-        ConnectStrategy::AlternateWithRetry => connect_with_retry(primary_url, beta_url, 15).await,
+        ConnectStrategy::Retry => connect_with_retry_single_url(primary_url).await,
+        ConnectStrategy::AlternateWithRetry => connect_with_retry(primary_url, beta_url).await,
     }
 }
