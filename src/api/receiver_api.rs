@@ -19,6 +19,72 @@ use crate::rti::{
     messages::RithmicMessage,
 };
 
+/// Response from a Rithmic plant, either from a request or a subscription update.
+///
+/// This structure wraps all messages received from Rithmic plants, including both
+/// request-response messages and subscription updates (like market data, order updates, etc.).
+///
+/// ## Fields
+///
+/// - `request_id`: Unique identifier for matching responses to requests. Empty for updates.
+/// - `message`: The actual Rithmic message data (see [`RithmicMessage`])
+/// - `is_update`: `true` if this is a subscription update, `false` if it's a request response
+/// - `has_more`: `true` if more responses are coming for this request
+/// - `multi_response`: `true` if this request type can return multiple responses
+/// - `error`: Error message if the operation failed or a connection error occurred
+/// - `source`: Name of the plant that sent this response (e.g., "ticker_plant", "order_plant")
+///
+/// ## Error Handling
+///
+/// The `error` field is populated in two scenarios:
+///
+/// ### 1. Rithmic Protocol Errors
+/// When Rithmic rejects a request or encounters an error, the response will have:
+/// - `error: Some("error description from Rithmic")`
+/// - `message`: Usually [`RithmicMessage::Reject`](crate::rti::messages::RithmicMessage::Reject)
+///
+/// ### 2. Connection Errors
+/// When a plant's WebSocket connection fails, you'll receive:
+/// - `message: RithmicMessage::ConnectionError`
+/// - `error: Some("WebSocket error description")`
+/// - `is_update: true` (routed to subscription channel)
+/// - The plant has stopped and the channel will close
+///
+/// See [`RithmicMessage::ConnectionError`](crate::rti::messages::RithmicMessage::ConnectionError)
+/// for detailed error handling guidance.
+///
+/// ## Example: Handling Errors
+///
+/// ```no_run
+/// # use rithmic_rs::api::receiver_api::RithmicResponse;
+/// # use rithmic_rs::rti::messages::RithmicMessage;
+/// # fn handle_response(response: RithmicResponse) {
+/// match response.message {
+///     RithmicMessage::ConnectionError => {
+///         // WebSocket connection failed
+///         eprintln!(
+///             "Connection error from {}: {}",
+///             response.source,
+///             response.error.as_ref().unwrap()
+///         );
+///         // Implement reconnection logic
+///     }
+///     RithmicMessage::Reject(reject) => {
+///         // Rithmic rejected a request
+///         eprintln!(
+///             "Request rejected: {}",
+///             response.error.as_ref().unwrap_or(&"Unknown".to_string())
+///         );
+///     }
+///     _ => {
+///         // Check error field even for successful-looking messages
+///         if let Some(err) = response.error {
+///             eprintln!("Error in {}: {}", response.source, err);
+///         }
+///     }
+/// }
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct RithmicResponse {
     pub request_id: String,

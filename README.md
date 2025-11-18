@@ -25,7 +25,7 @@ Or manually add it to your `Cargo.toml` file.
 
 ```
 [dependencies]
-rithmic-rs = "0.5.0"
+rithmic-rs = "0.5.1"
 ```
 
 ## Breaking Changes in 0.5.0
@@ -126,6 +126,17 @@ async fn stream_live_ticks() -> Result<(), Box<dyn std::error::Error>> {
                 // Handle forced logout events
                 if matches!(update.message, RithmicMessage::ForcedLogout(_)) {
                     eprintln!("Forced logout - must reconnect");
+                    break;
+                }
+
+                // Handle connection errors (new in 0.5.1)
+                if matches!(update.message, RithmicMessage::ConnectionError) {
+                    eprintln!("Connection error from {}: {}",
+                        update.source,
+                        update.error.unwrap_or_else(|| "Unknown error".to_string())
+                    );
+                    // Plant has stopped, channel will close
+                    // Implement reconnection logic here
                     break;
                 }
 

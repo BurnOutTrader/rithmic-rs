@@ -7,11 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1]
+
+### Added
+
+#### Connection Error Handling
+- **New `RithmicMessage::ConnectionError` variant** for WebSocket connection failures
+  - Provides unified error handling for all connection-related failures
+  - Enables consumers to implement reconnection logic via pattern matching
+  - Includes comprehensive documentation with examples
+- **Comprehensive WebSocket error detection** across all plants (ticker, order, pnl, history):
+  - `ConnectionClosed`: Normal WebSocket closure
+  - `AlreadyClosed`: Attempted use of closed connection
+  - `Io` errors: Network/socket I/O failures (connection lost, timeout)
+  - `ResetWithoutClosingHandshake`: Connection reset without proper WebSocket close
+  - `SendAfterClosing`: Attempted to send data after closing frame sent
+  - `ReceivedAfterClosing`: Received data after closing frame sent
+- **Automatic error notifications** sent through subscription channel when connection fails
+  - `RithmicResponse` with `message: ConnectionError` and `is_update: true`
+  - `error` field contains specific error description
+  - `source` field identifies which plant failed
+  - Enables consumers to detect and handle connection failures in real-time
+
+#### Documentation
+- Added comprehensive documentation to `RithmicMessage::ConnectionError`
+  - Lists all handled error types
+  - Step-by-step guidance for handling connection errors
+  - Complete code examples showing pattern matching
+  - Notes on behavioral details and channel lifecycle
+- Added detailed documentation to `RithmicResponse` struct
+  - Explains error handling for both protocol and connection errors
+  - Examples showing how to handle different error scenarios
+  - Cross-references to related documentation
+
 ### Changed
+- **Improved logging consistency**: Changed `ConnectionClosed` log level from `info!` to `error!` across all plants
+  - Ensures all connection termination events are logged at error level
+  - Makes connection issues more visible in production logs
 - Replace `event!` macro with specific logging macros (`info!`, `error!`, `warn!`) across library code for better code clarity and idiomatic Rust logging
   - Updated: all plant files, `src/api/receiver_api.rs`, `src/request_handler.rs`
 
-## [0.5.0] - 2025-11-16
+### Fixed
+- **Connection error handling**: Plants now properly stop and notify consumers on all WebSocket connection failures
+  - Previously, most connection errors fell through to catch-all warning and left plants in undefined state
+  - Now all connection errors trigger clean shutdown with error notification
+  - Prevents resource leaks and zombie plant instances
+
+## [0.5.0]
 
 > **📖 Migration Guide:** See [MIGRATION_0.5.0.md](MIGRATION_0.5.0.md) for detailed step-by-step migration instructions.
 
@@ -150,9 +192,11 @@ Previous stable release. See git history for earlier changes.
 
 ## Version History Summary
 
+- **0.5.1** (2025-11-18): Connection error handling improvements - ConnectionError variant, comprehensive WebSocket error detection, automatic error notifications
 - **0.5.0** (2025-11-16): Major stability and API improvements - Connection strategies, unified config, panic fixes, connection health monitoring
 - **0.4.2** (2025-11-15): Previous stable release
 
-[Unreleased]: https://github.com/pbeets/rithmic-rs/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/pbeets/rithmic-rs/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/pbeets/rithmic-rs/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/pbeets/rithmic-rs/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/pbeets/rithmic-rs/releases/tag/v0.4.2

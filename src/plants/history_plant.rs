@@ -3,7 +3,7 @@ use tracing::{error, info, warn};
 
 use tokio_tungstenite::{
     MaybeTlsStream,
-    tungstenite::{Error, Message},
+    tungstenite::{Error, Message, error::ProtocolError},
 };
 
 use crate::{
@@ -289,7 +289,99 @@ impl PlantActor for HistoryPlant {
                 }
             },
             Err(Error::ConnectionClosed) => {
-                info!("history_plant: Connection closed");
+                error!("history_plant: connection closed");
+
+                let error_response = RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::ConnectionError,
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: Some("WebSocket connection closed".to_string()),
+                    source: self.rithmic_receiver_api.source.clone(),
+                };
+                let _ = self.subscription_sender.send(error_response);
+
+                stop = true;
+            }
+            Err(Error::AlreadyClosed) => {
+                error!("history_plant: connection already closed");
+
+                let error_response = RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::ConnectionError,
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: Some("WebSocket connection already closed".to_string()),
+                    source: self.rithmic_receiver_api.source.clone(),
+                };
+                let _ = self.subscription_sender.send(error_response);
+
+                stop = true;
+            }
+            Err(Error::Io(ref io_err)) => {
+                error!("history_plant: I/O error: {}", io_err);
+
+                let error_response = RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::ConnectionError,
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: Some(format!("WebSocket I/O error: {}", io_err)),
+                    source: self.rithmic_receiver_api.source.clone(),
+                };
+                let _ = self.subscription_sender.send(error_response);
+
+                stop = true;
+            }
+            Err(Error::Protocol(ProtocolError::ResetWithoutClosingHandshake)) => {
+                error!("history_plant: connection reset without closing handshake");
+
+                let error_response = RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::ConnectionError,
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: Some("WebSocket connection reset without closing handshake".to_string()),
+                    source: self.rithmic_receiver_api.source.clone(),
+                };
+                let _ = self.subscription_sender.send(error_response);
+
+                stop = true;
+            }
+            Err(Error::Protocol(ProtocolError::SendAfterClosing)) => {
+                error!("history_plant: attempted to send after closing");
+
+                let error_response = RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::ConnectionError,
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: Some("WebSocket attempted to send after closing".to_string()),
+                    source: self.rithmic_receiver_api.source.clone(),
+                };
+                let _ = self.subscription_sender.send(error_response);
+
+                stop = true;
+            }
+            Err(Error::Protocol(ProtocolError::ReceivedAfterClosing)) => {
+                error!("history_plant: received data after closing");
+
+                let error_response = RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::ConnectionError,
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: Some("WebSocket received data after closing".to_string()),
+                    source: self.rithmic_receiver_api.source.clone(),
+                };
+                let _ = self.subscription_sender.send(error_response);
+
                 stop = true;
             }
             _ => {
