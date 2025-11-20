@@ -288,8 +288,15 @@ impl PlantActor for PnlPlant {
             }
             Ok(Message::Binary(data)) => match self.rithmic_receiver_api.buf_to_message(data) {
                 Ok(response) => {
+                    // Handle heartbeat responses
                     if matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
                         self.heartbeat_manager.received(&response.request_id);
+
+                        // Skip heartbeat responses if we're ignoring them (default behavior)
+                        if self.ignore_heartbeat_response {
+                            // Heartbeat received and acknowledged, but not delivered to subscription channel
+                            return Ok(false);
+                        }
                     }
 
                     if response.is_update {

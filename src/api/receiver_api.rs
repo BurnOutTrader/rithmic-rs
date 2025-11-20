@@ -171,7 +171,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: "".to_string(),
+                    request_id: resp.user_msg.get(0).cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseHeartbeat(resp),
                     is_update: true, // Heartbeats are connection health events - route to subscription channel
                     has_more: false,
