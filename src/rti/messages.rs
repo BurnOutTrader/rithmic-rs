@@ -121,5 +121,49 @@ pub enum RithmicMessage {
     /// - Unlike [`ForcedLogout`], which is a server-initiated action, `ConnectionError`
     ///   indicates a transport-level failure
     ConnectionError,
+
+    /// Heartbeat response timeout.
+    ///
+    /// This variant is sent when a heartbeat request expecting a response does not
+    /// receive a reply within the configured timeout period. This may indicate:
+    ///
+    /// - Network latency or connectivity issues
+    /// - Server overload or processing delays
+    /// - Potential connection degradation
+    ///
+    /// When `ignore_heartbeat_response` is disabled in the plant configuration,
+    /// heartbeat requests expect a response from the server. If no response arrives
+    /// within the timeout period (default 5 seconds), this error is sent as an update.
+    ///
+    /// ## Handling Heartbeat Timeouts
+    ///
+    /// Unlike `ConnectionError`, a heartbeat timeout does not necessarily mean the
+    /// connection is dead. The plant continues operating and you may receive subsequent
+    /// messages. However, repeated timeouts suggest connection issues and may warrant:
+    ///
+    /// 1. Logging for monitoring/alerting
+    /// 2. Tracking timeout frequency to detect degraded connections
+    /// 3. Triggering reconnection if timeouts become frequent
+    ///
+    /// ## Example
+    ///
+    /// ```no_run
+    /// use rithmic_rs::rti::messages::RithmicMessage;
+    /// # use rithmic_rs::api::receiver_api::RithmicResponse;
+    /// # fn example(response: RithmicResponse) {
+    /// match response.message {
+    ///     RithmicMessage::HeartbeatTimeout => {
+    ///         eprintln!(
+    ///             "Heartbeat timeout on {}: {}",
+    ///             response.source,
+    ///             response.error.unwrap_or_else(|| "No response".to_string())
+    ///         );
+    ///         // Log, alert, or trigger reconnection logic
+    ///     }
+    ///     _ => {}
+    /// }
+    /// # }
+    /// ```
+    HeartbeatTimeout,
     Unknown,
 }

@@ -14,10 +14,12 @@ use crate::{
         sender_api::RithmicSenderApi,
     },
     config::RithmicConfig,
+    heartbeat_manager::HeartbeatManager,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType},
     ws::{
-        HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_strategy, get_heartbeat_interval,
+        HEARTBEAT_SECS, HEARTBEAT_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
+        get_heartbeat_interval,
     },
 };
 
@@ -30,7 +32,7 @@ use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
-    time::Interval,
+    time::{Interval, sleep_until},
 };
 
 pub enum OrderPlantCommand {
@@ -254,6 +256,7 @@ pub struct OrderPlant {
     interval: Interval,
     logged_in: bool,
     ignore_heartbeat_response: bool,
+    heartbeat_manager: HeartbeatManager,
     request_handler: RithmicRequestHandler,
     request_receiver: mpsc::Receiver<OrderPlantCommand>,
     rithmic_reader: SplitStream<tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>>,
@@ -283,12 +286,14 @@ impl OrderPlant {
         };
 
         let interval = get_heartbeat_interval(None);
+        let heartbeat_manager = HeartbeatManager::new(HEARTBEAT_TIMEOUT_SECS);
 
         Ok(OrderPlant {
             config: config.clone(),
             interval,
             logged_in: false,
             ignore_heartbeat_response: true,
+            heartbeat_manager,
             request_handler: RithmicRequestHandler::new(),
             request_receiver,
             rithmic_reader,
@@ -310,6 +315,28 @@ impl PlantActor for OrderPlant {
                 _ = self.interval.tick() => {
                     if self.logged_in {
                         self.handle_command(OrderPlantCommand::SendHeartbeat { ignore_response: self.ignore_heartbeat_response }).await;
+                    }
+                }
+                _ = async {
+                    if let Some(timeout_at) = self.heartbeat_manager.next_timeout_at() {
+                        sleep_until(timeout_at).await
+                    } else {
+                        std::future::pending::<()>().await
+                    }
+                } => {
+                    if let Some(request_id) = self.heartbeat_manager.check_timeout() {
+                        error!("Heartbeat {} timed out", request_id);
+
+                        let error_response = RithmicResponse {
+                            request_id,
+                            message: RithmicMessage::HeartbeatTimeout,
+                            is_update: true,
+                            has_more: false,
+                            multi_response: false,
+                            error: Some("Heartbeat response timeout".to_string()),
+                            source: self.rithmic_receiver_api.source.clone(),
+                        };
+                        let _ = self.subscription_sender.send(error_response);
                     }
                 }
                 Some(message) = self.request_receiver.recv() => {
@@ -341,6 +368,11 @@ impl PlantActor for OrderPlant {
             }
             Ok(Message::Binary(data)) => match self.rithmic_receiver_api.buf_to_message(data) {
                 Ok(response) => {
+                    // Check if this is a heartbeat response and mark as received
+                    if matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
+                        self.heartbeat_manager.received(&response.request_id);
+                    }
+
                     if response.is_update {
                         match self.subscription_sender.send(response) {
                             Ok(_) => {}
@@ -531,12 +563,7 @@ impl PlantActor for OrderPlant {
                 let (heartbeat_buf, id) = self.rithmic_sender_api.request_heartbeat();
 
                 if !ignore_response {
-                    let (response_sender, _response_receiver) = oneshot::channel();
-
-                    self.request_handler.register_request(RithmicRequest {
-                        request_id: id,
-                        responder: response_sender,
-                    });
+                    self.heartbeat_manager.sent(id.clone());
                 }
 
                 let _ = self
