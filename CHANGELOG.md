@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Optional Heartbeat Response Handling
+- **New `return_heartbeat_response()` method** on all plant handles (ticker, order, pnl, history)
+  - Controls whether heartbeat responses are delivered through subscription channel
+  - Default behavior: heartbeats use request/response pattern (not sent to channel)
+  - Call `handle.return_heartbeat_response(true)` to enable heartbeat monitoring
+  - Useful for explicit connection health monitoring during trading hours
+  - Can be disabled during off-market hours to avoid false alarms
+
+### Changed
+
+#### Heartbeat Response Delivery
+- **Reverted heartbeat behavior to request/response pattern** (no longer sent through subscription channel by default)
+  - Heartbeats sent automatically on interval but responses not delivered to subscription channel
+  - Previous behavior (0.5.0): All heartbeat responses delivered through subscription channel as updates
+  - New behavior: Heartbeat responses only delivered if explicitly enabled via `return_heartbeat_response(true)`
+  - Reduces noise in subscription channel for applications that don't need heartbeat monitoring
+  - Provides flexibility: enable during trading hours, disable during off-hours
+- **Internal improvements** to `request_handler.rs`
+  - Now handles heartbeat responses when callbacks are registered
+  - Refactored response sending into helper method for better error handling
+  - Improved logging for failed response deliveries
+
 ## [0.5.1]
 
 ### Added

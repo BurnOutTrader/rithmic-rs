@@ -8,7 +8,7 @@ Version 0.5.0 introduces breaking changes focused on three main areas:
 
 1. **Plant Connection API**: Constructor pattern changed from `new()` to `connect()` with explicit strategies
 2. **Configuration API**: New unified `RithmicConfig` replacing separate `AccountInfo` types
-3. **Error Handling**: Heartbeat and forced logout events now require explicit handling
+3. **Error Handling**: Forced logout and connection error events now require explicit handling (heartbeat monitoring is optional)
 
 ## Migration Checklist
 
@@ -16,7 +16,8 @@ Version 0.5.0 introduces breaking changes focused on three main areas:
 - [ ] Replace `AccountInfo` with `RithmicConfig`
 - [ ] Update plant initialization from `new()` to `connect()`
 - [ ] Choose appropriate `ConnectStrategy` for your use case
-- [ ] Add error handling for heartbeat and forced logout events
+- [ ] Add error handling for forced logout and connection error events (required)
+- [ ] Optionally enable heartbeat monitoring with `return_heartbeat_response(true)` if needed
 - [ ] Test reconnection behavior
 - [ ] Update deprecated type references
 
@@ -143,27 +144,27 @@ loop {
 }
 ```
 
-#### After (0.5.0)
+#### After (0.5.0+)
 ```rust
-// Must handle heartbeat errors and forced logouts
+// Must handle forced logouts and connection errors
+// Heartbeat monitoring is OPTIONAL - see below
 loop {
     match handle.subscription_receiver.recv().await {
         Ok(update) => {
-            // CRITICAL: Check for errors on all messages
+            // Check for errors on all messages
             if let Some(error) = &update.error {
                 eprintln!("Error from {}: {}", update.source, error);
-
-                // Heartbeat errors indicate connection degradation
-                if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
-                    eprintln!("Heartbeat error - connection may be degraded");
-                    // Implement your reconnection logic here
-                    break;
-                }
             }
 
             // Handle forced logout events
             if matches!(update.message, RithmicMessage::ForcedLogout(_)) {
                 eprintln!("Forced logout - must reconnect");
+                break;
+            }
+
+            // Handle connection errors (added in 0.5.1)
+            if matches!(update.message, RithmicMessage::ConnectionError) {
+                eprintln!("Connection error - must reconnect");
                 break;
             }
 
@@ -182,11 +183,38 @@ loop {
 }
 ```
 
+#### Optional: Enable Heartbeat Monitoring
+
+By default, heartbeats use request/response pattern and are NOT delivered through the subscription channel. If you need to monitor heartbeat health:
+
+```rust
+// Enable heartbeat responses in subscription channel
+handle.return_heartbeat_response(true).await;
+
+loop {
+    match handle.subscription_receiver.recv().await {
+        Ok(update) => {
+            // Now heartbeat errors will appear here
+            if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
+                if let Some(error) = &update.error {
+                    eprintln!("Heartbeat error - connection may be degraded");
+                    // Implement reconnection logic
+                    break;
+                }
+            }
+            // ... rest of message handling
+        }
+        Err(e) => break,
+    }
+}
+```
+
 **Key Changes:**
-- Heartbeat responses now appear in subscription channel
-- Forced logout events now delivered through subscription channel
-- Must check `error` field on all messages, especially heartbeats
-- Applications must implement reconnection logic
+- Forced logout events now delivered through subscription channel (REQUIRED)
+- Connection errors now delivered through subscription channel (REQUIRED, added in 0.5.1)
+- Heartbeat monitoring is OPTIONAL - must be explicitly enabled with `return_heartbeat_response(true)`
+- Default: heartbeats use request/response pattern, not sent through channel
+- Applications must implement reconnection logic for forced logouts and connection errors
 
 ## Complete Example Migration
 
@@ -246,23 +274,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     handle.login().await?;
     handle.subscribe("ESM1", "CME").await?;
 
-    // Process updates with health monitoring
+    // Process updates with connection health monitoring
     loop {
         match handle.subscription_receiver.recv().await {
             Ok(update) => {
-                // Check for connection health issues
+                // Check for errors
                 if let Some(error) = &update.error {
-                    eprintln!("Error: {}", error);
-
-                    if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
-                        eprintln!("Heartbeat error - reconnecting...");
-                        break;
-                    }
+                    eprintln!("Error from {}: {}", update.source, error);
                 }
 
-                // Handle forced logout
+                // Handle forced logout (REQUIRED)
                 if matches!(update.message, RithmicMessage::ForcedLogout(_)) {
                     eprintln!("Forced logout - must reconnect");
+                    break;
+                }
+
+                // Handle connection errors (REQUIRED, added in 0.5.1)
+                if matches!(update.message, RithmicMessage::ConnectionError) {
+                    eprintln!("Connection error - must reconnect");
                     break;
                 }
 
@@ -339,15 +368,19 @@ let config = RithmicConfig::builder()
 let plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?;
 ```
 
-### Issue: Missing heartbeat errors
+### Issue: Not detecting heartbeat errors
 
-**Problem:** Not checking `error` field on updates.
+**Problem:** Heartbeat monitoring is disabled by default.
 
-**Solution:** Always check for errors, especially on heartbeats:
+**Solution:** Enable heartbeat responses if you need connection health monitoring:
 ```rust
-if let Some(error) = &update.error {
-    if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
-        // Handle heartbeat error
+// Enable heartbeat responses to be delivered through subscription channel
+handle.return_heartbeat_response(true).await;
+
+// Then monitor for heartbeat errors
+if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
+    if let Some(error) = &update.error {
+        // Handle heartbeat error - connection may be degraded
     }
 }
 ```
@@ -403,7 +436,8 @@ RITHMIC_TEST_PW=your_password
 
 2. **Test error handling:**
    - Simulate network disruption
-   - Verify heartbeat errors are caught
+   - Verify forced logout and connection errors are caught
+   - If using heartbeat monitoring, verify heartbeat errors are caught
    - Verify reconnection logic works
 
 3. **Test all plants:**

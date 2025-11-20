@@ -114,13 +114,6 @@ async fn stream_live_ticks() -> Result<(), Box<dyn std::error::Error>> {
                 // IMPORTANT: Check for connection health issues
                 if let Some(error) = &update.error {
                     eprintln!("Error from {}: {}", update.source, error);
-
-                    // Handle heartbeat errors - may indicate connection degradation
-                    if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
-                        eprintln!("Heartbeat error - connection may be degraded");
-                        // Implement reconnection logic here
-                        break;
-                    }
                 }
 
                 // Handle forced logout events
@@ -163,6 +156,35 @@ async fn stream_live_ticks() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+### Heartbeat Monitoring (Optional)
+
+By default, heartbeat responses are sent automatically but not delivered through the subscription channel (request/response pattern). If you need to monitor heartbeat responses for connection health, you can enable them:
+
+```rust
+// Enable heartbeat responses to be delivered through subscription channel
+handle.return_heartbeat_response(true).await;
+
+// Now you can monitor heartbeat errors
+loop {
+    match handle.subscription_receiver.recv().await {
+        Ok(update) => {
+            // Check for heartbeat errors
+            if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
+                if let Some(error) = &update.error {
+                    eprintln!("Heartbeat error - connection may be degraded: {}", error);
+                    // Implement reconnection logic here
+                    break;
+                }
+            }
+            // ... handle other messages
+        }
+        Err(e) => break,
+    }
+}
+```
+
+**Note:** This feature is useful when you need explicit connection health monitoring. During off-market hours or periods where the server may not respond to heartbeats, you can disable this with `handle.return_heartbeat_response(false).await` to avoid false alarms.
 
 ## Examples
 

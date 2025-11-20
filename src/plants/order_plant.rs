@@ -45,9 +45,14 @@ pub enum OrderPlantCommand {
     Logout {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
     },
-    SendHeartbeat {},
+    SendHeartbeat {
+        ignore_response: bool,
+    },
     UpdateHeartbeat {
         seconds: u64,
+    },
+    SetHeartbeatResponseMode {
+        expect_response: bool,
     },
     AccountList {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
@@ -248,6 +253,7 @@ pub struct OrderPlant {
     config: RithmicConfig,
     interval: Interval,
     logged_in: bool,
+    ignore_heartbeat_response: bool,
     request_handler: RithmicRequestHandler,
     request_receiver: mpsc::Receiver<OrderPlantCommand>,
     rithmic_reader: SplitStream<tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>>,
@@ -282,6 +288,7 @@ impl OrderPlant {
             config: config.clone(),
             interval,
             logged_in: false,
+            ignore_heartbeat_response: true,
             request_handler: RithmicRequestHandler::new(),
             request_receiver,
             rithmic_reader,
@@ -302,7 +309,7 @@ impl PlantActor for OrderPlant {
             tokio::select! {
                 _ = self.interval.tick() => {
                     if self.logged_in {
-                        self.handle_command(OrderPlantCommand::SendHeartbeat {}).await;
+                        self.handle_command(OrderPlantCommand::SendHeartbeat { ignore_response: self.ignore_heartbeat_response }).await;
                     }
                 }
                 Some(message) = self.request_receiver.recv() => {
@@ -520,8 +527,17 @@ impl PlantActor for OrderPlant {
                     .await
                     .unwrap();
             }
-            OrderPlantCommand::SendHeartbeat {} => {
-                let (heartbeat_buf, _id) = self.rithmic_sender_api.request_heartbeat();
+            OrderPlantCommand::SendHeartbeat { ignore_response } => {
+                let (heartbeat_buf, id) = self.rithmic_sender_api.request_heartbeat();
+
+                if !ignore_response {
+                    let (response_sender, _response_receiver) = oneshot::channel();
+
+                    self.request_handler.register_request(RithmicRequest {
+                        request_id: id,
+                        responder: response_sender,
+                    });
+                }
 
                 let _ = self
                     .rithmic_sender
@@ -530,6 +546,9 @@ impl PlantActor for OrderPlant {
             }
             OrderPlantCommand::UpdateHeartbeat { seconds } => {
                 self.interval = get_heartbeat_interval(Some(seconds));
+            }
+            OrderPlantCommand::SetHeartbeatResponseMode { expect_response } => {
+                self.ignore_heartbeat_response = !expect_response;
             }
             OrderPlantCommand::AccountList { response_sender } => {
                 let (req_buf, id) = self.rithmic_sender_api.request_account_list();
@@ -940,6 +959,25 @@ impl RithmicOrderPlantHandle {
 
     async fn update_heartbeat(&self, seconds: u64) {
         let command = OrderPlantCommand::UpdateHeartbeat { seconds };
+
+        let _ = self.sender.send(command).await;
+    }
+
+    /// Set whether heartbeat responses should be returned
+    ///
+    /// # Arguments
+    /// * `expect_response` - If true, heartbeat responses will be handled. If false, they will be ignored.
+    ///
+    /// # Example
+    /// ```no_run
+    /// // During trading hours, expect heartbeat responses
+    /// handle.return_heartbeat_response(true).await;
+    ///
+    /// // Outside trading hours, don't expect responses
+    /// handle.return_heartbeat_response(false).await;
+    /// ```
+    pub async fn return_heartbeat_response(&self, expect_response: bool) {
+        let command = OrderPlantCommand::SetHeartbeatResponseMode { expect_response };
 
         let _ = self.sender.send(command).await;
     }

@@ -1,9 +1,7 @@
+use crate::{api::receiver_api::RithmicResponse, rti::messages::RithmicMessage};
 use std::collections::HashMap;
-
 use tokio::sync::oneshot;
 use tracing::error;
-
-use crate::{api::receiver_api::RithmicResponse, rti::messages::RithmicMessage};
 
 #[derive(Debug)]
 pub struct RithmicRequest {
@@ -30,13 +28,34 @@ impl RithmicRequestHandler {
             .insert(request.request_id, request.responder);
     }
 
+    fn send_to_responder(
+        &self,
+        responder: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        responses: Vec<RithmicResponse>,
+        request_id: &str,
+    ) {
+        if let Err(e) = responder.send(Ok(responses)) {
+            error!(
+                "Failed to send response: receiver dropped for request_id {}: {:#?}",
+                request_id, e
+            );
+        }
+    }
+
     pub fn handle_response(&mut self, response: RithmicResponse) {
         match response.message {
-            RithmicMessage::ResponseHeartbeat(_) => {}
+            RithmicMessage::ResponseHeartbeat(_) => {
+                // Handle heartbeat response if a callback is registered
+                if let Some(responder) = self.handle_map.remove(&response.request_id) {
+                    let request_id = response.request_id.clone();
+                    self.send_to_responder(responder, vec![response], &request_id);
+                }
+            }
             _ => {
                 if !response.multi_response {
                     if let Some(responder) = self.handle_map.remove(&response.request_id) {
-                        responder.send(Ok(vec![response])).unwrap();
+                        let request_id = response.request_id.clone();
+                        self.send_to_responder(responder, vec![response], &request_id);
                     } else {
                         error!("No responder found for response: {:#?}", response);
                     }
@@ -48,8 +67,8 @@ impl RithmicRequestHandler {
                             .or_default()
                             .push(response);
                     } else if let Some(responder) = self.handle_map.remove(&response.request_id) {
-                        let response_vec = match self.response_vec_map.remove(&response.request_id)
-                        {
+                        let request_id = response.request_id.clone();
+                        let response_vec = match self.response_vec_map.remove(&request_id) {
                             Some(mut vec) => {
                                 vec.push(response);
                                 vec
@@ -58,7 +77,7 @@ impl RithmicRequestHandler {
                                 vec![response]
                             }
                         };
-                        responder.send(Ok(response_vec)).unwrap();
+                        self.send_to_responder(responder, response_vec, &request_id);
                     } else {
                         error!("No responder found for response: {:#?}", response);
                     }
