@@ -159,30 +159,21 @@ async fn stream_live_ticks() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Heartbeat Monitoring (Optional)
 
-By default, heartbeat responses are sent automatically but not delivered through the subscription channel (request/response pattern). If you need to monitor heartbeat responses for connection health, you can enable them:
+By default, heartbeats are sent automatically but timeout monitoring is disabled. Enable connection health monitoring to detect if the server stops responding:
 
 ```rust
-// Enable heartbeat responses to be delivered through subscription channel
+// Enable connection health monitoring
 handle.return_heartbeat_response(true).await;
 
-// Now you can monitor heartbeat errors and timeouts
+// Monitor for heartbeat timeouts (only failures are reported)
 loop {
     match handle.subscription_receiver.recv().await {
         Ok(update) => {
-            // Check for heartbeat errors
-            if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
-                if let Some(error) = &update.error {
-                    eprintln!("Heartbeat error - connection may be degraded: {}", error);
-                    // Implement reconnection logic here
-                    break;
-                }
-            }
-
             // Check for heartbeat timeouts (automatic detection)
             if matches!(update.message, RithmicMessage::HeartbeatTimeout) {
                 eprintln!("Heartbeat timeout - no response after 30s: {}",
                     update.error.unwrap_or_default());
-                // Connection may be degraded - consider reconnecting
+                // Connection is unhealthy - implement reconnection logic
                 break;
             }
             // ... handle other messages
@@ -192,11 +183,15 @@ loop {
 }
 ```
 
-#### Automatic Timeout Detection
+#### Connection Health Verification
 
-When heartbeat responses are enabled with `return_heartbeat_response(false)` (disabled by default), the library automatically tracks pending heartbeats and detects timeouts. If a heartbeat response does not arrive within 30 seconds, a `HeartbeatTimeout` message is sent through the subscription channel.
+When enabled with `return_heartbeat_response(true)`, the library tracks pending heartbeats and reports ONLY failures:
+- If heartbeat response arrives within 30 seconds: Silent (connection is healthy)
+- If no response after 30 seconds: `HeartbeatTimeout` message sent to subscription channel
 
-**Note:** This feature is useful when you need explicit connection health monitoring. During off-market hours or periods where the server may not respond to heartbeats, you can disable this with `handle.return_heartbeat_response(false).await` to avoid false alarms.
+This "silent success, noisy failure" approach reduces channel noise while ensuring you're alerted to connection issues.
+
+**Note:** Enable during critical trading periods to verify the connection is alive. Disable during off-hours to avoid false alarms when the server may not respond.
 
 ## Examples
 

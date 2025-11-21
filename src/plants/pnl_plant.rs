@@ -176,13 +176,13 @@ pub struct PnlPlant {
     config: RithmicConfig,
     interval: Interval,
     logged_in: bool,
-    /// Whether to expect and deliver heartbeat responses through the subscription channel.
+    /// Whether to enable connection health monitoring via heartbeat timeout detection.
     ///
-    /// - `false` (default): Heartbeats sent but responses not delivered (reduces channel noise)
-    /// - `true`: Heartbeat responses delivered with automatic timeout detection after 30s
+    /// - `false` (default): Heartbeats sent but no timeout monitoring
+    /// - `true`: Monitors for heartbeat timeouts; sends `HeartbeatTimeout` if no response within 30s
     ///
-    /// Enable during trading hours to monitor connection health. Disable during off-hours
-    /// to avoid false alarms when server may not respond to heartbeats.
+    /// When enabled, ONLY timeout failures are reported (successful responses are silent).
+    /// Use this to verify the connection is still alive during critical trading periods.
     expect_heartbeat_response: bool,
     heartbeat_manager: HeartbeatManager,
     request_handler: RithmicRequestHandler,
@@ -298,12 +298,9 @@ impl PlantActor for PnlPlant {
                     // Handle heartbeat responses
                     if matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
                         self.heartbeat_manager.received(&response.request_id);
-
-                        // Skip heartbeat responses if we're not expecting them (default behavior)
-                        if !self.expect_heartbeat_response {
-                            // Heartbeat received and acknowledged, but not delivered to subscription channel
-                            return Ok(false);
-                        }
+                        // Always skip successful heartbeat responses - we only care about timeouts
+                        // When expect_heartbeat_response is true, only HeartbeatTimeout is sent to channel
+                        return Ok(false);
                     }
 
                     if response.is_update {

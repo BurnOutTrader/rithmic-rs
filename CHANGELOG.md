@@ -60,9 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Now correctly extracts request_id from `user_msg[0]` instead of using empty string
   - Enables proper matching of heartbeat responses to pending requests in timeout detection
 - Fixed ResponseHeartbeat routing in all plants
-  - Added filtering to respect `expect_heartbeat_response` setting
-  - Heartbeat responses now only delivered to subscription channel when `expect_heartbeat_response = true`
-  - Default behavior (expect_heartbeat_response = false) does not deliver heartbeat responses to channel
+  - Successful heartbeat responses are never delivered to subscription channel (silent when connection is healthy)
+  - When `expect_heartbeat_response = true`, only `HeartbeatTimeout` messages are sent on failure
+  - Purpose: connection health verification - report only when heartbeat fails, not when it succeeds
 
 #### Code Quality
 - Fixed clippy warning `tabs_in_doc_comments` in `src/rti.rs`
