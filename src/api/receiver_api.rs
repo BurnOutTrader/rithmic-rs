@@ -41,7 +41,7 @@ use crate::rti::{
 /// ### 1. Rithmic Protocol Errors
 /// When Rithmic rejects a request or encounters an error, the response will have:
 /// - `error: Some("error description from Rithmic")`
-/// - `message`: Usually [`RithmicMessage::Reject`](crate::rti::messages::RithmicMessage::Reject)
+/// - `message`: Usually [`RithmicMessage::Reject`]
 ///
 /// ### 2. Connection Errors
 /// When a plant's WebSocket connection fails, you'll receive:
@@ -50,8 +50,7 @@ use crate::rti::{
 /// - `is_update: true` (routed to subscription channel)
 /// - The plant has stopped and the channel will close
 ///
-/// See [`RithmicMessage::ConnectionError`](crate::rti::messages::RithmicMessage::ConnectionError)
-/// for detailed error handling guidance.
+/// See [`RithmicMessage::ConnectionError`] for detailed error handling guidance.
 ///
 /// ## Example: Handling Errors
 ///

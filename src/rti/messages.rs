@@ -124,26 +124,18 @@ pub enum RithmicMessage {
 
     /// Heartbeat response timeout.
     ///
-    /// This variant is sent when a heartbeat request expecting a response does not
-    /// receive a reply within the configured timeout period. This may indicate:
+    /// Sent when a heartbeat request expecting a response does not receive a reply
+    /// within the timeout period (default 30 seconds). This may indicate network issues,
+    /// server delays, or connection degradation.
     ///
-    /// - Network latency or connectivity issues
-    /// - Server overload or processing delays
-    /// - Potential connection degradation
-    ///
-    /// When `expect_heartbeat_response` is enabled in the plant configuration,
-    /// heartbeat requests expect a response from the server. If no response arrives
-    /// within the timeout period (default 5 seconds), this error is sent as an update.
+    /// When `expect_heartbeat_response` is enabled, heartbeat requests expect server
+    /// responses. If no response arrives within the timeout, this error is sent as an update.
     ///
     /// ## Handling Heartbeat Timeouts
     ///
-    /// Unlike `ConnectionError`, a heartbeat timeout does not necessarily mean the
-    /// connection is dead. The plant continues operating and you may receive subsequent
-    /// messages. However, repeated timeouts suggest connection issues and may warrant:
-    ///
-    /// 1. Logging for monitoring/alerting
-    /// 2. Tracking timeout frequency to detect degraded connections
-    /// 3. Triggering reconnection if timeouts become frequent
+    /// Unlike `ConnectionError`, a timeout doesn't mean the connection is dead—the plant
+    /// continues operating. However, repeated timeouts suggest connection issues that may
+    /// warrant logging, monitoring, or triggering reconnection
     ///
     /// ## Example
     ///

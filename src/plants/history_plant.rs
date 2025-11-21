@@ -515,7 +515,9 @@ impl PlantActor for HistoryPlant {
             HistoryPlantCommand::UpdateHeartbeat { seconds } => {
                 self.interval = get_heartbeat_interval(Some(seconds));
             }
-            HistoryPlantCommand::SetHeartbeatResponseMode { expect_heartbeat_response } => {
+            HistoryPlantCommand::SetHeartbeatResponseMode {
+                expect_heartbeat_response,
+            } => {
                 self.expect_heartbeat_response = expect_heartbeat_response;
             }
             HistoryPlantCommand::LoadTicks {
@@ -660,7 +662,9 @@ impl RithmicHistoryPlantHandle {
     /// handle.return_heartbeat_response(false).await;
     /// ```
     pub async fn return_heartbeat_response(&self, expect_heartbeat_response: bool) {
-        let command = HistoryPlantCommand::SetHeartbeatResponseMode { expect_heartbeat_response };
+        let command = HistoryPlantCommand::SetHeartbeatResponseMode {
+            expect_heartbeat_response,
+        };
 
         let _ = self.sender.send(command).await;
     }
