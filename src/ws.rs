@@ -15,6 +15,9 @@ use tokio_tungstenite::{
 /// Number of seconds between heartbeats sent to the server.
 pub const HEARTBEAT_SECS: u64 = 60;
 
+/// Timeout in seconds for heartbeat response when expecting a reply.
+pub const HEARTBEAT_TIMEOUT_SECS: u64 = 30;
+
 /// Connection attempt timeout in seconds.
 const CONNECT_TIMEOUT_SECS: u64 = 2;
 

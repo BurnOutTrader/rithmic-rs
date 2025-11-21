@@ -17,7 +17,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Useful for explicit connection health monitoring during trading hours
   - Can be disabled during off-market hours to avoid false alarms
 
+#### Heartbeat Timeout Detection
+- **New `HeartbeatManager`** for tracking heartbeat response timeouts
+  - Monitors pending heartbeats when responses are expected
+  - Detects timeouts after 30 seconds (configurable via `HEARTBEAT_TIMEOUT_SECS`)
+  - Integrated into all plant actors (ticker, order, pnl, history)
+  - Non-blocking implementation using tokio `sleep_until()` with efficient select! loop integration
+- **New `RithmicMessage::HeartbeatTimeout` variant** for timeout notifications
+  - Sent as an update message when heartbeat response does not arrive within timeout period
+  - Includes error context: "Heartbeat response timeout"
+  - Only active when heartbeat responses are expected (`return_heartbeat_response(false)`)
+  - Helps detect connection degradation without requiring manual timeout tracking
+  - Comprehensive documentation with usage examples
+- **Timeout constant `HEARTBEAT_TIMEOUT_SECS`** in `ws.rs`
+  - Set to 30 seconds (half the 60-second heartbeat interval)
+  - Provides balance between detecting issues and avoiding false positives
+
 ### Changed
+
+#### Internal Refactoring
+- Renamed internal field `ignore_heartbeat_response` to `expect_heartbeat_response` in all plants
+  - Improves code clarity with explicit naming and positive boolean logic
+  - Added documentation explaining the setting's purpose and when to use it
+  - No API changes - public interface remains the same
 
 #### Heartbeat Response Delivery
 - **Reverted heartbeat behavior to request/response pattern** (no longer sent through subscription channel by default)
@@ -30,6 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Now handles heartbeat responses when callbacks are registered
   - Refactored response sending into helper method for better error handling
   - Improved logging for failed response deliveries
+
+### Fixed
+
+#### Heartbeat Response Handling
+- Fixed ResponseHeartbeat request_id extraction in `src/api/receiver_api.rs`
+  - Now correctly extracts request_id from `user_msg[0]` instead of using empty string
+  - Enables proper matching of heartbeat responses to pending requests in timeout detection
+- Fixed ResponseHeartbeat routing in all plants
+  - Successful heartbeat responses are never delivered to subscription channel (silent when connection is healthy)
+  - When `expect_heartbeat_response = true`, only `HeartbeatTimeout` messages are sent on failure
+  - Purpose: connection health verification - report only when heartbeat fails, not when it succeeds
+
+#### Code Quality
+- Fixed clippy warning `tabs_in_doc_comments` in `src/rti.rs`
+  - Replaced tab character with spaces in documentation comment
 
 ## [0.5.1]
 

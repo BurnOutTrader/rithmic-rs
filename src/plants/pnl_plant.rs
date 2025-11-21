@@ -8,10 +8,12 @@ use crate::{
         sender_api::RithmicSenderApi,
     },
     config::RithmicConfig,
+    heartbeat_manager::HeartbeatManager,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType, request_pn_l_position_updates},
     ws::{
-        HEARTBEAT_SECS, PlantActor, RithmicStream, connect_with_strategy, get_heartbeat_interval,
+        HEARTBEAT_SECS, HEARTBEAT_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
+        get_heartbeat_interval,
     },
 };
 
@@ -23,7 +25,7 @@ use futures_util::{
 use tokio::{
     net::TcpStream,
     sync::{broadcast, mpsc, oneshot},
-    time::Interval,
+    time::{Interval, sleep_until},
 };
 
 use tokio_tungstenite::{
@@ -47,13 +49,13 @@ pub enum PnlPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
     },
     SendHeartbeat {
-        ignore_response: bool,
+        expect_response: bool,
     },
     UpdateHeartbeat {
         seconds: u64,
     },
     SetHeartbeatResponseMode {
-        expect_response: bool,
+        expect_heartbeat_response: bool,
     },
     SubscribePnlUpdates {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
@@ -174,7 +176,15 @@ pub struct PnlPlant {
     config: RithmicConfig,
     interval: Interval,
     logged_in: bool,
-    ignore_heartbeat_response: bool,
+    /// Whether to enable connection health monitoring via heartbeat timeout detection.
+    ///
+    /// - `false` (default): Heartbeats sent but no timeout monitoring
+    /// - `true`: Monitors for heartbeat timeouts; sends `HeartbeatTimeout` if no response within 30s
+    ///
+    /// When enabled, ONLY timeout failures are reported (successful responses are silent).
+    /// Use this to verify the connection is still alive during critical trading periods.
+    expect_heartbeat_response: bool,
+    heartbeat_manager: HeartbeatManager,
     request_handler: RithmicRequestHandler,
     request_receiver: mpsc::Receiver<PnlPlantCommand>,
     rithmic_reader: SplitStream<tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>>,
@@ -204,12 +214,14 @@ impl PnlPlant {
         };
 
         let interval = get_heartbeat_interval(None);
+        let heartbeat_manager = HeartbeatManager::new(HEARTBEAT_TIMEOUT_SECS);
 
         Ok(PnlPlant {
             config: config.clone(),
             interval,
             logged_in: false,
-            ignore_heartbeat_response: true,
+            heartbeat_manager,
+            expect_heartbeat_response: false,
             request_handler: RithmicRequestHandler::new(),
             request_receiver,
             rithmic_reader,
@@ -230,7 +242,29 @@ impl PlantActor for PnlPlant {
             tokio::select! {
                 _ = self.interval.tick() => {
                     if self.logged_in {
-                        self.handle_command(PnlPlantCommand::SendHeartbeat { ignore_response: self.ignore_heartbeat_response }).await;
+                        self.handle_command(PnlPlantCommand::SendHeartbeat { expect_response: self.expect_heartbeat_response }).await;
+                    }
+                }
+                _ = async {
+                    if let Some(timeout_at) = self.heartbeat_manager.next_timeout_at() {
+                        sleep_until(timeout_at).await
+                    } else {
+                        std::future::pending::<()>().await
+                    }
+                } => {
+                    if let Some(request_id) = self.heartbeat_manager.check_timeout() {
+                        error!("Heartbeat {} timed out", request_id);
+
+                        let error_response = RithmicResponse {
+                            request_id,
+                            message: RithmicMessage::HeartbeatTimeout,
+                            is_update: true,
+                            has_more: false,
+                            multi_response: false,
+                            error: Some("Heartbeat response timeout".to_string()),
+                            source: self.rithmic_receiver_api.source.clone(),
+                        };
+                        let _ = self.subscription_sender.send(error_response);
                     }
                 }
                 Some(message) = self.request_receiver.recv() => {
@@ -261,6 +295,14 @@ impl PlantActor for PnlPlant {
             }
             Ok(Message::Binary(data)) => match self.rithmic_receiver_api.buf_to_message(data) {
                 Ok(response) => {
+                    // Handle heartbeat responses
+                    if matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
+                        self.heartbeat_manager.received(&response.request_id);
+                        // Always skip successful heartbeat responses - we only care about timeouts
+                        // When expect_heartbeat_response is true, only HeartbeatTimeout is sent to channel
+                        return Ok(false);
+                    }
+
                     if response.is_update {
                         match self.subscription_sender.send(response) {
                             Ok(_) => {}
@@ -444,16 +486,11 @@ impl PlantActor for PnlPlant {
                     .await
                     .unwrap();
             }
-            PnlPlantCommand::SendHeartbeat { ignore_response } => {
+            PnlPlantCommand::SendHeartbeat { expect_response } => {
                 let (heartbeat_buf, id) = self.rithmic_sender_api.request_heartbeat();
 
-                if !ignore_response {
-                    let (response_sender, _response_receiver) = oneshot::channel();
-
-                    self.request_handler.register_request(RithmicRequest {
-                        request_id: id,
-                        responder: response_sender,
-                    });
+                if expect_response {
+                    self.heartbeat_manager.sent(id.clone());
                 }
 
                 let _ = self
@@ -464,8 +501,10 @@ impl PlantActor for PnlPlant {
             PnlPlantCommand::UpdateHeartbeat { seconds } => {
                 self.interval = get_heartbeat_interval(Some(seconds));
             }
-            PnlPlantCommand::SetHeartbeatResponseMode { expect_response } => {
-                self.ignore_heartbeat_response = !expect_response;
+            PnlPlantCommand::SetHeartbeatResponseMode {
+                expect_heartbeat_response,
+            } => {
+                self.expect_heartbeat_response = expect_heartbeat_response;
             }
             PnlPlantCommand::SubscribePnlUpdates { response_sender } => {
                 let (subscribe_buf, id) = self.rithmic_sender_api.request_pnl_position_updates(
@@ -572,7 +611,7 @@ impl RithmicPnlPlantHandle {
     /// Set whether heartbeat responses should be returned
     ///
     /// # Arguments
-    /// * `expect_response` - If true, heartbeat responses will be handled. If false, they will be ignored.
+    /// * `expect_heartbeat_response` - If true, heartbeat responses will be handled. If false, they will be ignored.
     ///
     /// # Example
     /// ```no_run
@@ -582,8 +621,10 @@ impl RithmicPnlPlantHandle {
     /// // Outside trading hours, don't expect responses
     /// handle.return_heartbeat_response(false).await;
     /// ```
-    pub async fn return_heartbeat_response(&self, expect_response: bool) {
-        let command = PnlPlantCommand::SetHeartbeatResponseMode { expect_response };
+    pub async fn return_heartbeat_response(&self, expect_heartbeat_response: bool) {
+        let command = PnlPlantCommand::SetHeartbeatResponseMode {
+            expect_heartbeat_response,
+        };
 
         let _ = self.sender.send(command).await;
     }

@@ -3017,7 +3017,7 @@ pub struct ResponseProductRmsInfo {
     /// PB_OFFSET + MNM_LOSS_LIMIT
     #[prost(double, optional, tag = "154019")]
     pub loss_limit: ::core::option::Option<f64>,
-    /// PB_OFFSET +	MNM_COMMISSION_FILL_RATE
+    /// PB_OFFSET +    MNM_COMMISSION_FILL_RATE
     #[prost(double, optional, tag = "156969")]
     pub commission_fill_rate: ::core::option::Option<f64>,
     /// PB_OFFSET + MNM_BUY_MARGIN_RATE

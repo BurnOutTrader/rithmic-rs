@@ -121,5 +121,41 @@ pub enum RithmicMessage {
     /// - Unlike [`ForcedLogout`], which is a server-initiated action, `ConnectionError`
     ///   indicates a transport-level failure
     ConnectionError,
+
+    /// Heartbeat response timeout.
+    ///
+    /// Sent when a heartbeat request expecting a response does not receive a reply
+    /// within the timeout period (default 30 seconds). This may indicate network issues,
+    /// server delays, or connection degradation.
+    ///
+    /// When `expect_heartbeat_response` is enabled, heartbeat requests expect server
+    /// responses. If no response arrives within the timeout, this error is sent as an update.
+    ///
+    /// ## Handling Heartbeat Timeouts
+    ///
+    /// Unlike `ConnectionError`, a timeout doesn't mean the connection is dead—the plant
+    /// continues operating. However, repeated timeouts suggest connection issues that may
+    /// warrant logging, monitoring, or triggering reconnection
+    ///
+    /// ## Example
+    ///
+    /// ```no_run
+    /// use rithmic_rs::rti::messages::RithmicMessage;
+    /// # use rithmic_rs::api::receiver_api::RithmicResponse;
+    /// # fn example(response: RithmicResponse) {
+    /// match response.message {
+    ///     RithmicMessage::HeartbeatTimeout => {
+    ///         eprintln!(
+    ///             "Heartbeat timeout on {}: {}",
+    ///             response.source,
+    ///             response.error.unwrap_or_else(|| "No response".to_string())
+    ///         );
+    ///         // Log, alert, or trigger reconnection logic
+    ///     }
+    ///     _ => {}
+    /// }
+    /// # }
+    /// ```
+    HeartbeatTimeout,
     Unknown,
 }
