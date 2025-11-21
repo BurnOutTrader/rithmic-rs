@@ -255,7 +255,7 @@ pub struct OrderPlant {
     config: RithmicConfig,
     interval: Interval,
     logged_in: bool,
-    ignore_heartbeat_response: bool,
+    expect_response: bool,
     heartbeat_manager: HeartbeatManager,
     request_handler: RithmicRequestHandler,
     request_receiver: mpsc::Receiver<OrderPlantCommand>,
@@ -292,7 +292,7 @@ impl OrderPlant {
             config: config.clone(),
             interval,
             logged_in: false,
-            ignore_heartbeat_response: true,
+            expect_response: false,
             heartbeat_manager,
             request_handler: RithmicRequestHandler::new(),
             request_receiver,
@@ -314,7 +314,7 @@ impl PlantActor for OrderPlant {
             tokio::select! {
                 _ = self.interval.tick() => {
                     if self.logged_in {
-                        self.handle_command(OrderPlantCommand::SendHeartbeat { ignore_response: self.ignore_heartbeat_response }).await;
+                        self.handle_command(OrderPlantCommand::SendHeartbeat { ignore_response: !self.expect_response }).await;
                     }
                 }
                 _ = async {
@@ -372,8 +372,8 @@ impl PlantActor for OrderPlant {
                     if matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
                         self.heartbeat_manager.received(&response.request_id);
 
-                        // Skip heartbeat responses if we're ignoring them (default behavior)
-                        if self.ignore_heartbeat_response {
+                        // Skip heartbeat responses if we're not expecting them (default behavior)
+                        if !self.expect_response {
                             // Heartbeat received and acknowledged, but not delivered to subscription channel
                             return Ok(false);
                         }
@@ -581,7 +581,7 @@ impl PlantActor for OrderPlant {
                 self.interval = get_heartbeat_interval(Some(seconds));
             }
             OrderPlantCommand::SetHeartbeatResponseMode { expect_response } => {
-                self.ignore_heartbeat_response = !expect_response;
+                self.expect_response = expect_response;
             }
             OrderPlantCommand::AccountList { response_sender } => {
                 let (req_buf, id) = self.rithmic_sender_api.request_account_list();

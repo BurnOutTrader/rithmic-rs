@@ -131,7 +131,7 @@ pub enum RithmicMessage {
     /// - Server overload or processing delays
     /// - Potential connection degradation
     ///
-    /// When `ignore_heartbeat_response` is disabled in the plant configuration,
+    /// When `expect_response` is enabled in the plant configuration,
     /// heartbeat requests expect a response from the server. If no response arrives
     /// within the timeout period (default 5 seconds), this error is sent as an update.
     ///

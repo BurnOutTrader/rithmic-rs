@@ -7,7 +7,7 @@ use tracing::warn;
 /// This manager tracks pending heartbeat requests and detects when responses
 /// do not arrive within the configured timeout period. It is used internally
 /// by plant actors to monitor connection health when heartbeat responses are
-/// enabled via `return_heartbeat_response(false)`.
+/// enabled via `return_heartbeat_response(true)`.
 ///
 /// ## Behavior
 ///
