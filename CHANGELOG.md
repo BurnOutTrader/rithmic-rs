@@ -49,22 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-#### Critical Heartbeat Bugs
-- **Fixed heartbeat timeout detection completely broken** (`src/api/receiver_api.rs`)
-  - ResponseHeartbeat was using empty string for request_id instead of extracting from `user_msg[0]`
-  - This caused `heartbeat_manager.received()` to never match pending heartbeats
-  - **Impact:** Every heartbeat timed out after 30 seconds with false-positive HeartbeatTimeout messages
-  - Now correctly extracts request_id from server response for proper timeout tracking
-- **Fixed ResponseHeartbeat always delivered to subscription channel** (all plants)
-  - ResponseHeartbeat was always routed to subscription channel regardless of `ignore_heartbeat_response` setting
-  - Contradicted documented "request/response pattern by default" behavior
-  - Added filtering to skip ResponseHeartbeat when `ignore_heartbeat_response = true` (default)
-  - **Impact:** Default behavior now matches documentation - heartbeats not delivered to subscription channel
+#### Heartbeat Response Handling
+- Fixed ResponseHeartbeat request_id extraction in `src/api/receiver_api.rs`
+  - Now correctly extracts request_id from `user_msg[0]` instead of using empty string
+  - Enables proper matching of heartbeat responses to pending requests in timeout detection
+- Fixed ResponseHeartbeat routing in all plants
+  - Added filtering to respect `ignore_heartbeat_response` setting
+  - Heartbeat responses now only delivered to subscription channel when `ignore_heartbeat_response = false`
+  - Default behavior (ignore = true) no longer delivers heartbeat responses to channel
 
 #### Code Quality
 - Fixed clippy warning `tabs_in_doc_comments` in `src/rti.rs`
   - Replaced tab character with spaces in documentation comment
-  - Improves consistency with Rust documentation standards
 
 ## [0.5.1]
 
