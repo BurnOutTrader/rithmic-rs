@@ -8,7 +8,6 @@ use crate::{
         sender_api::RithmicSenderApi,
     },
     config::RithmicConfig,
-    heartbeat_manager::HeartbeatManager,
     ping_manager::PingManager,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{
@@ -19,8 +18,8 @@ use crate::{
         request_search_symbols,
     },
     ws::{
-        HEARTBEAT_SECS, HEARTBEAT_TIMEOUT_SECS, PING_TIMEOUT_SECS, PlantActor, RithmicStream,
-        connect_with_strategy, get_heartbeat_interval, get_ping_interval,
+        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
+        get_heartbeat_interval, get_ping_interval,
     },
 };
 
@@ -52,14 +51,9 @@ pub enum TickerPlantCommand {
     Logout {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
     },
-    SendHeartbeat {
-        expect_response: bool,
-    },
+    SendHeartbeat,
     UpdateHeartbeat {
         seconds: u64,
-    },
-    SetHeartbeatResponseMode {
-        expect_heartbeat_response: bool,
     },
     Subscribe {
         symbol: String,
@@ -102,13 +96,16 @@ pub enum TickerPlantCommand {
 ///
 /// # Connection Health Monitoring
 ///
-/// The subscription receiver provides ALL connection health events, including:
-/// - **Heartbeat responses**: Monitor connection health by checking for errors
+/// The subscription receiver provides connection health events:
+/// - **WebSocket ping/pong timeouts**: Primary indicator of dead connections (auto-detected)
+/// - **Heartbeat errors**: Only forwarded when Rithmic server returns an error (rare)
 /// - **Forced logout events**: Server-initiated disconnections requiring reconnection
 /// - **Market data updates**: Real-time trade and quote data
 ///
-/// All messages are delivered through the `subscription_receiver` channel. Always check
-/// the `error` field on responses - particularly heartbeats - to detect connection issues.
+/// **Note:** Heartbeat requests are sent automatically to comply with Rithmic's protocol,
+/// but successful responses are silently dropped. Only heartbeat errors from the server
+/// are forwarded as `HeartbeatTimeout` messages. The primary keep-alive mechanism is
+/// WebSocket ping/pong, which reliably detects dead connections 24/7.
 ///
 /// # Example: Basic Usage
 ///
@@ -139,14 +136,13 @@ pub enum TickerPlantCommand {
 ///     loop {
 ///         match handle.subscription_receiver.recv().await {
 ///             Ok(update) => {
-///                 // Always check for errors (especially on heartbeats)
+///                 // Check for connection errors
 ///                 if let Some(error) = &update.error {
 ///                     eprintln!("Error from {}: {}", update.source, error);
 ///
-///                     // Connection health issue - decide whether to reconnect
-///                     if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
-///                         eprintln!("Heartbeat error - connection may be degraded");
-///                         // Implement reconnection logic here
+///                     // Ping timeout or heartbeat error - connection may be dead
+///                     if matches!(update.message, RithmicMessage::HeartbeatTimeout) {
+///                         eprintln!("Connection health issue - reconnection needed");
 ///                         break;
 ///                     }
 ///                     continue;
@@ -158,9 +154,6 @@ pub enum TickerPlantCommand {
 ///                     }
 ///                     RithmicMessage::BestBidOffer(bbo) => {
 ///                         println!("BBO: {:?}", bbo);
-///                     }
-///                     RithmicMessage::ResponseHeartbeat(_) => {
-///                         // Heartbeat OK - connection healthy
 ///                     }
 ///                     RithmicMessage::ForcedLogout(logout) => {
 ///                         eprintln!("Forced logout: {:?}", logout);
@@ -182,69 +175,6 @@ pub enum TickerPlantCommand {
 /// }
 /// ```
 ///
-/// # Example: Robust Connection Health Monitoring
-///
-/// ```no_run
-/// use rithmic_rs::{
-///     RithmicConfig, RithmicEnv, ConnectStrategy,
-///     plants::ticker_plant::RithmicTickerPlant,
-///     rti::messages::RithmicMessage,
-///     ws::RithmicStream,
-/// };
-/// use tokio::time::{Duration, Instant};
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
-///     let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
-///
-///     let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Simple).await?;
-///     let mut handle = ticker_plant.get_handle();
-///     handle.login().await?;
-///     handle.subscribe("ESM1", "CME").await?;
-///
-///     let mut last_heartbeat = Instant::now();
-///     let heartbeat_timeout = Duration::from_secs(60);
-///
-///     loop {
-///         match handle.subscription_receiver.recv().await {
-///             Ok(update) => {
-///                 match update.message {
-///                     RithmicMessage::ResponseHeartbeat(_) => {
-///                         if let Some(error) = &update.error {
-///                             eprintln!("Heartbeat error: {} - reconnection may be needed", error);
-///                             // Implement your reconnection strategy here
-///                         } else {
-///                             last_heartbeat = Instant::now();
-///                         }
-///                     }
-///                     RithmicMessage::ForcedLogout(_) => {
-///                         eprintln!("Server forced logout - must reconnect");
-///                         break;
-///                     }
-///                     RithmicMessage::LastTrade(_) | RithmicMessage::BestBidOffer(_) => {
-///                         // Process market data...
-///                     }
-///                     _ => {}
-///                 }
-///
-///                 // Check for heartbeat timeout
-///                 if last_heartbeat.elapsed() > heartbeat_timeout {
-///                     eprintln!("No heartbeat received in {}s - connection may be dead",
-///                         heartbeat_timeout.as_secs());
-///                     break;
-///                 }
-///             }
-///             Err(e) => {
-///                 eprintln!("Subscription channel error: {}", e);
-///                 break;
-///             }
-///         }
-///     }
-///
-///     handle.disconnect().await?;
-///     Ok(())
-/// }
-/// ```
 pub struct RithmicTickerPlant {
     pub connection_handle: tokio::task::JoinHandle<()>,
     sender: mpsc::Sender<TickerPlantCommand>,
@@ -315,17 +245,8 @@ impl RithmicStream for RithmicTickerPlant {
 pub struct TickerPlant {
     config: RithmicConfig,
     interval: Interval,
-    ping_interval: Interval,
     logged_in: bool,
-    /// Whether to enable connection health monitoring via heartbeat timeout detection.
-    ///
-    /// - `false` (default): Heartbeats sent but no timeout monitoring
-    /// - `true`: Monitors for heartbeat timeouts; sends `HeartbeatTimeout` if no response within 30s
-    ///
-    /// When enabled, ONLY timeout failures are reported (successful responses are silent).
-    /// Use this to verify the connection is still alive during critical trading periods.
-    expect_heartbeat_response: bool,
-    heartbeat_manager: HeartbeatManager,
+    ping_interval: Interval,
     ping_manager: PingManager,
     request_handler: RithmicRequestHandler,
     request_receiver: mpsc::Receiver<TickerPlantCommand>,
@@ -357,7 +278,6 @@ impl TickerPlant {
         };
 
         let interval = get_heartbeat_interval(None);
-        let heartbeat_manager = HeartbeatManager::new(HEARTBEAT_TIMEOUT_SECS);
         let ping_interval = get_ping_interval(None);
         let ping_manager = PingManager::new(PING_TIMEOUT_SECS);
 
@@ -366,8 +286,6 @@ impl TickerPlant {
             interval,
             ping_interval,
             logged_in: false,
-            expect_heartbeat_response: false,
-            heartbeat_manager,
             ping_manager,
             request_handler: RithmicRequestHandler::new(),
             request_receiver,
@@ -393,34 +311,12 @@ impl PlantActor for TickerPlant {
             tokio::select! {
                 _ = self.interval.tick() => {
                     if self.logged_in {
-                        self.handle_command(TickerPlantCommand::SendHeartbeat { expect_response: self.expect_heartbeat_response }).await;
+                        self.handle_command(TickerPlantCommand::SendHeartbeat).await;
                     }
                 }
                 _ = self.ping_interval.tick() => {
                     self.ping_manager.sent();
                     let _ = self.rithmic_sender.send(Message::Ping(vec![].into())).await;
-                }
-                _ = async {
-                    if let Some(timeout_at) = self.heartbeat_manager.next_timeout_at() {
-                        sleep_until(timeout_at).await
-                    } else {
-                        std::future::pending::<()>().await
-                    }
-                } => {
-                    if let Some(request_id) = self.heartbeat_manager.check_timeout() {
-                        error!("Heartbeat {} timed out", request_id);
-
-                        let error_response = RithmicResponse {
-                            request_id,
-                            message: RithmicMessage::HeartbeatTimeout,
-                            is_update: true,
-                            has_more: false,
-                            multi_response: false,
-                            error: Some("Heartbeat response timeout".to_string()),
-                            source: self.rithmic_receiver_api.source.clone(),
-                        };
-                        let _ = self.subscription_sender.send(error_response);
-                    }
                 }
                 _ = async {
                     if let Some(timeout_at) = self.ping_manager.next_timeout_at() {
@@ -477,11 +373,23 @@ impl PlantActor for TickerPlant {
             }
             Ok(Message::Binary(data)) => match self.rithmic_receiver_api.buf_to_message(data) {
                 Ok(response) => {
-                    // Handle heartbeat responses
+                    // Handle heartbeat responses: only forward if they contain an error
                     if matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
-                        self.heartbeat_manager.received(&response.request_id);
-                        // Always skip successful heartbeat responses - we only care about timeouts
-                        // When expect_heartbeat_response is true, only HeartbeatTimeout is sent to channel
+                        if let Some(error) = response.error {
+                            let error_response = RithmicResponse {
+                                request_id: response.request_id,
+                                message: RithmicMessage::HeartbeatTimeout,
+                                is_update: true,
+                                has_more: false,
+                                multi_response: false,
+                                error: Some(error),
+                                source: self.rithmic_receiver_api.source.clone(),
+                            };
+
+                            let _ = self.subscription_sender.send(error_response);
+                        }
+
+                        // Always drop heartbeat responses (successful or error)
                         return Ok(false);
                     }
 
@@ -671,12 +579,8 @@ impl PlantActor for TickerPlant {
                     .await
                     .unwrap();
             }
-            TickerPlantCommand::SendHeartbeat { expect_response } => {
-                let (heartbeat_buf, id) = self.rithmic_sender_api.request_heartbeat();
-
-                if expect_response {
-                    self.heartbeat_manager.sent(id.clone());
-                }
+            TickerPlantCommand::SendHeartbeat => {
+                let (heartbeat_buf, _id) = self.rithmic_sender_api.request_heartbeat();
 
                 let _ = self
                     .rithmic_sender
@@ -685,11 +589,6 @@ impl PlantActor for TickerPlant {
             }
             TickerPlantCommand::UpdateHeartbeat { seconds } => {
                 self.interval = get_heartbeat_interval(Some(seconds));
-            }
-            TickerPlantCommand::SetHeartbeatResponseMode {
-                expect_heartbeat_response,
-            } => {
-                self.expect_heartbeat_response = expect_heartbeat_response;
             }
             TickerPlantCommand::Subscribe {
                 symbol,
@@ -966,35 +865,6 @@ impl RithmicTickerPlantHandle {
 
     async fn update_heartbeat(&self, seconds: u64) {
         let command = TickerPlantCommand::UpdateHeartbeat { seconds };
-
-        let _ = self.sender.send(command).await;
-    }
-
-    /// Set whether heartbeat responses should be returned
-    ///
-    /// # Arguments
-    /// * `expect_heartbeat_response` - If true, heartbeat responses will be handled. If false, they will be ignored.
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use rithmic_rs::{RithmicConfig, RithmicEnv, ConnectStrategy, plants::ticker_plant::RithmicTickerPlant, ws::RithmicStream};
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// # let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
-    /// # let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Simple).await?;
-    /// # let mut handle = ticker_plant.get_handle();
-    /// // During trading hours, expect heartbeat responses
-    /// handle.return_heartbeat_response(true).await;
-    ///
-    /// // Outside trading hours, don't expect responses
-    /// handle.return_heartbeat_response(false).await;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub async fn return_heartbeat_response(&self, expect_heartbeat_response: bool) {
-        let command = TickerPlantCommand::SetHeartbeatResponseMode {
-            expect_heartbeat_response,
-        };
 
         let _ = self.sender.send(command).await;
     }

@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2025-11-23
+
+> **📖 Migration Guide:** See [MIGRATION_0.6.0.md](MIGRATION_0.6.0.md) for migration instructions.
+
+### Breaking Changes
+
+#### Simplified Connection Health Monitoring
+- **Removed `return_heartbeat_response()` method** from all plant handles
+  - `RithmicTickerPlantHandle`
+  - `RithmicOrderPlantHandle`
+  - `RithmicPnlPlantHandle`
+  - `RithmicHistoryPlantHandle`
+- Connection health monitoring is now automatic via WebSocket ping/pong
+- Heartbeat responses are no longer configurable or delivered to subscription channel
+- `HeartbeatTimeout` messages are still delivered on connection issues
+
+### Removed
+
+#### Internal Components
+- **Removed `HeartbeatManager` module** - no longer needed with simplified monitoring
+  - Heartbeat timeout tracking now integrated into ping/pong mechanism
+  - Reduces code complexity by 110 lines
+
+#### Public API
+- **Removed `return_heartbeat_response()` method** from all plant handles
+  - Was added in 0.5.2, now removed in favor of simpler automatic monitoring
+  - No migration action required for default behavior
+  - If you were calling this method, simply remove the call
+
+### Changed
+
+#### Connection Health Model
+- **Heartbeat handling simplified** across all plant actors
+  - Heartbeat requests still sent automatically for protocol compliance
+  - Successful heartbeat responses silently dropped (no channel delivery)
+  - Heartbeat errors from server delivered as `HeartbeatTimeout` messages
+  - WebSocket ping/pong is the primary connection health indicator
+- **Removed manual Ping/Pong handling**
+  - Tungstenite automatically handles Ping frames and sends Pong responses
+  - Manual Pong response code was redundant and has been removed
+- **Reduced code complexity**
+  - 438 lines removed across codebase
+  - Simpler mental model for connection health
+  - Fewer moving parts to maintain
+
+### Documentation
+
+- Updated README.md with simplified connection health monitoring
+- Added MIGRATION_0.6.0.md for upgrade guidance
+- Updated all plant documentation to reflect automatic monitoring
+- Removed references to optional heartbeat response handling
+
 ## [0.5.3] - 2025-11-22
 
 ### Added

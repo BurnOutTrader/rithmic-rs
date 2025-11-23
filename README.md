@@ -28,14 +28,20 @@ Or manually add it to your `Cargo.toml` file.
 rithmic-rs = "0.5.1"
 ```
 
-## Breaking Changes in 0.5.0
+## Breaking Changes
 
-Version 0.5.0 introduces breaking changes for improved stability and error handling:
+### Version 0.6.0 (Latest)
+- Removed `return_heartbeat_response()` method from all plant handles
+- Connection health monitoring now automatic via WebSocket ping/pong
+
+**📖 See [MIGRATION_0.6.0.md](MIGRATION_0.6.0.md) for migration guide.**
+
+### Version 0.5.0
 - Plant constructors changed from `new()` to `connect()` with explicit connection strategies
 - New unified `RithmicConfig` API replaces separate `AccountInfo` types
 - Heartbeat errors and forced logout events now delivered through subscription channel
 
-**📖 See [MIGRATION_0.5.0.md](MIGRATION_0.5.0.md) for step-by-step migration guide with code examples.**
+**📖 See [MIGRATION_0.5.0.md](MIGRATION_0.5.0.md) for migration guide.**
 
 Also see [CHANGELOG.md](CHANGELOG.md) for complete list of changes.
 
@@ -111,26 +117,26 @@ async fn stream_live_ticks() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match handle.subscription_receiver.recv().await {
             Ok(update) => {
-                // IMPORTANT: Check for connection health issues
+                // Check for errors on all messages
                 if let Some(error) = &update.error {
                     eprintln!("Error from {}: {}", update.source, error);
                 }
 
-                // Handle forced logout events
-                if matches!(update.message, RithmicMessage::ForcedLogout(_)) {
-                    eprintln!("Forced logout - must reconnect");
-                    break;
-                }
-
-                // Handle connection errors (new in 0.5.1)
-                if matches!(update.message, RithmicMessage::ConnectionError) {
-                    eprintln!("Connection error from {}: {}",
-                        update.source,
-                        update.error.unwrap_or_else(|| "Unknown error".to_string())
-                    );
-                    // Plant has stopped, channel will close
-                    // Implement reconnection logic here
-                    break;
+                // Handle connection health issues
+                match update.message {
+                    RithmicMessage::HeartbeatTimeout => {
+                        eprintln!("Connection timeout - must reconnect");
+                        break;
+                    }
+                    RithmicMessage::ForcedLogout(_) => {
+                        eprintln!("Forced logout - must reconnect");
+                        break;
+                    }
+                    RithmicMessage::ConnectionError => {
+                        eprintln!("Connection error - must reconnect");
+                        break;
+                    }
+                    _ => {}
                 }
 
                 // Process market data
@@ -157,41 +163,51 @@ async fn stream_live_ticks() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Heartbeat Monitoring (Optional)
+### Connection Health Monitoring
 
-By default, heartbeats are sent automatically but timeout monitoring is disabled. Enable connection health monitoring to detect if the server stops responding:
+Connection health is monitored automatically via WebSocket ping/pong. Monitor the subscription channel for health events:
 
 ```rust
-// Enable connection health monitoring
-handle.return_heartbeat_response(true).await;
-
-// Monitor for heartbeat timeouts (only failures are reported)
 loop {
     match handle.subscription_receiver.recv().await {
         Ok(update) => {
-            // Check for heartbeat timeouts (automatic detection)
-            if matches!(update.message, RithmicMessage::HeartbeatTimeout) {
-                eprintln!("Heartbeat timeout - no response after 30s: {}",
-                    update.error.unwrap_or_default());
-                // Connection is unhealthy - implement reconnection logic
-                break;
+            // Check for errors on all messages
+            if let Some(error) = &update.error {
+                eprintln!("Error: {}", error);
             }
-            // ... handle other messages
+
+            // Handle connection health issues
+            match update.message {
+                RithmicMessage::HeartbeatTimeout => {
+                    eprintln!("Connection timeout - reconnection needed");
+                    break;
+                }
+                RithmicMessage::ForcedLogout(_) => {
+                    eprintln!("Forced logout - reconnection needed");
+                    break;
+                }
+                RithmicMessage::ConnectionError => {
+                    eprintln!("Connection error - reconnection needed");
+                    break;
+                }
+                _ => {}
+            }
+
+            // Process market data
+            // ...
         }
-        Err(e) => break,
+        Err(e) => {
+            eprintln!("Channel closed: {}", e);
+            break;
+        }
     }
 }
 ```
 
-#### Connection Health Verification
-
-When enabled with `return_heartbeat_response(true)`, the library tracks pending heartbeats and reports ONLY failures:
-- If heartbeat response arrives within 30 seconds: Silent (connection is healthy)
-- If no response after 30 seconds: `HeartbeatTimeout` message sent to subscription channel
-
-This "silent success, noisy failure" approach reduces channel noise while ensuring you're alerted to connection issues.
-
-**Note:** Enable during critical trading periods to verify the connection is alive. Disable during off-hours to avoid false alarms when the server may not respond.
+**Connection Health Events:**
+- `HeartbeatTimeout`: Server heartbeat error or WebSocket ping timeout
+- `ForcedLogout`: Server-initiated disconnection
+- `ConnectionError`: WebSocket connection failure
 
 ## Examples
 
