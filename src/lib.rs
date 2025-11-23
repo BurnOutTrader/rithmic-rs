@@ -108,7 +108,6 @@ pub mod api;
 pub mod config;
 /// Deprecated connection information types (use `config` module instead)
 pub mod connection_info;
-mod heartbeat_manager;
 mod ping_manager;
 /// Plants for handling different types of market data and order interactions
 pub mod plants;
