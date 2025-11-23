@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2025-11-22
+
+### Added
+
+#### Order Management APIs
+- **New `cancel_all_orders()` method** on `RithmicOrderPlantHandle`
+  - Cancels all active orders across all symbols and exchanges for the account
+  - Returns cancellation confirmation response
+- **New order history methods** on `RithmicOrderPlantHandle`
+  - `show_order_history_dates()`: Get dates for which order history is available
+  - `show_order_history_summary(date)`: Get order summary for a specific date (YYYYMMDD format)
+  - `show_order_history_detail(basket_id, date)`: Get detailed history for a specific order
+  - `show_order_history(basket_id)`: Get general order history with optional basket_id filter
+  - Enables comprehensive order audit trails and historical analysis
+
+#### Risk Management APIs
+- **New RMS information methods** on `RithmicOrderPlantHandle`
+  - `get_account_rms_info()`: Retrieve account-level risk management limits and settings
+  - `get_product_rms_info()`: Retrieve product-specific risk management limits
+  - `get_trade_routes(subscribe_for_updates)`: Get available trade routes with optional update subscription
+  - Critical for monitoring trading limits and route availability
+
+#### Symbol Search and Discovery APIs
+- **New `search_symbols()` method** on `RithmicTickerPlantHandle`
+  - Search for symbols by text pattern with optional filters
+  - Supports filtering by exchange, product code, and instrument type
+  - Configurable search pattern (EQUALS or CONTAINS)
+  - Returns list of matching symbols for dynamic symbol discovery
+- **New `list_exchanges()` method** on `RithmicTickerPlantHandle`
+  - Lists exchanges available to the specified user
+  - Useful for determining trading permissions
+
+#### Protocol Message Support
+- **New `TradeRoute` message type** added to `RithmicMessage` enum
+  - Handles template ID 310 for trade route information
+  - Delivered as update message (`is_update: true`)
+  - Supports trade route subscription updates
+
+#### Sender API Methods
+- Added 10 new request methods to `RithmicSenderApi`:
+  - `request_cancel_all_orders()`: Template 346
+  - `request_account_rms_info()`: Template 304
+  - `request_product_rms_info()`: Template 306
+  - `request_trade_routes(subscribe_for_updates)`: Template 310
+  - `request_search_symbols(...)`: Template 109 with extensive search filters
+  - `request_list_exchanges(user)`: Template 342
+  - `request_show_order_history_dates()`: Template 318
+  - `request_show_order_history_summary(date)`: Template 324
+  - `request_show_order_history_detail(basket_id, date)`: Template 326
+  - `request_show_order_history(basket_id)`: Template 322
+
+### Changed
+
+#### Internal Improvements
+- Extended `OrderPlantCommand` enum with 8 new command variants for order history and RMS operations
+- Extended `TickerPlantCommand` enum with 2 new command variants for symbol search and exchange listing
+- Updated receiver API to handle TradeRoute message type (template ID 310)
+- Added new imports for request types: `RequestCancelAllOrders`, `RequestAccountRmsInfo`, `RequestProductRmsInfo`, `RequestSearchSymbols`, `RequestTradeRoutes`, and order history request types
+
+### Known Issues
+
+#### Error Handling
+- New TradeRoute message handler uses `.unwrap()` on protobuf decode (line 438 in receiver_api.rs)
+- New plant handle methods use multiple `.unwrap()` calls that could panic on channel failures
+- These follow existing patterns in the codebase but should be addressed in future releases
+- Users should be aware that malformed messages or actor failures may cause panics
+
 ## [0.5.2] - 2025-11-20
 
 ### Added
@@ -255,12 +322,14 @@ Previous stable release. See git history for earlier changes.
 
 ## Version History Summary
 
+- **0.5.3** (2025-11-22): API expansion - Order history, RMS info, symbol search, trade routes, cancel all orders
 - **0.5.2** (2025-11-20): Heartbeat improvements - Optional heartbeat response handling, heartbeat timeout detection, internal refactoring
 - **0.5.1** (2025-11-18): Connection error handling improvements - ConnectionError variant, comprehensive WebSocket error detection, automatic error notifications
 - **0.5.0** (2025-11-16): Major stability and API improvements - Connection strategies, unified config, panic fixes, connection health monitoring
 - **0.4.2** (2025-11-15): Previous stable release
 
-[Unreleased]: https://github.com/pbeets/rithmic-rs/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/pbeets/rithmic-rs/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/pbeets/rithmic-rs/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/pbeets/rithmic-rs/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/pbeets/rithmic-rs/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/pbeets/rithmic-rs/compare/v0.4.2...v0.5.0

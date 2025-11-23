@@ -11,7 +11,7 @@ use super::{
     ResponseShowOrderHistoryDetail, ResponseShowOrderHistorySummary, ResponseShowOrders,
     ResponseSubscribeForOrderUpdates, ResponseSubscribeToBracketUpdates, ResponseTickBarReplay,
     ResponseTimeBarReplay, ResponseTradeRoutes, ResponseUpdateStopBracketLevel,
-    ResponseUpdateTargetBracketLevel, RithmicOrderNotification, TickBar, TimeBar,
+    ResponseUpdateTargetBracketLevel, RithmicOrderNotification, TickBar, TimeBar, TradeRoute,
 };
 
 #[allow(clippy::large_enum_variant)]
@@ -63,6 +63,7 @@ pub enum RithmicMessage {
     RithmicOrderNotification(RithmicOrderNotification),
     TickBar(TickBar),
     TimeBar(TimeBar),
+    TradeRoute(TradeRoute),
 
     /// WebSocket connection error.
     ///

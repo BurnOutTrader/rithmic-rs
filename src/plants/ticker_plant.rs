@@ -15,6 +15,7 @@ use crate::{
         request_depth_by_order_updates,
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
+        request_search_symbols,
     },
     ws::{
         HEARTBEAT_SECS, HEARTBEAT_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
@@ -75,6 +76,18 @@ pub enum TickerPlantCommand {
     RequestDepthByOrderSnapshot {
         symbol: String,
         exchange: String,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    SearchSymbols {
+        search_text: String,
+        exchange: Option<String>,
+        product_code: Option<String>,
+        instrument_type: Option<request_search_symbols::InstrumentType>,
+        pattern: Option<request_search_symbols::Pattern>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    ListExchanges {
+        user: String,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
     },
 }
@@ -706,6 +719,48 @@ impl PlantActor for TickerPlant {
                     .await
                     .unwrap();
             }
+            TickerPlantCommand::SearchSymbols {
+                search_text,
+                exchange,
+                product_code,
+                instrument_type,
+                pattern,
+                response_sender,
+            } => {
+                let (search_buf, id) = self.rithmic_sender_api.request_search_symbols(
+                    &search_text,
+                    exchange.as_deref(),
+                    product_code.as_deref(),
+                    instrument_type,
+                    pattern,
+                );
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(search_buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::ListExchanges {
+                user,
+                response_sender,
+            } => {
+                let (list_buf, id) = self.rithmic_sender_api.request_list_exchanges(&user);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(list_buf.into()))
+                    .await
+                    .unwrap();
+            }
         }
     }
 }
@@ -905,6 +960,61 @@ impl RithmicTickerPlantHandle {
         };
 
         let _ = self.sender.send(command).await;
+    }
+
+    /// Search for symbols based on search criteria
+    ///
+    /// # Arguments
+    /// * `search_text` - The text to search for in symbols
+    /// * `exchange` - Optional exchange filter
+    /// * `product_code` - Optional product code filter
+    /// * `instrument_type` - Optional instrument type filter
+    /// * `pattern` - Optional search pattern mode
+    ///
+    /// # Returns
+    /// A vector of responses containing matching symbols or an error message
+    pub async fn search_symbols(
+        &self,
+        search_text: &str,
+        exchange: Option<&str>,
+        product_code: Option<&str>,
+        instrument_type: Option<request_search_symbols::InstrumentType>,
+        pattern: Option<request_search_symbols::Pattern>,
+    ) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::SearchSymbols {
+            search_text: search_text.to_string(),
+            exchange: exchange.map(|e| e.to_string()),
+            product_code: product_code.map(|p| p.to_string()),
+            instrument_type,
+            pattern,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
+    }
+
+    /// List exchanges available to the specified user
+    ///
+    /// # Arguments
+    /// * `user` - The username to query exchange permissions for
+    ///
+    /// # Returns
+    /// A vector of responses containing exchange information or an error message
+    pub async fn list_exchanges(&self, user: &str) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::ListExchanges {
+            user: user.to_string(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
     }
 }
 

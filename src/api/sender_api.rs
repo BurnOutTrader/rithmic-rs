@@ -3,18 +3,22 @@ use prost::Message;
 use crate::{
     config::{RithmicConfig, RithmicEnv},
     rti::{
-        RequestAccountList, RequestBracketOrder, RequestCancelOrder, RequestDepthByOrderSnapshot,
-        RequestDepthByOrderUpdates, RequestExitPosition, RequestHeartbeat, RequestLogin,
+        RequestAccountList, RequestAccountRmsInfo, RequestBracketOrder, RequestCancelAllOrders,
+        RequestCancelOrder, RequestDepthByOrderSnapshot, RequestDepthByOrderUpdates,
+        RequestExitPosition, RequestHeartbeat, RequestListExchangePermissions, RequestLogin,
         RequestLogout, RequestMarketDataUpdate, RequestModifyOrder, RequestNewOrder,
-        RequestPnLPositionSnapshot, RequestPnLPositionUpdates, RequestRithmicSystemInfo,
-        RequestShowBracketStops, RequestShowBrackets, RequestShowOrders,
+        RequestPnLPositionSnapshot, RequestPnLPositionUpdates, RequestProductRmsInfo,
+        RequestRithmicSystemInfo, RequestSearchSymbols, RequestShowBracketStops,
+        RequestShowBrackets, RequestShowOrderHistory, RequestShowOrderHistoryDates,
+        RequestShowOrderHistoryDetail, RequestShowOrderHistorySummary, RequestShowOrders,
         RequestSubscribeForOrderUpdates, RequestSubscribeToBracketUpdates, RequestTickBarReplay,
-        RequestTimeBarReplay, RequestUpdateStopBracketLevel, RequestUpdateTargetBracketLevel,
+        RequestTimeBarReplay, RequestTradeRoutes, RequestUpdateStopBracketLevel,
+        RequestUpdateTargetBracketLevel,
         request_account_list::UserType,
-        request_bracket_order, request_depth_by_order_updates,
+        request_bracket_order, request_cancel_all_orders, request_depth_by_order_updates,
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
-        request_new_order, request_pn_l_position_updates,
+        request_new_order, request_pn_l_position_updates, request_search_symbols,
         request_tick_bar_replay::{BarSubType, BarType, Direction, TimeOrder},
         request_time_bar_replay,
     },
@@ -621,6 +625,233 @@ impl RithmicSenderApi {
             symbol: Some(symbol.into()),
             exchange: Some(exchange.into()),
             depth_price: None,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request to cancel all orders for the account
+    ///
+    /// This will cancel all active orders across all symbols and exchanges for the account.
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_cancel_all_orders(&mut self) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestCancelAllOrders {
+            template_id: 346,
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            user_type: Some(USER_TYPE),
+            manual_or_auto: Some(request_cancel_all_orders::OrderPlacement::Manual.into()),
+            user_msg: vec![id.clone()],
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request account RMS (Risk Management System) information
+    ///
+    /// Returns risk management limits and settings for the account.
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_account_rms_info(&mut self) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestAccountRmsInfo {
+            template_id: 304,
+            user_msg: vec![id.clone()],
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            user_type: Some(USER_TYPE),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request product RMS (Risk Management System) information
+    ///
+    /// Returns risk management limits for specific products/symbols.
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_product_rms_info(&mut self) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestProductRmsInfo {
+            template_id: 306,
+            user_msg: vec![id.clone()],
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request list of available trade routes
+    ///
+    /// Returns the trade routes configured for the user's account.
+    ///
+    /// # Arguments
+    /// * `subscribe_for_updates` - Whether to receive updates when routes change
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_trade_routes(&mut self, subscribe_for_updates: bool) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestTradeRoutes {
+            template_id: 310,
+            user_msg: vec![id.clone()],
+            subscribe_for_updates: Some(subscribe_for_updates),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request to search for symbols matching a pattern
+    ///
+    /// # Arguments
+    /// * `search_text` - Search query string
+    /// * `exchange` - Optional exchange filter (e.g., "CME", "COMEX")
+    /// * `product_code` - Optional product code filter (e.g., "ES", "SI")
+    /// * `instrument_type` - Optional instrument type filter
+    /// * `pattern` - Search pattern type (EQUALS or CONTAINS)
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_search_symbols(
+        &mut self,
+        search_text: &str,
+        exchange: Option<&str>,
+        product_code: Option<&str>,
+        instrument_type: Option<request_search_symbols::InstrumentType>,
+        pattern: Option<request_search_symbols::Pattern>,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestSearchSymbols {
+            template_id: 109,
+            user_msg: vec![id.clone()],
+            search_text: Some(search_text.to_string()),
+            exchange: exchange.map(|e| e.to_string()),
+            product_code: product_code.map(|p| p.to_string()),
+            instrument_type: instrument_type.map(|i| i.into()),
+            pattern: pattern.map(|p| p.into()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request list of exchanges available to the user
+    ///
+    /// Returns the exchanges the user has permission to trade on.
+    ///
+    /// # Arguments
+    /// * `user` - Username for authentication
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_list_exchanges(&mut self, user: &str) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestListExchangePermissions {
+            template_id: 342,
+            user_msg: vec![id.clone()],
+            user: Some(user.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request order history dates
+    ///
+    /// Returns the dates for which order history is available.
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_show_order_history_dates(&mut self) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestShowOrderHistoryDates {
+            template_id: 318,
+            user_msg: vec![id.clone()],
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request order history summary for a specific date
+    ///
+    /// # Arguments
+    /// * `date` - Date in YYYYMMDD format (e.g., "20250122")
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_show_order_history_summary(&mut self, date: &str) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestShowOrderHistorySummary {
+            template_id: 324,
+            user_msg: vec![id.clone()],
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            date: Some(date.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request detailed order history for a specific order
+    ///
+    /// # Arguments
+    /// * `basket_id` - Order/basket identifier
+    /// * `date` - Date in YYYYMMDD format
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_show_order_history_detail(
+        &mut self,
+        basket_id: &str,
+        date: &str,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestShowOrderHistoryDetail {
+            template_id: 326,
+            user_msg: vec![id.clone()],
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            basket_id: Some(basket_id.to_string()),
+            date: Some(date.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request general order history
+    ///
+    /// # Arguments
+    /// * `basket_id` - Optional order/basket identifier filter
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_show_order_history(&mut self, basket_id: Option<&str>) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestShowOrderHistory {
+            template_id: 322,
+            user_msg: vec![id.clone()],
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            basket_id: basket_id.map(|b| b.to_string()),
         };
 
         self.request_to_buf(req, id)

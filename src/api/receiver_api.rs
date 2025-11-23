@@ -15,7 +15,7 @@ use crate::rti::{
     ResponseShowOrderHistoryDetail, ResponseShowOrderHistorySummary, ResponseShowOrders,
     ResponseSubscribeForOrderUpdates, ResponseSubscribeToBracketUpdates, ResponseTickBarReplay,
     ResponseTimeBarReplay, ResponseTradeRoutes, ResponseUpdateStopBracketLevel,
-    ResponseUpdateTargetBracketLevel, RithmicOrderNotification, TickBar, TimeBar,
+    ResponseUpdateTargetBracketLevel, RithmicOrderNotification, TickBar, TimeBar, TradeRoute,
     messages::RithmicMessage,
 };
 
@@ -431,6 +431,19 @@ impl RithmicReceiverApi {
                     has_more: false,
                     multi_response: false,
                     error,
+                    source: self.source.clone(),
+                }
+            }
+            310 => {
+                let resp = TradeRoute::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::TradeRoute(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
                     source: self.source.clone(),
                 }
             }

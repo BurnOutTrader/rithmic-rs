@@ -93,6 +93,35 @@ pub enum OrderPlantCommand {
     ShowOrders {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
     },
+    CancelAllOrders {
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetAccountRmsInfo {
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetProductRmsInfo {
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetTradeRoutes {
+        subscribe_for_updates: bool,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    ShowOrderHistoryDates {
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    ShowOrderHistorySummary {
+        date: String,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    ShowOrderHistoryDetail {
+        basket_id: String,
+        date: String,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    ShowOrderHistory {
+        basket_id: Option<String>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
 }
 
 /// The RithmicOrderPlant provides functionality to manage trading orders through the Rithmic API.
@@ -734,6 +763,131 @@ impl PlantActor for OrderPlant {
                     .await
                     .unwrap();
             }
+            OrderPlantCommand::CancelAllOrders { response_sender } => {
+                let (req_buf, id) = self.rithmic_sender_api.request_cancel_all_orders();
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
+            OrderPlantCommand::GetAccountRmsInfo { response_sender } => {
+                let (req_buf, id) = self.rithmic_sender_api.request_account_rms_info();
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
+            OrderPlantCommand::GetProductRmsInfo { response_sender } => {
+                let (req_buf, id) = self.rithmic_sender_api.request_product_rms_info();
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
+            OrderPlantCommand::GetTradeRoutes {
+                subscribe_for_updates,
+                response_sender,
+            } => {
+                let (req_buf, id) = self
+                    .rithmic_sender_api
+                    .request_trade_routes(subscribe_for_updates);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
+            OrderPlantCommand::ShowOrderHistoryDates { response_sender } => {
+                let (req_buf, id) = self.rithmic_sender_api.request_show_order_history_dates();
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
+            OrderPlantCommand::ShowOrderHistorySummary {
+                date,
+                response_sender,
+            } => {
+                let (req_buf, id) = self
+                    .rithmic_sender_api
+                    .request_show_order_history_summary(&date);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
+            OrderPlantCommand::ShowOrderHistoryDetail {
+                basket_id,
+                date,
+                response_sender,
+            } => {
+                let (req_buf, id) = self
+                    .rithmic_sender_api
+                    .request_show_order_history_detail(&basket_id, &date);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
+            OrderPlantCommand::ShowOrderHistory {
+                basket_id,
+                response_sender,
+            } => {
+                let (req_buf, id) = self
+                    .rithmic_sender_api
+                    .request_show_order_history(basket_id.as_deref());
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
             _ => {}
         };
     }
@@ -1025,5 +1179,164 @@ impl RithmicOrderPlantHandle {
         };
 
         let _ = self.sender.send(command).await;
+    }
+
+    /// Cancel all open orders
+    ///
+    /// # Returns
+    /// The cancellation response or an error message
+    pub async fn cancel_all_orders(&self) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::CancelAllOrders {
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
+    }
+
+    /// Get account RMS (Risk Management System) information
+    ///
+    /// # Returns
+    /// The RMS info response or an error message
+    pub async fn get_account_rms_info(&self) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::GetAccountRmsInfo {
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
+    }
+
+    /// Get product RMS (Risk Management System) information
+    ///
+    /// # Returns
+    /// The product RMS info response or an error message
+    pub async fn get_product_rms_info(&self) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::GetProductRmsInfo {
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
+    }
+
+    /// Get available trade routes
+    ///
+    /// # Arguments
+    /// * `subscribe_for_updates` - Whether to receive updates when routes change
+    ///
+    /// # Returns
+    /// The list of trade routes or an error message
+    pub async fn get_trade_routes(
+        &self,
+        subscribe_for_updates: bool,
+    ) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::GetTradeRoutes {
+            subscribe_for_updates,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
+    }
+
+    /// Get dates for which order history is available
+    ///
+    /// # Returns
+    /// The list of available dates or an error message
+    pub async fn show_order_history_dates(&self) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::ShowOrderHistoryDates {
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
+    }
+
+    /// Get order history summary for a specific date
+    ///
+    /// # Arguments
+    /// * `date` - Date in YYYYMMDD format (e.g., "20250122")
+    ///
+    /// # Returns
+    /// The list of order summaries or an error message
+    pub async fn show_order_history_summary(
+        &self,
+        date: &str,
+    ) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::ShowOrderHistorySummary {
+            date: date.to_string(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
+    }
+
+    /// Get detailed order history for a specific order
+    ///
+    /// # Arguments
+    /// * `basket_id` - Order/basket identifier
+    /// * `date` - Date in YYYYMMDD format
+    ///
+    /// # Returns
+    /// The detailed order history response or an error message
+    pub async fn show_order_history_detail(
+        &self,
+        basket_id: &str,
+        date: &str,
+    ) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::ShowOrderHistoryDetail {
+            basket_id: basket_id.to_string(),
+            date: date.to_string(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
+    }
+
+    /// Get general order history
+    ///
+    /// # Arguments
+    /// * `basket_id` - Optional order/basket identifier filter
+    ///
+    /// # Returns
+    /// The list of order history entries or an error message
+    pub async fn show_order_history(
+        &self,
+        basket_id: Option<&str>,
+    ) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::ShowOrderHistory {
+            basket_id: basket_id.map(|s| s.to_string()),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
     }
 }
