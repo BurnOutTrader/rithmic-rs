@@ -97,17 +97,14 @@
 //! ## Module Organization
 //!
 //! - [`plants`]: Specialized clients for different data types (ticker, order, P&L, history)
-//! - [`config`]: Modern configuration API (recommended)
-//! - [`connection_info`]: Deprecated configuration types (use `config` instead)
+//! - [`config`]: Configuration API for connecting to Rithmic
 //! - [`api`]: Low-level API interfaces for sending and receiving messages
 //! - [`rti`]: Protocol message definitions
 //! - [`ws`]: WebSocket connectivity and connection strategies
 
 pub mod api;
-/// Modern, streamlined configuration API (recommended)
+/// Configuration API for connecting to Rithmic
 pub mod config;
-/// Deprecated connection information types (use `config` module instead)
-pub mod connection_info;
 mod ping_manager;
 /// Plants for handling different types of market data and order interactions
 pub mod plants;

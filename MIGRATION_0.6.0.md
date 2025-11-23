@@ -1,51 +1,111 @@
-# Migration Guide: 0.5.x → 0.6.0
+# Migration Guide: 0.4.x → 0.6.0
 
-This guide will help you migrate your code from rithmic-rs 0.5.x to 0.6.0.
+This guide helps you migrate from rithmic-rs 0.4.x to 0.6.0. If you're already on 0.5.x, skip to the [0.5.x → 0.6.0 section](#migrating-from-05x).
 
-## Overview of Changes
+## Quick Summary
 
-Version 0.6.0 removes the optional heartbeat response handling API that was introduced in 0.5.2. Connection health monitoring is now handled exclusively via WebSocket ping/pong timeouts.
+**Major Changes:**
+- New unified `RithmicConfig` API (replaces `AccountInfo`)
+- Explicit connection strategies (replaces `new()` with `connect()`)
+- Automatic connection health monitoring via WebSocket ping/pong
+- Removed deprecated `connection_info` module
+- Updated to modern `dotenvy` crate
 
-## Breaking Changes
+## Migrating from 0.4.x
 
-### Removed API: `return_heartbeat_response()`
+### 1. Update Dependencies
 
-The `return_heartbeat_response()` method has been removed from all plant handles:
-- `RithmicTickerPlantHandle`
-- `RithmicOrderPlantHandle`
-- `RithmicPnlPlantHandle`
-- `RithmicHistoryPlantHandle`
+```toml
+[dependencies]
+rithmic-rs = "0.6.0"
+```
 
-### Migration Steps
+### 2. Replace Configuration API
 
-#### Before (0.5.x)
+**Before (0.4.x):**
 ```rust
-let handle = ticker_plant.get_handle();
+use rithmic_rs::connection_info::{AccountInfo, RithmicConnectionSystem};
 
-// Enable heartbeat monitoring
-handle.return_heartbeat_response(true).await;
+let account_info = AccountInfo {
+    account_id: "your_account".to_string(),
+    env: RithmicConnectionSystem::Demo,
+    fcm_id: "your_fcm".to_string(),
+    ib_id: "your_ib".to_string(),
+};
+```
 
+**After (0.6.0):**
+```rust
+use rithmic_rs::{RithmicConfig, RithmicEnv};
+
+// From environment variables (recommended)
+let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+
+// Or using builder pattern
+let config = RithmicConfig::builder(RithmicEnv::Demo)
+    .account_id("your_account")
+    .fcm_id("your_fcm")
+    .ib_id("your_ib")
+    .user("your_user")
+    .password("your_password")
+    .build()?;
+```
+
+**Required Environment Variables:**
+```bash
+# For Demo
+RITHMIC_DEMO_USER=your_username
+RITHMIC_DEMO_PW=your_password
+RITHMIC_ACCOUNT_ID=your_account
+FCM_ID=your_fcm
+IB_ID=your_ib
+
+# For Live
+RITHMIC_LIVE_USER=your_username
+RITHMIC_LIVE_PW=your_password
+# plus RITHMIC_ACCOUNT_ID, FCM_ID, IB_ID
+```
+
+### 3. Update Plant Initialization
+
+**Before (0.4.x):**
+```rust
+let ticker_plant = RithmicTickerPlant::new(&account_info).await;
+```
+
+**After (0.6.0):**
+```rust
+use rithmic_rs::ConnectStrategy;
+
+let ticker_plant = RithmicTickerPlant::connect(
+    &config,
+    ConnectStrategy::Simple  // or Retry, or AlternateWithRetry
+).await?;
+```
+
+**Connection Strategies:**
+- `Simple`: Single attempt, fast-fail (recommended for development)
+- `Retry`: Infinite retries with exponential backoff, max 60s (recommended for production)
+- `AlternateWithRetry`: Alternates between primary/beta URLs with retries
+
+### 4. Update Event Handling
+
+**Before (0.4.x):**
+```rust
 loop {
     match handle.subscription_receiver.recv().await {
         Ok(update) => {
-            // Handle heartbeat responses
-            if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
-                if let Some(error) = &update.error {
-                    eprintln!("Heartbeat error - connection degraded");
-                    break;
-                }
+            if let RithmicMessage::LastTrade(trade) = update.message {
+                println!("Trade: {:?}", trade);
             }
-            // ... other message handling
         }
-        Err(e) => break,
+        Err(_) => break,
     }
 }
 ```
 
-#### After (0.6.0)
+**After (0.6.0):**
 ```rust
-let handle = ticker_plant.get_handle();
-
 loop {
     match handle.subscription_receiver.recv().await {
         Ok(update) => {
@@ -54,25 +114,25 @@ loop {
                 eprintln!("Error: {}", error);
             }
 
-            // Handle connection health issues
+            // Handle connection health events
             match update.message {
                 RithmicMessage::HeartbeatTimeout => {
-                    eprintln!("Connection timeout - reconnection needed");
+                    eprintln!("Connection timeout - reconnect needed");
                     break;
                 }
                 RithmicMessage::ForcedLogout(_) => {
-                    eprintln!("Forced logout - reconnection needed");
+                    eprintln!("Forced logout - reconnect needed");
                     break;
                 }
                 RithmicMessage::ConnectionError => {
-                    eprintln!("Connection error - reconnection needed");
+                    eprintln!("Connection error - reconnect needed");
                     break;
+                }
+                RithmicMessage::LastTrade(trade) => {
+                    println!("Trade: {:?}", trade);
                 }
                 _ => {}
             }
-
-            // Process market data
-            // ...
         }
         Err(e) => {
             eprintln!("Channel closed: {}", e);
@@ -82,90 +142,57 @@ loop {
 }
 ```
 
-## Connection Health Monitoring
+### Complete Example
 
-Connection health is monitored automatically:
-
-### WebSocket Ping/Pong (Primary)
-- Automatically sent every 60 seconds
-- Timeout detected after 50 seconds without response
-- Triggers `HeartbeatTimeout` message on failure
-
-### Rithmic Protocol Heartbeats
-- Sent automatically for protocol compliance
-- Successful responses are silently dropped
-- Errors from server trigger `HeartbeatTimeout` message
-
-### What You Need to Handle
-
-Monitor the subscription channel for these events:
-
-1. **`HeartbeatTimeout`**: Connection is dead or server is unresponsive
-   - Triggered by WebSocket ping timeout or heartbeat error
-   - Requires reconnection
-
-2. **`ForcedLogout`**: Server disconnected you
-   - Requires reconnection and login
-
-3. **`ConnectionError`**: WebSocket connection failed
-   - Requires reconnection
-
-## Complete Migration Example
-
-### Before (0.5.x)
+**Before (0.4.x):**
 ```rust
-use rithmic_rs::{RithmicConfig, RithmicEnv, ConnectStrategy, RithmicTickerPlant};
+use rithmic_rs::connection_info::{AccountInfo, RithmicConnectionSystem};
+use rithmic_rs::plants::ticker_plant::RithmicTickerPlant;
 use rithmic_rs::rti::messages::RithmicMessage;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
-    let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?;
+async fn main() {
+    let account_info = AccountInfo {
+        account_id: "account".to_string(),
+        env: RithmicConnectionSystem::Demo,
+        fcm_id: "fcm".to_string(),
+        ib_id: "ib".to_string(),
+    };
+
+    let ticker_plant = RithmicTickerPlant::new(&account_info).await;
     let handle = ticker_plant.get_handle();
 
-    handle.login().await?;
-    handle.subscribe("ESM1", "CME").await?;
-
-    // Enable heartbeat monitoring
-    handle.return_heartbeat_response(true).await;
+    handle.login().await.unwrap();
+    handle.subscribe("ESM1", "CME").await.unwrap();
 
     loop {
         match handle.subscription_receiver.recv().await {
             Ok(update) => {
-                // Check heartbeat responses
-                if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
-                    if let Some(error) = &update.error {
-                        eprintln!("Heartbeat error");
-                        break;
-                    }
-                    continue; // Skip successful heartbeats
-                }
-
-                // Handle other messages
-                match update.message {
-                    RithmicMessage::LastTrade(trade) => {
-                        println!("Trade: {:?}", trade);
-                    }
-                    _ => {}
+                if let RithmicMessage::LastTrade(trade) = update.message {
+                    println!("Trade: {:?}", trade);
                 }
             }
-            Err(e) => break,
+            Err(_) => break,
         }
     }
-
-    Ok(())
 }
 ```
 
-### After (0.6.0)
+**After (0.6.0):**
 ```rust
 use rithmic_rs::{RithmicConfig, RithmicEnv, ConnectStrategy, RithmicTickerPlant};
 use rithmic_rs::rti::messages::RithmicMessage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Load config from environment
     let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
-    let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?;
+
+    // Connect with retry strategy
+    let ticker_plant = RithmicTickerPlant::connect(
+        &config,
+        ConnectStrategy::Retry
+    ).await?;
     let handle = ticker_plant.get_handle();
 
     handle.login().await?;
@@ -174,23 +201,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match handle.subscription_receiver.recv().await {
             Ok(update) => {
-                // Check for errors
                 if let Some(error) = &update.error {
                     eprintln!("Error: {}", error);
                 }
 
-                // Handle connection health issues
                 match update.message {
                     RithmicMessage::HeartbeatTimeout => {
-                        eprintln!("Connection timeout - reconnection needed");
+                        eprintln!("Connection timeout");
                         break;
                     }
                     RithmicMessage::ForcedLogout(_) => {
-                        eprintln!("Forced logout - reconnection needed");
+                        eprintln!("Forced logout");
                         break;
                     }
                     RithmicMessage::ConnectionError => {
-                        eprintln!("Connection error - reconnection needed");
+                        eprintln!("Connection error");
                         break;
                     }
                     RithmicMessage::LastTrade(trade) => {
@@ -210,44 +235,127 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Key Differences
+## Migrating from 0.5.x
 
-| Aspect | 0.5.x | 0.6.0 |
-|--------|-------|-------|
-| Heartbeat monitoring | Optional via `return_heartbeat_response()` | Automatic via ping/pong |
-| API calls needed | `handle.return_heartbeat_response(true)` | None |
-| ResponseHeartbeat messages | Delivered to subscription channel | Never delivered |
-| Heartbeat errors | Delivered as `ResponseHeartbeat` with error | Delivered as `HeartbeatTimeout` |
-| Ping/pong monitoring | Active | Active (primary mechanism) |
+If you're already on 0.5.x, you only need to make these small changes:
 
-## FAQ
+### 1. Remove Heartbeat Response Handling
 
-### Why was `return_heartbeat_response()` removed?
+**Before (0.5.x):**
+```rust
+let handle = ticker_plant.get_handle();
 
-WebSocket ping/pong provides more reliable connection health monitoring:
-- Works at the transport layer
-- Detects network issues faster
-- Simpler API with fewer concepts to understand
+// Enable heartbeat monitoring
+handle.return_heartbeat_response(true).await;
 
-### Will I miss heartbeat errors?
+loop {
+    match handle.subscription_receiver.recv().await {
+        Ok(update) => {
+            // Handle heartbeat responses
+            if matches!(update.message, RithmicMessage::ResponseHeartbeat(_)) {
+                if let Some(error) = &update.error {
+                    eprintln!("Heartbeat error");
+                    break;
+                }
+                continue;
+            }
+            // ... other handling
+        }
+        Err(e) => break,
+    }
+}
+```
 
-No. Heartbeat errors are still reported as `HeartbeatTimeout` messages, the same as ping timeout events.
+**After (0.6.0):**
+```rust
+let handle = ticker_plant.get_handle();
 
-### Do I need to send heartbeats manually?
+loop {
+    match handle.subscription_receiver.recv().await {
+        Ok(update) => {
+            match update.message {
+                RithmicMessage::HeartbeatTimeout => {
+                    eprintln!("Connection timeout");
+                    break;
+                }
+                // ... other handling
+            }
+        }
+        Err(e) => break,
+    }
+}
+```
 
-No. Heartbeats are sent automatically for Rithmic protocol compliance.
+### 2. Update Environment Variable Loading (if using .env files)
 
-### How do I detect dead connections?
+If your code directly imports `dotenv`:
 
-Monitor for `HeartbeatTimeout` messages in the subscription channel. These are triggered by:
-- WebSocket ping timeout (50s)
-- Rithmic heartbeat errors from server
+**Before (0.5.x):**
+```rust
+use dotenv::dotenv;
+
+dotenv().ok();
+let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+```
+
+**After (0.6.0):**
+```rust
+use dotenvy;
+
+dotenvy::dotenv().ok();
+let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+```
+
+Or add to your dependencies:
+```toml
+[dependencies]
+dotenvy = "0.15.7"
+```
+
+## Connection Health Monitoring
+
+Connection health is now automatic via WebSocket ping/pong:
+
+- **WebSocket ping** sent every 60 seconds
+- **Timeout** detected after 50 seconds without response
+- **Events** delivered through subscription channel:
+  - `HeartbeatTimeout`: Connection dead or server unresponsive
+  - `ForcedLogout`: Server disconnected you
+  - `ConnectionError`: WebSocket connection failed
+
+**No manual heartbeat handling needed** - just monitor for these events and reconnect when they occur.
+
+## Troubleshooting
+
+### "connection_info module not found"
+The deprecated `connection_info` module has been removed. Use `RithmicConfig` instead.
+
+### "return_heartbeat_response method not found"
+This method was removed in 0.6.0. Connection health is now automatic - just monitor for `HeartbeatTimeout` events.
+
+### "Missing environment variable"
+Ensure all required variables are set:
+```bash
+RITHMIC_DEMO_USER=...
+RITHMIC_DEMO_PW=...
+RITHMIC_ACCOUNT_ID=...
+FCM_ID=...
+IB_ID=...
+```
+
+### Connection fails immediately
+Try using `ConnectStrategy::Retry` for automatic reconnection:
+```rust
+RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?
+```
 
 ## Summary
 
-The 0.6.0 migration simplifies connection health monitoring:
-1. ✅ Remove `return_heartbeat_response()` calls
-2. ✅ Monitor subscription channel for `HeartbeatTimeout`, `ForcedLogout`, and `ConnectionError`
-3. ✅ Connection health is now automatic via WebSocket ping/pong
+Key improvements in 0.6.0:
+- ✅ Cleaner, more ergonomic configuration API
+- ✅ Explicit connection strategies for better control
+- ✅ Automatic connection health monitoring
+- ✅ Proper error handling (no more panics)
+- ✅ Removed deprecated APIs
 
-This change reduces API surface while maintaining robust connection health detection.
+These changes make your trading systems more reliable and easier to maintain.

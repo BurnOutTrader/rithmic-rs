@@ -31,17 +31,13 @@ rithmic-rs = "0.5.1"
 ## Breaking Changes
 
 ### Version 0.6.0 (Latest)
-- Removed `return_heartbeat_response()` method from all plant handles
-- Connection health monitoring now automatic via WebSocket ping/pong
+- Removed deprecated `connection_info` module (use `RithmicConfig` instead)
+- Removed `return_heartbeat_response()` method (connection health now automatic)
+- Updated to `dotenvy` crate (from deprecated `dotenv`)
+- Plant constructors use `connect()` with explicit connection strategies
+- Connection health events delivered through subscription channel
 
-**📖 See [MIGRATION_0.6.0.md](MIGRATION_0.6.0.md) for migration guide.**
-
-### Version 0.5.0
-- Plant constructors changed from `new()` to `connect()` with explicit connection strategies
-- New unified `RithmicConfig` API replaces separate `AccountInfo` types
-- Heartbeat errors and forced logout events now delivered through subscription channel
-
-**📖 See [MIGRATION_0.5.0.md](MIGRATION_0.5.0.md) for migration guide.**
+**📖 See [MIGRATION_0.6.0.md](MIGRATION_0.6.0.md) for migration guide from 0.4.x or 0.5.x.**
 
 Also see [CHANGELOG.md](CHANGELOG.md) for complete list of changes.
 
@@ -84,8 +80,6 @@ RITHMIC_LIVE_PW=your_password
 RITHMIC_TEST_USER=your_username
 RITHMIC_TEST_PW=your_password
 ```
-
-> **Note:** The `dotenv` dependency will become optional in version 0.6.0. The builder pattern is recommended for new projects.
 
 ### Connection Strategies
 
@@ -211,15 +205,7 @@ loop {
 
 ## Examples
 
-The repository includes several examples to help you get started:
-
-**Environment Variables**
-
-Before running examples, copy `.env.blank` to `.env` and fill in your credentials:
-```bash
-cp examples/.env.blank .env
-# Edit .env with your Rithmic credentials
-```
+The repository includes several examples to help you get started. Examples use environment variables for configuration - set the required variables (listed above) in your environment or use a `.env` file.
 
 ### Basic Connection
 ```bash

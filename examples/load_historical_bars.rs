@@ -48,13 +48,13 @@ fn parse_args() -> Result<(String, String, i32), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Before running this example, copy .env.blank to .env
-    // and fill in RITHMIC_ACCOUNT_ID, FCM_ID, and IB_ID
-
     let (symbol, exchange, start_time_sec) = parse_args()?;
 
-    // Simple one-line configuration from environment variables (.env file)
-    let config = RithmicConfig::from_dotenv(RithmicEnv::Demo)?;
+    // Load environment variables from .env file
+    dotenvy::dotenv().ok();
+
+    // Create configuration from environment variables
+    let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
 
     tracing_subscriber::fmt().init();
 

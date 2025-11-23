@@ -9,11 +9,11 @@ use rithmic_rs::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Before running this example, copy .env.blank to .env
-    // and fill in RITHMIC_ACCOUNT_ID, FCM_ID, and IB_ID
+    // Load environment variables from .env file
+    dotenvy::dotenv().ok();
 
-    // Simple one-line configuration from environment variables (.env file)
-    let config = RithmicConfig::from_dotenv(RithmicEnv::Demo)?;
+    // Create configuration from environment variables
+    let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
 
     tracing_subscriber::fmt().init();
 

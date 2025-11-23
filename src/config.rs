@@ -144,11 +144,6 @@ impl RithmicConfig {
     /// let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    ///
-    /// # Note on .env files
-    /// This function reads from the process environment. If you're using a `.env` file,
-    /// you'll need to call `dotenv::dotenv()` before calling this function, or use
-    /// `from_dotenv()` instead (requires the `dotenv` feature).
     pub fn from_env(env: RithmicEnv) -> Result<Self, ConfigError> {
         let account_id = env::var("RITHMIC_ACCOUNT_ID")
             .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_ACCOUNT_ID".to_string()))?;
@@ -198,23 +193,6 @@ impl RithmicConfig {
             system_name,
             env,
         })
-    }
-
-    /// Create a configuration by loading from a .env file and environment variables.
-    ///
-    /// Calls `dotenv::dotenv()` to load the .env file, then reads environment variables.
-    ///
-    /// # Example
-    /// ```no_run
-    /// use rithmic_rs::config::{RithmicConfig, RithmicEnv};
-    ///
-    /// // Load from .env file and environment
-    /// let config = RithmicConfig::from_dotenv(RithmicEnv::Demo)?;
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn from_dotenv(env: RithmicEnv) -> Result<Self, ConfigError> {
-        dotenv::dotenv().ok();
-        Self::from_env(env)
     }
 
     /// Create a builder for programmatic configuration.

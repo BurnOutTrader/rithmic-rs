@@ -237,7 +237,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0]
 
-> **📖 Migration Guide:** See [MIGRATION_0.5.0.md](MIGRATION_0.5.0.md) for detailed step-by-step migration instructions.
+> **📖 Migration Guide:** See [MIGRATION_0.6.0.md](MIGRATION_0.6.0.md) for migration instructions.
 
 ### Breaking Changes
 
@@ -351,7 +351,7 @@ Migration helpers provided via trait implementations maintain backward compatibi
 
 ### Migration Guide
 
-For detailed migration instructions with code examples, see **[MIGRATION_0.5.0.md](MIGRATION_0.5.0.md)**.
+For detailed migration instructions with code examples, see **[MIGRATION_0.6.0.md](MIGRATION_0.6.0.md)**.
 
 Quick summary:
 - Replace `Plant::new()` → `Plant::connect(&config, strategy)`
