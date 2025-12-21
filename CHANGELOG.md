@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+#### New Sender API Methods
+
+##### Ticker Plant
+- `request_rithmic_system_gateway_info()`: Get gateway-specific information
+- `request_get_instrument_by_underlying()`: Get all instruments for an underlying symbol
+- `request_market_data_update_by_underlying()`: Subscribe to market data by underlying
+- `request_give_tick_size_type_table()`: Get tick size table for a tick size type
+- `request_product_codes()`: Get available product codes for an exchange
+- `request_get_volume_at_price()`: Get volume profile for a symbol
+- `request_auxilliary_reference_data()`: Get additional reference data for a symbol
+- `request_volume_profile_minute_bars()`: Get minute bars with volume profile
+- `request_resume_bars()`: Resume a truncated bars request
+- `request_depth_by_order_snapshot()`: Get depth by order snapshot
+- `request_depth_by_order_update()`: Subscribe to depth by order updates
+
+##### Order Plant
+- `request_login_info()`: Get current login session information
+- `request_oco_order()`: Place OCO (One Cancels Other) order pairs
+- `request_link_orders()`: Link multiple orders together
+- `request_easy_to_borrow_list()`: Get easy-to-borrow list for short selling
+- `request_modify_order_reference_data()`: Update user tag on existing order
+- `request_order_session_config()`: Get/set order session configuration
+- `request_replay_executions()`: Replay historical execution data
+
+##### Repository Plant (Agreements)
+- `request_list_unaccepted_agreements()`: List agreements not yet accepted
+- `request_list_accepted_agreements()`: List already accepted agreements
+- `request_accept_agreement()`: Accept a specific agreement
+- `request_show_agreement()`: Get full agreement details
+- `request_set_rithmic_mrkt_data_self_cert_status()`: Set market data self-certification status
+
+#### API Ergonomics
+- Re-exported `RithmicOcoOrderLeg` and related OCO order enums from `api` module:
+  - `OcoTransactionType`: Buy/Sell transaction type
+  - `OcoDuration`: Day/GTC/IOC/FOK duration
+  - `OcoPriceType`: Limit/Market/StopLimit/StopMarket price type
+- Changed `RithmicOcoOrderLeg.trigger_price` from `f64` to `Option<f64>` since it's only required for stop orders
+
 #### New Market Data Messages (Ticker Plant)
 - `TradeStatistics`: High/low/open price statistics
 - `QuoteStatistics`: Quote-related statistics  
@@ -32,6 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ResponseTimeBarUpdate`: Time bar subscription confirmation
 - `ResponseTickBarUpdate`: Tick bar subscription confirmation
 - `ResponseAccountRmsUpdates`: RMS updates subscription confirmation
+
+### Fixed
+- Fixed clippy warning: use `is_multiple_of()` instead of modulo check in connection retry logic
 
 ## [0.6.1] - 2025-11-24
 

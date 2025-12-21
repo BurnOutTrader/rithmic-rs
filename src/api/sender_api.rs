@@ -3,29 +3,40 @@ use prost::Message;
 use crate::{
     config::{RithmicConfig, RithmicEnv},
     rti::{
-        RequestAccountList, RequestAccountRmsInfo, RequestAccountRmsUpdates, RequestBracketOrder,
+        RequestAcceptAgreement, RequestAccountList, RequestAccountRmsInfo,
+        RequestAccountRmsUpdates, RequestAuxilliaryReferenceData, RequestBracketOrder,
         RequestCancelAllOrders, RequestCancelOrder, RequestDepthByOrderSnapshot,
-        RequestDepthByOrderUpdates, RequestExitPosition, RequestFrontMonthContract,
-        RequestHeartbeat, RequestListExchangePermissions, RequestLogin, RequestLogout,
-        RequestMarketDataUpdate, RequestModifyOrder, RequestNewOrder, RequestPnLPositionSnapshot,
-        RequestPnLPositionUpdates, RequestProductRmsInfo, RequestReferenceData,
-        RequestRithmicSystemInfo, RequestSearchSymbols, RequestShowBracketStops,
-        RequestShowBrackets, RequestShowOrderHistory, RequestShowOrderHistoryDates,
-        RequestShowOrderHistoryDetail, RequestShowOrderHistorySummary, RequestShowOrders,
-        RequestSubscribeForOrderUpdates, RequestSubscribeToBracketUpdates, RequestTickBarReplay,
-        RequestTickBarUpdate, RequestTimeBarReplay, RequestTimeBarUpdate, RequestTradeRoutes,
+        RequestDepthByOrderUpdates, RequestEasyToBorrowList, RequestExitPosition,
+        RequestFrontMonthContract, RequestGetInstrumentByUnderlying, RequestGetVolumeAtPrice,
+        RequestGiveTickSizeTypeTable, RequestHeartbeat, RequestLinkOrders,
+        RequestListAcceptedAgreements, RequestListExchangePermissions,
+        RequestListUnacceptedAgreements, RequestLogin, RequestLoginInfo, RequestLogout,
+        RequestMarketDataUpdate, RequestMarketDataUpdateByUnderlying, RequestModifyOrder,
+        RequestModifyOrderReferenceData, RequestNewOrder, RequestOcoOrder,
+        RequestOrderSessionConfig, RequestPnLPositionSnapshot, RequestPnLPositionUpdates,
+        RequestProductCodes, RequestProductRmsInfo, RequestReferenceData, RequestReplayExecutions,
+        RequestResumeBars, RequestRithmicSystemGatewayInfo, RequestRithmicSystemInfo,
+        RequestSearchSymbols, RequestSetRithmicMrktDataSelfCertStatus, RequestShowAgreement,
+        RequestShowBracketStops, RequestShowBrackets, RequestShowOrderHistory,
+        RequestShowOrderHistoryDates, RequestShowOrderHistoryDetail,
+        RequestShowOrderHistorySummary, RequestShowOrders, RequestSubscribeForOrderUpdates,
+        RequestSubscribeToBracketUpdates, RequestTickBarReplay, RequestTickBarUpdate,
+        RequestTimeBarReplay, RequestTimeBarUpdate, RequestTradeRoutes,
         RequestUpdateStopBracketLevel, RequestUpdateTargetBracketLevel,
+        RequestVolumeProfileMinuteBars,
         request_account_list::UserType,
         request_bracket_order, request_cancel_all_orders, request_depth_by_order_updates,
+        request_easy_to_borrow_list,
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
-        request_new_order, request_pn_l_position_updates, request_search_symbols,
+        request_market_data_update_by_underlying, request_new_order, request_oco_order,
+        request_pn_l_position_updates, request_search_symbols,
         request_tick_bar_replay::{BarSubType, BarType, Direction, TimeOrder},
         request_tick_bar_update, request_time_bar_replay, request_time_bar_update,
     },
 };
 
-use super::rithmic_command_types::RithmicBracketOrder;
+use super::rithmic_command_types::{RithmicBracketOrder, RithmicOcoOrderLeg};
 
 pub const TRADE_ROUTE_LIVE: &str = "globex";
 pub const TRADE_ROUTE_DEMO: &str = "simulator";
@@ -127,6 +138,30 @@ impl RithmicSenderApi {
         self.request_to_buf(req, id)
     }
 
+    /// Request Rithmic system gateway information
+    ///
+    /// Returns gateway-specific information for a Rithmic system.
+    ///
+    /// # Arguments
+    /// * `system_name` - Optional system name to get info for
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_rithmic_system_gateway_info(
+        &mut self,
+        system_name: Option<&str>,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestRithmicSystemGatewayInfo {
+            template_id: 20,
+            user_msg: vec![id.clone()],
+            system_name: system_name.map(|s| s.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
     pub fn request_market_data_update(
         &mut self,
         symbol: &str,
@@ -152,6 +187,197 @@ impl RithmicSenderApi {
         req.exchange = Some(exchange.into());
         req.request = Some(request_type.into());
         req.update_bits = Some(bits);
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request instruments by underlying symbol
+    ///
+    /// Returns all instruments (options, futures) for a given underlying symbol.
+    ///
+    /// # Arguments
+    /// * `underlying_symbol` - The underlying symbol (e.g., "ES" for E-mini S&P 500)
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `expiration_date` - Optional expiration date filter
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_get_instrument_by_underlying(
+        &mut self,
+        underlying_symbol: &str,
+        exchange: &str,
+        expiration_date: Option<&str>,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestGetInstrumentByUnderlying {
+            template_id: 102,
+            user_msg: vec![id.clone()],
+            underlying_symbol: Some(underlying_symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+            expiration_date: expiration_date.map(|d| d.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Subscribe to or unsubscribe from market data updates by underlying
+    ///
+    /// Similar to request_market_data_update but subscribes to all instruments
+    /// for a given underlying symbol.
+    ///
+    /// # Arguments
+    /// * `underlying_symbol` - The underlying symbol (e.g., "ES")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `expiration_date` - Optional expiration date filter
+    /// * `fields` - The market data fields to subscribe to
+    /// * `request_type` - Subscribe or Unsubscribe
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_market_data_update_by_underlying(
+        &mut self,
+        underlying_symbol: &str,
+        exchange: &str,
+        expiration_date: Option<&str>,
+        fields: Vec<request_market_data_update_by_underlying::UpdateBits>,
+        request_type: request_market_data_update_by_underlying::Request,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+        let mut bits = 0;
+
+        for field in fields {
+            bits |= field as u32;
+        }
+
+        let req = RequestMarketDataUpdateByUnderlying {
+            template_id: 105,
+            user_msg: vec![id.clone()],
+            underlying_symbol: Some(underlying_symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+            expiration_date: expiration_date.map(|d| d.to_string()),
+            request: Some(request_type.into()),
+            update_bits: Some(bits),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request tick size type table
+    ///
+    /// Returns the tick size table for a given tick size type.
+    ///
+    /// # Arguments
+    /// * `tick_size_type` - The tick size type identifier
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_give_tick_size_type_table(&mut self, tick_size_type: &str) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestGiveTickSizeTypeTable {
+            template_id: 107,
+            user_msg: vec![id.clone()],
+            tick_size_type: Some(tick_size_type.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request product codes
+    ///
+    /// Returns available product codes for an exchange.
+    ///
+    /// # Arguments
+    /// * `exchange` - Optional exchange filter (e.g., "CME")
+    /// * `give_toi_products_only` - If true, only return Time of Interest products
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_product_codes(
+        &mut self,
+        exchange: Option<&str>,
+        give_toi_products_only: Option<bool>,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestProductCodes {
+            template_id: 111,
+            user_msg: vec![id.clone()],
+            exchange: exchange.map(|e| e.to_string()),
+            give_toi_products_only,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request volume at price data
+    ///
+    /// Returns the volume profile (volume at each price level) for a symbol.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_get_volume_at_price(
+        &mut self,
+        symbol: &str,
+        exchange: &str,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestGetVolumeAtPrice {
+            template_id: 119,
+            user_msg: vec![id.clone()],
+            symbol: Some(symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request auxiliary reference data
+    ///
+    /// Returns additional reference data for a symbol.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_auxilliary_reference_data(
+        &mut self,
+        symbol: &str,
+        exchange: &str,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestAuxilliaryReferenceData {
+            template_id: 121,
+            user_msg: vec![id.clone()],
+            symbol: Some(symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request login information for the current session
+    ///
+    /// Returns information about the current login session on the Order Plant.
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_login_info(&mut self) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestLoginInfo {
+            template_id: 300,
+            user_msg: vec![id.clone()],
+        };
 
         self.request_to_buf(req, id)
     }
@@ -524,6 +750,13 @@ impl RithmicSenderApi {
     /// # Returns
     ///
     /// A tuple containing the request buffer and the message id
+    ///
+    /// # Note
+    ///
+    /// Large data requests may be truncated by the server. If the response contains
+    /// a round number of bars (e.g., 10000) or does not cover the entire requested
+    /// time period, use [`request_resume_bars`](Self::request_resume_bars) with the
+    /// `request_key` from the response to fetch the remaining data.
     pub fn request_tick_bar_replay(
         &mut self,
         symbol: &str,
@@ -565,6 +798,13 @@ impl RithmicSenderApi {
     /// # Returns
     ///
     /// A tuple containing the request buffer and the message id
+    ///
+    /// # Note
+    ///
+    /// Large data requests may be truncated by the server. If the response contains
+    /// a round number of bars (e.g., 10000) or does not cover the entire requested
+    /// time period, use [`request_resume_bars`](Self::request_resume_bars) with the
+    /// `request_key` from the response to fetch the remaining data.
     pub fn request_time_bar_replay(
         &mut self,
         symbol: &str,
@@ -588,6 +828,77 @@ impl RithmicSenderApi {
             time_order: Some(request_time_bar_replay::TimeOrder::Forwards.into()),
             user_msg: vec![id.clone()],
             ..Default::default()
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request volume profile minute bars
+    ///
+    /// Returns minute bar data with volume profile information.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `bar_type_period` - The period for the bars
+    /// * `start_index_sec` - Start time in unix seconds
+    /// * `finish_index_sec` - End time in unix seconds
+    /// * `user_max_count` - Optional maximum number of bars to return
+    /// * `resume_bars` - Whether to resume from a previous request
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    ///
+    /// # Note
+    ///
+    /// Large data requests may be truncated by the server. If the response contains
+    /// a round number of bars (e.g., 10000) or does not cover the entire requested
+    /// time period, use [`request_resume_bars`](Self::request_resume_bars) with the
+    /// `request_key` from the response to fetch the remaining data.
+    pub fn request_volume_profile_minute_bars(
+        &mut self,
+        symbol: &str,
+        exchange: &str,
+        bar_type_period: i32,
+        start_index_sec: i32,
+        finish_index_sec: i32,
+        user_max_count: Option<i32>,
+        resume_bars: Option<bool>,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestVolumeProfileMinuteBars {
+            template_id: 208,
+            user_msg: vec![id.clone()],
+            symbol: Some(symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+            bar_type_period: Some(bar_type_period),
+            start_index: Some(start_index_sec),
+            finish_index: Some(finish_index_sec),
+            user_max_count,
+            resume_bars,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request to resume a previously truncated bars request
+    ///
+    /// Use this when a bars request was truncated due to data limits.
+    /// Pass the request_key from the previous response.
+    ///
+    /// # Arguments
+    /// * `request_key` - The request key from the previous truncated response
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_resume_bars(&mut self, request_key: &str) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestResumeBars {
+            template_id: 210,
+            user_msg: vec![id.clone()],
+            request_key: Some(request_key.to_string()),
         };
 
         self.request_to_buf(req, id)
@@ -1007,8 +1318,321 @@ impl RithmicSenderApi {
             fcm_id: Some(self.fcm_id.clone()),
             ib_id: Some(self.ib_id.clone()),
             account_id: Some(self.account_id.clone()),
-            request: Some(if subscribe { "subscribe" } else { "unsubscribe" }.to_string()),
+            request: Some(
+                if subscribe {
+                    "subscribe"
+                } else {
+                    "unsubscribe"
+                }
+                .to_string(),
+            ),
             update_bits: None,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request an OCO (One Cancels Other) order pair
+    ///
+    /// Places two orders where if one is filled, the other is automatically cancelled.
+    /// This is commonly used for bracket-style trading (profit target and stop loss).
+    ///
+    /// # Arguments
+    /// * `order1` - First order leg
+    /// * `order2` - Second order leg
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_oco_order(
+        &mut self,
+        order1: RithmicOcoOrderLeg,
+        order2: RithmicOcoOrderLeg,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let trade_route = match self.env {
+            RithmicEnv::Live => TRADE_ROUTE_LIVE,
+            RithmicEnv::Demo | RithmicEnv::Test => TRADE_ROUTE_DEMO,
+        };
+
+        let req = RequestOcoOrder {
+            template_id: 328,
+            user_msg: vec![id.clone()],
+            user_tag: vec![order1.user_tag, order2.user_tag],
+            window_name: vec![],
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            symbol: vec![order1.symbol, order2.symbol],
+            exchange: vec![order1.exchange, order2.exchange],
+            quantity: vec![order1.quantity, order2.quantity],
+            price: vec![order1.price, order2.price],
+            trigger_price: vec![
+                order1.trigger_price.unwrap_or(0.0),
+                order2.trigger_price.unwrap_or(0.0),
+            ],
+            transaction_type: vec![
+                order1.transaction_type.into(),
+                order2.transaction_type.into(),
+            ],
+            duration: vec![order1.duration.into(), order2.duration.into()],
+            price_type: vec![order1.price_type.into(), order2.price_type.into()],
+            trade_route: vec![trade_route.to_string(), trade_route.to_string()],
+            manual_or_auto: vec![
+                request_oco_order::OrderPlacement::Auto.into(),
+                request_oco_order::OrderPlacement::Auto.into(),
+            ],
+            trailing_stop: vec![],
+            trail_by_ticks: vec![],
+            trail_by_price_id: vec![],
+            cancel_at_ssboe: None,
+            cancel_at_usecs: None,
+            cancel_after_secs: None,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request to link multiple orders together
+    ///
+    /// Links orders so they are managed as a group. When one order is cancelled,
+    /// all linked orders are cancelled.
+    ///
+    /// # Arguments
+    /// * `basket_ids` - Vector of basket IDs to link together
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_link_orders(&mut self, basket_ids: Vec<String>) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+        let count = basket_ids.len();
+
+        let req = RequestLinkOrders {
+            template_id: 344,
+            user_msg: vec![id.clone()],
+            fcm_id: vec![self.fcm_id.clone(); count],
+            ib_id: vec![self.ib_id.clone(); count],
+            account_id: vec![self.account_id.clone(); count],
+            basket_id: basket_ids,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request the easy-to-borrow list for short selling
+    ///
+    /// Returns a list of securities that are readily available for short selling.
+    ///
+    /// # Arguments
+    /// * `request_type` - Subscribe or Unsubscribe from updates
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_easy_to_borrow_list(
+        &mut self,
+        request_type: request_easy_to_borrow_list::Request,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestEasyToBorrowList {
+            template_id: 348,
+            user_msg: vec![id.clone()],
+            request: Some(request_type.into()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Modify order reference data (user tag)
+    ///
+    /// Updates the user-defined reference data on an existing order.
+    ///
+    /// # Arguments
+    /// * `basket_id` - The order/basket identifier
+    /// * `user_tag` - New user tag to set on the order
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_modify_order_reference_data(
+        &mut self,
+        basket_id: &str,
+        user_tag: &str,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestModifyOrderReferenceData {
+            template_id: 3500,
+            user_msg: vec![id.clone()],
+            user_tag: Some(user_tag.to_string()),
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            basket_id: Some(basket_id.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request order session configuration
+    ///
+    /// Gets or sets order session configuration options.
+    ///
+    /// # Arguments
+    /// * `should_defer_request` - If true, defers requests until server loads reference data
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_order_session_config(
+        &mut self,
+        should_defer_request: Option<bool>,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestOrderSessionConfig {
+            template_id: 3502,
+            user_msg: vec![id.clone()],
+            should_defer_request,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request replay of executions
+    ///
+    /// Replays historical execution data for the account within a time range.
+    ///
+    /// # Arguments
+    /// * `start_index_sec` - Start time in unix seconds
+    /// * `finish_index_sec` - End time in unix seconds
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_replay_executions(
+        &mut self,
+        start_index_sec: i32,
+        finish_index_sec: i32,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestReplayExecutions {
+            template_id: 3506,
+            user_msg: vec![id.clone()],
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            start_index: Some(start_index_sec),
+            finish_index: Some(finish_index_sec),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request list of unaccepted agreements
+    ///
+    /// Returns agreements that the user has not yet accepted.
+    /// These may include market data agreements, exchange agreements, etc.
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_list_unaccepted_agreements(&mut self) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestListUnacceptedAgreements {
+            template_id: 500,
+            user_msg: vec![id.clone()],
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request list of accepted agreements
+    ///
+    /// Returns agreements that the user has already accepted.
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_list_accepted_agreements(&mut self) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestListAcceptedAgreements {
+            template_id: 502,
+            user_msg: vec![id.clone()],
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Accept an agreement
+    ///
+    /// Accepts a specific agreement identified by agreement_id.
+    ///
+    /// # Arguments
+    /// * `agreement_id` - The agreement identifier
+    /// * `market_data_usage_capacity` - "Professional" or "Non-Professional"
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_accept_agreement(
+        &mut self,
+        agreement_id: &str,
+        market_data_usage_capacity: Option<&str>,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestAcceptAgreement {
+            template_id: 504,
+            user_msg: vec![id.clone()],
+            agreement_id: Some(agreement_id.to_string()),
+            market_data_usage_capacity: market_data_usage_capacity.map(|s| s.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request to show agreement details
+    ///
+    /// Returns the full text and details of a specific agreement.
+    ///
+    /// # Arguments
+    /// * `agreement_id` - The agreement identifier
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_show_agreement(&mut self, agreement_id: &str) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestShowAgreement {
+            template_id: 506,
+            user_msg: vec![id.clone()],
+            agreement_id: Some(agreement_id.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Set Rithmic market data self-certification status
+    ///
+    /// Sets the user's self-certification status for market data usage
+    /// (Professional vs Non-Professional).
+    ///
+    /// # Arguments
+    /// * `agreement_id` - The agreement identifier
+    /// * `market_data_usage_capacity` - "Professional" or "Non-Professional"
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_set_rithmic_mrkt_data_self_cert_status(
+        &mut self,
+        agreement_id: &str,
+        market_data_usage_capacity: &str,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestSetRithmicMrktDataSelfCertStatus {
+            template_id: 508,
+            user_msg: vec![id.clone()],
+            agreement_id: Some(agreement_id.to_string()),
+            market_data_usage_capacity: Some(market_data_usage_capacity.to_string()),
         };
 
         self.request_to_buf(req, id)

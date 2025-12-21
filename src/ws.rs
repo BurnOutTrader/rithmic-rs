@@ -160,7 +160,7 @@ async fn connect_with_retry(
     loop {
         let selected_url = if attempt == 1 {
             primary_url
-        } else if attempt % 2 == 0 {
+        } else if attempt.is_multiple_of(2) {
             secondary_url
         } else {
             primary_url

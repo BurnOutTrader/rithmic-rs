@@ -7,19 +7,27 @@ use crate::rti::{
     DepthByOrder, DepthByOrderEndEvent, EndOfDayPrices, ExchangeOrderNotification, ForcedLogout,
     FrontMonthContractUpdate, IndicatorPrices, InstrumentPnLPositionUpdate, LastTrade, MarketMode,
     MessageType, OpenInterest, OrderBook, OrderPriceLimits, QuoteStatistics, Reject,
-    ResponseAccountList, ResponseAccountRmsInfo, ResponseAccountRmsUpdates, ResponseBracketOrder,
-    ResponseCancelAllOrders, ResponseCancelOrder, ResponseDepthByOrderSnapshot,
-    ResponseDepthByOrderUpdates, ResponseExitPosition, ResponseFrontMonthContract,
-    ResponseHeartbeat, ResponseLogin, ResponseLogout, ResponseMarketDataUpdate,
-    ResponseModifyOrder, ResponseNewOrder, ResponsePnLPositionSnapshot, ResponsePnLPositionUpdates,
-    ResponseProductRmsInfo, ResponseReferenceData, ResponseRithmicSystemInfo, ResponseSearchSymbols,
-    ResponseShowBracketStops, ResponseShowBrackets, ResponseShowOrderHistory,
-    ResponseShowOrderHistoryDates, ResponseShowOrderHistoryDetail, ResponseShowOrderHistorySummary,
-    ResponseShowOrders, ResponseSubscribeForOrderUpdates, ResponseSubscribeToBracketUpdates,
-    ResponseTickBarReplay, ResponseTickBarUpdate, ResponseTimeBarReplay, ResponseTimeBarUpdate,
-    ResponseTradeRoutes, ResponseUpdateStopBracketLevel, ResponseUpdateTargetBracketLevel,
+    ResponseAcceptAgreement, ResponseAccountList, ResponseAccountRmsInfo, ResponseAccountRmsUpdates,
+    ResponseAuxilliaryReferenceData, ResponseBracketOrder, ResponseCancelAllOrders,
+    ResponseCancelOrder, ResponseDepthByOrderSnapshot, ResponseDepthByOrderUpdates,
+    ResponseEasyToBorrowList, ResponseExitPosition, ResponseFrontMonthContract,
+    ResponseGetInstrumentByUnderlying, ResponseGetInstrumentByUnderlyingKeys,
+    ResponseGetVolumeAtPrice, ResponseGiveTickSizeTypeTable, ResponseHeartbeat, ResponseLinkOrders,
+    ResponseListAcceptedAgreements, ResponseListExchangePermissions,
+    ResponseListUnacceptedAgreements, ResponseLogin, ResponseLoginInfo, ResponseLogout,
+    ResponseMarketDataUpdate, ResponseMarketDataUpdateByUnderlying, ResponseModifyOrder,
+    ResponseModifyOrderReferenceData, ResponseNewOrder, ResponseOcoOrder, ResponseOrderSessionConfig,
+    ResponsePnLPositionSnapshot, ResponsePnLPositionUpdates, ResponseProductCodes,
+    ResponseProductRmsInfo, ResponseReferenceData, ResponseReplayExecutions, ResponseResumeBars,
+    ResponseRithmicSystemGatewayInfo, ResponseRithmicSystemInfo, ResponseSearchSymbols,
+    ResponseSetRithmicMrktDataSelfCertStatus, ResponseShowAgreement, ResponseShowBracketStops,
+    ResponseShowBrackets, ResponseShowOrderHistory, ResponseShowOrderHistoryDates,
+    ResponseShowOrderHistoryDetail, ResponseShowOrderHistorySummary, ResponseShowOrders,
+    ResponseSubscribeForOrderUpdates, ResponseSubscribeToBracketUpdates, ResponseTickBarReplay,
+    ResponseTickBarUpdate, ResponseTimeBarReplay, ResponseTimeBarUpdate, ResponseTradeRoutes,
+    ResponseUpdateStopBracketLevel, ResponseUpdateTargetBracketLevel, ResponseVolumeProfileMinuteBars,
     RithmicOrderNotification, SymbolMarginRate, TickBar, TimeBar, TradeRoute, TradeStatistics,
-    UserAccountUpdate, messages::RithmicMessage,
+    UpdateEasyToBorrowList, UserAccountUpdate, messages::RithmicMessage,
 };
 
 /// Response from a Rithmic plant, either from a request or a subscription update.
@@ -196,6 +204,21 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
+            21 => {
+                let resp =
+                    ResponseRithmicSystemGatewayInfo::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseRithmicSystemGatewayInfo(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
             75 => {
                 let resp = Reject::decode(&mut Cursor::new(&data[4..])).unwrap();
                 let error = self.get_error(&resp.rp_code);
@@ -250,6 +273,68 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
+            103 => {
+                let resp =
+                    ResponseGetInstrumentByUnderlying::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseGetInstrumentByUnderlying(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            104 => {
+                let resp = ResponseGetInstrumentByUnderlyingKeys::decode(&mut Cursor::new(&data[4..]))
+                    .unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseGetInstrumentByUnderlyingKeys(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            106 => {
+                let resp = ResponseMarketDataUpdateByUnderlying::decode(&mut Cursor::new(&data[4..]))
+                    .unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseMarketDataUpdateByUnderlying(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            108 => {
+                let resp =
+                    ResponseGiveTickSizeTypeTable::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseGiveTickSizeTypeTable(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
             110 => {
                 let resp = ResponseSearchSymbols::decode(&mut Cursor::new(&data[4..])).unwrap();
                 let has_more = self.has_multiple(&resp.rq_handler_rp_code);
@@ -258,6 +343,21 @@ impl RithmicReceiverApi {
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseSearchSymbols(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            112 => {
+                let resp = ResponseProductCodes::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseProductCodes(resp),
                     is_update: false,
                     has_more,
                     multi_response: true,
@@ -306,6 +406,36 @@ impl RithmicReceiverApi {
                     is_update: false,
                     has_more: false,
                     multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            120 => {
+                let resp = ResponseGetVolumeAtPrice::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseGetVolumeAtPrice(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            122 => {
+                let resp =
+                    ResponseAuxilliaryReferenceData::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseAuxilliaryReferenceData(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
                     error,
                     source: self.source.clone(),
                 }
@@ -550,6 +680,36 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
+            209 => {
+                let resp =
+                    ResponseVolumeProfileMinuteBars::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseVolumeProfileMinuteBars(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            211 => {
+                let resp = ResponseResumeBars::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseResumeBars(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
             250 => {
                 let resp = TimeBar::decode(&mut Cursor::new(&data[4..])).unwrap();
 
@@ -573,6 +733,20 @@ impl RithmicReceiverApi {
                     has_more: false,
                     multi_response: false,
                     error: None,
+                    source: self.source.clone(),
+                }
+            }
+            301 => {
+                let resp = ResponseLoginInfo::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseLoginInfo(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
                     source: self.source.clone(),
                 }
             }
@@ -770,6 +944,21 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
+            329 => {
+                let resp = ResponseOcoOrder::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseOcoOrder(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
             331 => {
                 let resp = ResponseBracketOrder::decode(&mut Cursor::new(&data[4..])).unwrap();
                 let has_more = self.has_multiple(&resp.rq_handler_rp_code);
@@ -860,6 +1049,36 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
+            343 => {
+                let resp =
+                    ResponseListExchangePermissions::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseListExchangePermissions(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            345 => {
+                let resp = ResponseLinkOrders::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseLinkOrders(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
             347 => {
                 let resp = ResponseCancelAllOrders::decode(&mut Cursor::new(&data[4..])).unwrap();
                 let err = self.get_error(&resp.rp_code);
@@ -871,6 +1090,21 @@ impl RithmicReceiverApi {
                     has_more: false,
                     multi_response: false,
                     error: err,
+                    source: self.source.clone(),
+                }
+            }
+            349 => {
+                let resp = ResponseEasyToBorrowList::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseEasyToBorrowList(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
                     source: self.source.clone(),
                 }
             }
@@ -932,6 +1166,19 @@ impl RithmicReceiverApi {
                 RithmicResponse {
                     request_id: "".to_string(),
                     message: RithmicMessage::AccountListUpdates(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            355 => {
+                let resp = UpdateEasyToBorrowList::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::UpdateEasyToBorrowList(resp),
                     is_update: true,
                     has_more: false,
                     multi_response: false,
@@ -1009,6 +1256,114 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
+            501 => {
+                let resp =
+                    ResponseListUnacceptedAgreements::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseListUnacceptedAgreements(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            503 => {
+                let resp =
+                    ResponseListAcceptedAgreements::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseListAcceptedAgreements(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            505 => {
+                let resp = ResponseAcceptAgreement::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseAcceptAgreement(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            507 => {
+                let resp = ResponseShowAgreement::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseShowAgreement(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            509 => {
+                let resp = ResponseSetRithmicMrktDataSelfCertStatus::decode(
+                    &mut Cursor::new(&data[4..]),
+                )
+                .unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseSetRithmicMrktDataSelfCertStatus(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            3501 => {
+                let resp =
+                    ResponseModifyOrderReferenceData::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseModifyOrderReferenceData(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            3503 => {
+                let resp =
+                    ResponseOrderSessionConfig::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseOrderSessionConfig(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
             3505 => {
                 let resp = ResponseExitPosition::decode(&mut Cursor::new(&data[4..])).unwrap();
                 let has_more = self.has_multiple(&resp.rq_handler_rp_code);
@@ -1021,6 +1376,20 @@ impl RithmicReceiverApi {
                     has_more,
                     multi_response: true,
                     error: err,
+                    source: self.source.clone(),
+                }
+            }
+            3507 => {
+                let resp = ResponseReplayExecutions::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseReplayExecutions(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
                     source: self.source.clone(),
                 }
             }
