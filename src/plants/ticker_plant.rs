@@ -15,7 +15,7 @@ use crate::{
         request_depth_by_order_updates,
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
-        request_search_symbols,
+        request_market_data_update_by_underlying, request_search_symbols,
     },
     ws::{
         HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
@@ -83,6 +83,54 @@ pub enum TickerPlantCommand {
     },
     ListExchanges {
         user: String,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetInstrumentByUnderlying {
+        underlying_symbol: String,
+        exchange: String,
+        expiration_date: Option<String>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    SubscribeByUnderlying {
+        underlying_symbol: String,
+        exchange: String,
+        expiration_date: Option<String>,
+        fields: Vec<request_market_data_update_by_underlying::UpdateBits>,
+        request_type: request_market_data_update_by_underlying::Request,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetTickSizeTypeTable {
+        tick_size_type: String,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetProductCodes {
+        exchange: Option<String>,
+        give_toi_products_only: Option<bool>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetVolumeAtPrice {
+        symbol: String,
+        exchange: String,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetAuxilliaryReferenceData {
+        symbol: String,
+        exchange: String,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetReferenceData {
+        symbol: String,
+        exchange: String,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetFrontMonthContract {
+        symbol: String,
+        exchange: String,
+        need_updates: bool,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    GetSystemGatewayInfo {
+        system_name: Option<String>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
     },
 }
@@ -697,6 +745,192 @@ impl PlantActor for TickerPlant {
                     .await
                     .unwrap();
             }
+            TickerPlantCommand::GetInstrumentByUnderlying {
+                underlying_symbol,
+                exchange,
+                expiration_date,
+                response_sender,
+            } => {
+                let (buf, id) = self
+                    .rithmic_sender_api
+                    .request_get_instrument_by_underlying(
+                        &underlying_symbol,
+                        &exchange,
+                        expiration_date.as_deref(),
+                    );
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::SubscribeByUnderlying {
+                underlying_symbol,
+                exchange,
+                expiration_date,
+                fields,
+                request_type,
+                response_sender,
+            } => {
+                let (buf, id) = self
+                    .rithmic_sender_api
+                    .request_market_data_update_by_underlying(
+                        &underlying_symbol,
+                        &exchange,
+                        expiration_date.as_deref(),
+                        fields,
+                        request_type,
+                    );
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::GetTickSizeTypeTable {
+                tick_size_type,
+                response_sender,
+            } => {
+                let (buf, id) = self
+                    .rithmic_sender_api
+                    .request_give_tick_size_type_table(&tick_size_type);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::GetProductCodes {
+                exchange,
+                give_toi_products_only,
+                response_sender,
+            } => {
+                let (buf, id) = self
+                    .rithmic_sender_api
+                    .request_product_codes(exchange.as_deref(), give_toi_products_only);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::GetVolumeAtPrice {
+                symbol,
+                exchange,
+                response_sender,
+            } => {
+                let (buf, id) = self
+                    .rithmic_sender_api
+                    .request_get_volume_at_price(&symbol, &exchange);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::GetAuxilliaryReferenceData {
+                symbol,
+                exchange,
+                response_sender,
+            } => {
+                let (buf, id) = self
+                    .rithmic_sender_api
+                    .request_auxilliary_reference_data(&symbol, &exchange);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::GetReferenceData {
+                symbol,
+                exchange,
+                response_sender,
+            } => {
+                let (buf, id) = self
+                    .rithmic_sender_api
+                    .request_reference_data(&symbol, &exchange);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::GetFrontMonthContract {
+                symbol,
+                exchange,
+                need_updates,
+                response_sender,
+            } => {
+                let (buf, id) = self.rithmic_sender_api.request_front_month_contract(
+                    &symbol,
+                    &exchange,
+                    need_updates,
+                );
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
+            TickerPlantCommand::GetSystemGatewayInfo {
+                system_name,
+                response_sender,
+            } => {
+                let (buf, id) = self
+                    .rithmic_sender_api
+                    .request_rithmic_system_gateway_info(system_name.as_deref());
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(buf.into()))
+                    .await
+                    .unwrap();
+            }
         }
     }
 }
@@ -922,6 +1156,254 @@ impl RithmicTickerPlantHandle {
         let _ = self.sender.send(command).await;
 
         rx.await.unwrap()
+    }
+
+    /// Get instruments by underlying symbol
+    ///
+    /// # Arguments
+    /// * `underlying_symbol` - The underlying symbol (e.g., "ES" for E-mini S&P 500)
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `expiration_date` - Optional expiration date filter
+    ///
+    /// # Returns
+    /// A vector of responses containing instrument information or an error message
+    pub async fn get_instrument_by_underlying(
+        &self,
+        underlying_symbol: &str,
+        exchange: &str,
+        expiration_date: Option<&str>,
+    ) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::GetInstrumentByUnderlying {
+            underlying_symbol: underlying_symbol.to_string(),
+            exchange: exchange.to_string(),
+            expiration_date: expiration_date.map(|d| d.to_string()),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
+    }
+
+    /// Subscribe to market data for all instruments of an underlying
+    ///
+    /// # Arguments
+    /// * `underlying_symbol` - The underlying symbol (e.g., "ES")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `expiration_date` - Optional expiration date filter
+    /// * `fields` - Market data fields to subscribe to
+    /// * `request_type` - Subscribe or Unsubscribe
+    ///
+    /// # Returns
+    /// The subscription response or an error message
+    pub async fn subscribe_by_underlying(
+        &self,
+        underlying_symbol: &str,
+        exchange: &str,
+        expiration_date: Option<&str>,
+        fields: Vec<request_market_data_update_by_underlying::UpdateBits>,
+        request_type: request_market_data_update_by_underlying::Request,
+    ) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::SubscribeByUnderlying {
+            underlying_symbol: underlying_symbol.to_string(),
+            exchange: exchange.to_string(),
+            expiration_date: expiration_date.map(|d| d.to_string()),
+            fields,
+            request_type,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
+    }
+
+    /// Get tick size type table
+    ///
+    /// # Arguments
+    /// * `tick_size_type` - The tick size type identifier
+    ///
+    /// # Returns
+    /// The tick size table response or an error message
+    pub async fn get_tick_size_type_table(
+        &self,
+        tick_size_type: &str,
+    ) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::GetTickSizeTypeTable {
+            tick_size_type: tick_size_type.to_string(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
+    }
+
+    /// Get product codes
+    ///
+    /// # Arguments
+    /// * `exchange` - Optional exchange filter
+    /// * `give_toi_products_only` - If true, only return Time of Interest products
+    ///
+    /// # Returns
+    /// A vector of responses containing product codes or an error message
+    pub async fn get_product_codes(
+        &self,
+        exchange: Option<&str>,
+        give_toi_products_only: Option<bool>,
+    ) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::GetProductCodes {
+            exchange: exchange.map(|e| e.to_string()),
+            give_toi_products_only,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
+    }
+
+    /// Get volume at price data
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    ///
+    /// # Returns
+    /// The volume at price response or an error message
+    pub async fn get_volume_at_price(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::GetVolumeAtPrice {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.unwrap()
+    }
+
+    /// Get auxiliary reference data for a symbol
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    ///
+    /// # Returns
+    /// The auxiliary reference data response or an error message
+    pub async fn get_auxilliary_reference_data(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::GetAuxilliaryReferenceData {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
+    }
+
+    /// Get reference data for a symbol
+    ///
+    /// Returns detailed information about a trading instrument including
+    /// tick size, point value, trading hours, and other specifications.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    ///
+    /// # Returns
+    /// The reference data response or an error message
+    pub async fn get_reference_data(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::GetReferenceData {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
+    }
+
+    /// Get front month contract
+    ///
+    /// Returns the current front month contract for a given product.
+    ///
+    /// # Arguments
+    /// * `symbol` - The product symbol (e.g., "ES" for E-mini S&P 500)
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `need_updates` - Whether to receive updates when front month changes
+    ///
+    /// # Returns
+    /// The front month contract response or an error message
+    pub async fn get_front_month_contract(
+        &self,
+        symbol: &str,
+        exchange: &str,
+        need_updates: bool,
+    ) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::GetFrontMonthContract {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            need_updates,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
+    }
+
+    /// Get Rithmic system gateway info
+    ///
+    /// # Arguments
+    /// * `system_name` - Optional system name to get info for
+    ///
+    /// # Returns
+    /// The gateway info response or an error message
+    pub async fn get_system_gateway_info(
+        &self,
+        system_name: Option<&str>,
+    ) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::GetSystemGatewayInfo {
+            system_name: system_name.map(|s| s.to_string()),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
     }
 }
 

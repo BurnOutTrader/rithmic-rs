@@ -55,6 +55,9 @@ pub enum PnlPlantCommand {
     SubscribePnlUpdates {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
     },
+    UnsubscribePnlUpdates {
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
 }
 
 /// The RithmicPnlPlant provides access to profit and loss (PnL) information through the Rithmic API.
@@ -531,6 +534,21 @@ impl PlantActor for PnlPlant {
                     .await
                     .unwrap();
             }
+            PnlPlantCommand::UnsubscribePnlUpdates { response_sender } => {
+                let (unsubscribe_buf, id) = self.rithmic_sender_api.request_pnl_position_updates(
+                    request_pn_l_position_updates::Request::Unsubscribe,
+                );
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(unsubscribe_buf.into()))
+                    .await
+                    .unwrap();
+            }
         }
     }
 }
@@ -659,5 +677,21 @@ impl RithmicPnlPlantHandle {
         } else {
             Err("error with pnl position snapshot payload".to_string())
         }
+    }
+
+    /// Unsubscribe from PnL updates
+    ///
+    /// # Returns
+    /// The unsubscription response or an error message
+    pub async fn unsubscribe_pnl_updates(&self) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = PnlPlantCommand::UnsubscribePnlUpdates {
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx.await.unwrap().unwrap().remove(0))
     }
 }
