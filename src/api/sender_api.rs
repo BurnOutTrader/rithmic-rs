@@ -3,24 +3,25 @@ use prost::Message;
 use crate::{
     config::{RithmicConfig, RithmicEnv},
     rti::{
-        RequestAccountList, RequestAccountRmsInfo, RequestBracketOrder, RequestCancelAllOrders,
-        RequestCancelOrder, RequestDepthByOrderSnapshot, RequestDepthByOrderUpdates,
-        RequestExitPosition, RequestHeartbeat, RequestListExchangePermissions, RequestLogin,
-        RequestLogout, RequestMarketDataUpdate, RequestModifyOrder, RequestNewOrder,
-        RequestPnLPositionSnapshot, RequestPnLPositionUpdates, RequestProductRmsInfo,
+        RequestAccountList, RequestAccountRmsInfo, RequestAccountRmsUpdates, RequestBracketOrder,
+        RequestCancelAllOrders, RequestCancelOrder, RequestDepthByOrderSnapshot,
+        RequestDepthByOrderUpdates, RequestExitPosition, RequestFrontMonthContract,
+        RequestHeartbeat, RequestListExchangePermissions, RequestLogin, RequestLogout,
+        RequestMarketDataUpdate, RequestModifyOrder, RequestNewOrder, RequestPnLPositionSnapshot,
+        RequestPnLPositionUpdates, RequestProductRmsInfo, RequestReferenceData,
         RequestRithmicSystemInfo, RequestSearchSymbols, RequestShowBracketStops,
         RequestShowBrackets, RequestShowOrderHistory, RequestShowOrderHistoryDates,
         RequestShowOrderHistoryDetail, RequestShowOrderHistorySummary, RequestShowOrders,
         RequestSubscribeForOrderUpdates, RequestSubscribeToBracketUpdates, RequestTickBarReplay,
-        RequestTimeBarReplay, RequestTradeRoutes, RequestUpdateStopBracketLevel,
-        RequestUpdateTargetBracketLevel,
+        RequestTickBarUpdate, RequestTimeBarReplay, RequestTimeBarUpdate, RequestTradeRoutes,
+        RequestUpdateStopBracketLevel, RequestUpdateTargetBracketLevel,
         request_account_list::UserType,
         request_bracket_order, request_cancel_all_orders, request_depth_by_order_updates,
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
         request_new_order, request_pn_l_position_updates, request_search_symbols,
         request_tick_bar_replay::{BarSubType, BarType, Direction, TimeOrder},
-        request_time_bar_replay,
+        request_tick_bar_update, request_time_bar_replay, request_time_bar_update,
     },
 };
 
@@ -515,8 +516,8 @@ impl RithmicSenderApi {
     ///
     /// # Arguments
     ///
-    /// * `exchange` - The exchange of the symbol
     /// * `symbol` - The symbol to request data for
+    /// * `exchange` - The exchange of the symbol
     /// * `start_index_sec` - unix seconds
     /// * `finish_index_sec` - unix seconds
     ///
@@ -525,8 +526,8 @@ impl RithmicSenderApi {
     /// A tuple containing the request buffer and the message id
     pub fn request_tick_bar_replay(
         &mut self,
-        exchange: String,
-        symbol: String,
+        symbol: &str,
+        exchange: &str,
         start_index_sec: i32,
         finish_index_sec: i32,
     ) -> (Vec<u8>, String) {
@@ -534,8 +535,8 @@ impl RithmicSenderApi {
 
         let req = RequestTickBarReplay {
             template_id: 206,
-            exchange: Some(exchange),
-            symbol: Some(symbol),
+            exchange: Some(exchange.to_string()),
+            symbol: Some(symbol.to_string()),
             bar_type: Some(BarType::TickBar.into()),
             bar_sub_type: Some(BarSubType::Regular.into()),
             bar_type_specifier: Some("1".to_string()),
@@ -554,8 +555,8 @@ impl RithmicSenderApi {
     ///
     /// # Arguments
     ///
-    /// * `exchange` - The exchange of the symbol
     /// * `symbol` - The symbol to request data for
+    /// * `exchange` - The exchange of the symbol
     /// * `bar_type` - The type of time bar (SecondBar, MinuteBar, DailyBar, WeeklyBar)
     /// * `bar_type_period` - The period for the bar type (e.g., 1 for 1-minute bars, 5 for 5-minute bars)
     /// * `start_index_sec` - unix seconds
@@ -566,8 +567,8 @@ impl RithmicSenderApi {
     /// A tuple containing the request buffer and the message id
     pub fn request_time_bar_replay(
         &mut self,
-        exchange: String,
-        symbol: String,
+        symbol: &str,
+        exchange: &str,
         bar_type: request_time_bar_replay::BarType,
         bar_type_period: i32,
         start_index_sec: i32,
@@ -577,8 +578,8 @@ impl RithmicSenderApi {
 
         let req = RequestTimeBarReplay {
             template_id: 202,
-            exchange: Some(exchange),
-            symbol: Some(symbol),
+            exchange: Some(exchange.to_string()),
+            symbol: Some(symbol.to_string()),
             bar_type: Some(bar_type.into()),
             bar_type_period: Some(bar_type_period),
             start_index: Some(start_index_sec),
@@ -852,6 +853,162 @@ impl RithmicSenderApi {
             ib_id: Some(self.ib_id.clone()),
             account_id: Some(self.account_id.clone()),
             basket_id: basket_id.map(|b| b.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request reference data for a symbol
+    ///
+    /// Returns detailed information about a trading instrument including
+    /// tick size, point value, trading hours, and other symbol specifications.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_reference_data(&mut self, symbol: &str, exchange: &str) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestReferenceData {
+            template_id: 14,
+            user_msg: vec![id.clone()],
+            symbol: Some(symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Request front month contract information
+    ///
+    /// Returns the current front month contract for a given product.
+    /// Optionally subscribe to updates when the front month rolls.
+    ///
+    /// # Arguments
+    /// * `symbol` - The product symbol (e.g., "ES" for E-mini S&P 500)
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `need_updates` - Whether to receive updates when front month changes
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_front_month_contract(
+        &mut self,
+        symbol: &str,
+        exchange: &str,
+        need_updates: bool,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestFrontMonthContract {
+            template_id: 113,
+            user_msg: vec![id.clone()],
+            symbol: Some(symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+            need_updates: Some(need_updates),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Subscribe to or unsubscribe from live time bar updates
+    ///
+    /// Receive real-time time bar (OHLCV) updates for a symbol.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `bar_type` - The type of time bar (SecondBar, MinuteBar, DailyBar, WeeklyBar)
+    /// * `bar_type_period` - The period for the bar type (e.g., 1 for 1-minute bars)
+    /// * `request` - Subscribe or Unsubscribe
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_time_bar_update(
+        &mut self,
+        symbol: &str,
+        exchange: &str,
+        bar_type: request_time_bar_update::BarType,
+        bar_type_period: i32,
+        request: request_time_bar_update::Request,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestTimeBarUpdate {
+            template_id: 200,
+            user_msg: vec![id.clone()],
+            symbol: Some(symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+            bar_type: Some(bar_type.into()),
+            bar_type_period: Some(bar_type_period),
+            request: Some(request.into()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Subscribe to or unsubscribe from live tick bar updates
+    ///
+    /// Receive real-time tick bar updates for a symbol.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESH5")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    /// * `bar_type` - The type of tick bar
+    /// * `bar_sub_type` - Sub-type of the bar
+    /// * `bar_type_specifier` - Specifier for the bar (e.g., "1" for 1-tick bars)
+    /// * `request` - Subscribe or Unsubscribe
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_tick_bar_update(
+        &mut self,
+        symbol: &str,
+        exchange: &str,
+        bar_type: request_tick_bar_update::BarType,
+        bar_sub_type: request_tick_bar_update::BarSubType,
+        bar_type_specifier: &str,
+        request: request_tick_bar_update::Request,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestTickBarUpdate {
+            template_id: 204,
+            user_msg: vec![id.clone()],
+            symbol: Some(symbol.to_string()),
+            exchange: Some(exchange.to_string()),
+            bar_type: Some(bar_type.into()),
+            bar_sub_type: Some(bar_sub_type.into()),
+            bar_type_specifier: Some(bar_type_specifier.to_string()),
+            request: Some(request.into()),
+            ..Default::default()
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Subscribe to account RMS (Risk Management System) updates
+    ///
+    /// Receive real-time updates when account RMS limits change.
+    ///
+    /// # Arguments
+    /// * `subscribe` - true to subscribe, false to unsubscribe
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_account_rms_updates(&mut self, subscribe: bool) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestAccountRmsUpdates {
+            template_id: 3508,
+            user_msg: vec![id.clone()],
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            request: Some(if subscribe { "subscribe" } else { "unsubscribe" }.to_string()),
+            update_bits: None,
         };
 
         self.request_to_buf(req, id)

@@ -523,8 +523,8 @@ impl PlantActor for HistoryPlant {
                 response_sender,
             } => {
                 let (tick_bar_replay_buf, id) = self.rithmic_sender_api.request_tick_bar_replay(
-                    exchange,
-                    symbol,
+                    &symbol,
+                    &exchange,
                     start_time_sec,
                     end_time_sec,
                 );
@@ -549,8 +549,8 @@ impl PlantActor for HistoryPlant {
                 symbol,
             } => {
                 let (time_bar_replay_buf, id) = self.rithmic_sender_api.request_time_bar_replay(
-                    exchange,
-                    symbol,
+                    &symbol,
+                    &exchange,
                     bar_type,
                     bar_type_period,
                     start_time_sec,

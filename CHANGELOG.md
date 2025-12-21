@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### New Market Data Messages (Ticker Plant)
+- `TradeStatistics`: High/low/open price statistics
+- `QuoteStatistics`: Quote-related statistics  
+- `IndicatorPrices`: Settlement, projected settlement prices
+- `EndOfDayPrices`: End of day price data
+- `MarketMode`: Market trading mode updates
+- `OpenInterest`: Open interest updates
+- `FrontMonthContractUpdate`: Front month contract changes
+- `DepthByOrderEndEvent`: Depth by order stream end marker
+- `SymbolMarginRate`: Symbol margin rate updates
+- `OrderPriceLimits`: Price limit updates
+
+#### New Order Plant Messages
+- `UserAccountUpdate`: Account permission/access changes
+- `AccountListUpdates`: Account list change notifications
+- `AccountRmsUpdates`: Real-time RMS limit updates
+
+#### New RithmicMessage Variants
+- `ResponseReferenceData`: Symbol reference data
+- `ResponseFrontMonthContract`: Front month contract info
+- `ResponseTimeBarUpdate`: Time bar subscription confirmation
+- `ResponseTickBarUpdate`: Tick bar subscription confirmation
+- `ResponseAccountRmsUpdates`: RMS updates subscription confirmation
+
 ## [0.6.1] - 2025-11-24
 
 > **⚠️ Breaking Change:** Environment variable names have changed. See migration guide below.

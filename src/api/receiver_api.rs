@@ -3,20 +3,23 @@ use std::io::Cursor;
 use tracing::error;
 
 use crate::rti::{
-    AccountPnLPositionUpdate, BestBidOffer, BracketUpdates, DepthByOrder,
-    ExchangeOrderNotification, ForcedLogout, InstrumentPnLPositionUpdate, LastTrade, MessageType,
-    OrderBook, Reject, ResponseAccountList, ResponseAccountRmsInfo, ResponseBracketOrder,
+    AccountListUpdates, AccountPnLPositionUpdate, AccountRmsUpdates, BestBidOffer, BracketUpdates,
+    DepthByOrder, DepthByOrderEndEvent, EndOfDayPrices, ExchangeOrderNotification, ForcedLogout,
+    FrontMonthContractUpdate, IndicatorPrices, InstrumentPnLPositionUpdate, LastTrade, MarketMode,
+    MessageType, OpenInterest, OrderBook, OrderPriceLimits, QuoteStatistics, Reject,
+    ResponseAccountList, ResponseAccountRmsInfo, ResponseAccountRmsUpdates, ResponseBracketOrder,
     ResponseCancelAllOrders, ResponseCancelOrder, ResponseDepthByOrderSnapshot,
-    ResponseDepthByOrderUpdates, ResponseExitPosition, ResponseHeartbeat, ResponseLogin,
-    ResponseLogout, ResponseMarketDataUpdate, ResponseModifyOrder, ResponseNewOrder,
-    ResponsePnLPositionSnapshot, ResponsePnLPositionUpdates, ResponseProductRmsInfo,
-    ResponseRithmicSystemInfo, ResponseSearchSymbols, ResponseShowBracketStops,
-    ResponseShowBrackets, ResponseShowOrderHistory, ResponseShowOrderHistoryDates,
-    ResponseShowOrderHistoryDetail, ResponseShowOrderHistorySummary, ResponseShowOrders,
-    ResponseSubscribeForOrderUpdates, ResponseSubscribeToBracketUpdates, ResponseTickBarReplay,
-    ResponseTimeBarReplay, ResponseTradeRoutes, ResponseUpdateStopBracketLevel,
-    ResponseUpdateTargetBracketLevel, RithmicOrderNotification, TickBar, TimeBar, TradeRoute,
-    messages::RithmicMessage,
+    ResponseDepthByOrderUpdates, ResponseExitPosition, ResponseFrontMonthContract,
+    ResponseHeartbeat, ResponseLogin, ResponseLogout, ResponseMarketDataUpdate,
+    ResponseModifyOrder, ResponseNewOrder, ResponsePnLPositionSnapshot, ResponsePnLPositionUpdates,
+    ResponseProductRmsInfo, ResponseReferenceData, ResponseRithmicSystemInfo, ResponseSearchSymbols,
+    ResponseShowBracketStops, ResponseShowBrackets, ResponseShowOrderHistory,
+    ResponseShowOrderHistoryDates, ResponseShowOrderHistoryDetail, ResponseShowOrderHistorySummary,
+    ResponseShowOrders, ResponseSubscribeForOrderUpdates, ResponseSubscribeToBracketUpdates,
+    ResponseTickBarReplay, ResponseTickBarUpdate, ResponseTimeBarReplay, ResponseTimeBarUpdate,
+    ResponseTradeRoutes, ResponseUpdateStopBracketLevel, ResponseUpdateTargetBracketLevel,
+    RithmicOrderNotification, SymbolMarginRate, TickBar, TimeBar, TradeRoute, TradeStatistics,
+    UserAccountUpdate, messages::RithmicMessage,
 };
 
 /// Response from a Rithmic plant, either from a request or a subscription update.
@@ -128,7 +131,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseLogin(resp),
                     is_update: false,
                     has_more: false,
@@ -142,8 +145,22 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseLogout(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            15 => {
+                let resp = ResponseReferenceData::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseReferenceData(resp),
                     is_update: false,
                     has_more: false,
                     multi_response: false,
@@ -156,7 +173,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseRithmicSystemInfo(resp),
                     is_update: false,
                     has_more: false,
@@ -184,12 +201,25 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::Reject(resp),
                     is_update: false,
                     has_more: false,
                     multi_response: false,
                     error,
+                    source: self.source.clone(),
+                }
+            }
+            76 => {
+                let resp = UserAccountUpdate::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::UserAccountUpdate(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
                     source: self.source.clone(),
                 }
             }
@@ -211,7 +241,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseMarketDataUpdate(resp),
                     is_update: false,
                     has_more: false,
@@ -226,11 +256,25 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseSearchSymbols(resp),
                     is_update: false,
                     has_more,
                     multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            114 => {
+                let resp = ResponseFrontMonthContract::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseFrontMonthContract(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
                     error,
                     source: self.source.clone(),
                 }
@@ -242,7 +286,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseDepthByOrderSnapshot(resp),
                     is_update: false,
                     has_more,
@@ -257,7 +301,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseDepthByOrderUpdates(resp),
                     is_update: false,
                     has_more: false,
@@ -292,12 +336,103 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
+            152 => {
+                let resp = TradeStatistics::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::TradeStatistics(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            153 => {
+                let resp = QuoteStatistics::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::QuoteStatistics(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            154 => {
+                let resp = IndicatorPrices::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::IndicatorPrices(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            155 => {
+                let resp = EndOfDayPrices::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::EndOfDayPrices(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
             156 => {
                 let resp = OrderBook::decode(&mut Cursor::new(&data[4..])).unwrap();
 
                 RithmicResponse {
                     request_id: "".to_string(),
                     message: RithmicMessage::OrderBook(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            157 => {
+                let resp = MarketMode::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::MarketMode(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            158 => {
+                let resp = OpenInterest::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::OpenInterest(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            159 => {
+                let resp = FrontMonthContractUpdate::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::FrontMonthContractUpdate(resp),
                     is_update: true,
                     has_more: false,
                     multi_response: false,
@@ -318,17 +453,84 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
+            161 => {
+                let resp = DepthByOrderEndEvent::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::DepthByOrderEndEvent(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            162 => {
+                let resp = SymbolMarginRate::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::SymbolMarginRate(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            163 => {
+                let resp = OrderPriceLimits::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::OrderPriceLimits(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            201 => {
+                let resp = ResponseTimeBarUpdate::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseTimeBarUpdate(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
             203 => {
                 let resp = ResponseTimeBarReplay::decode(&mut Cursor::new(&data[4..])).unwrap();
                 let has_more = self.has_multiple(&resp.rq_handler_rp_code);
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseTimeBarReplay(resp),
                     is_update: false,
                     has_more,
                     multi_response: true,
+                    error,
+                    source: self.source.clone(),
+                }
+            }
+            205 => {
+                let resp = ResponseTickBarUpdate::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseTickBarUpdate(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
                     error,
                     source: self.source.clone(),
                 }
@@ -339,7 +541,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseTickBarReplay(resp),
                     is_update: false,
                     has_more,
@@ -354,7 +556,7 @@ impl RithmicReceiverApi {
                 RithmicResponse {
                     request_id: "".to_string(),
                     message: RithmicMessage::TimeBar(resp),
-                    is_update: false,
+                    is_update: true,
                     has_more: false,
                     multi_response: false,
                     error: None,
@@ -367,7 +569,7 @@ impl RithmicReceiverApi {
                 RithmicResponse {
                     request_id: "".to_string(),
                     message: RithmicMessage::TickBar(resp),
-                    is_update: false,
+                    is_update: true,
                     has_more: false,
                     multi_response: false,
                     error: None,
@@ -380,7 +582,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseAccountList(resp),
                     is_update: false,
                     has_more,
@@ -395,7 +597,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseAccountRmsInfo(resp),
                     is_update: false,
                     has_more,
@@ -410,7 +612,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseProductRmsInfo(resp),
                     is_update: false,
                     has_more,
@@ -425,25 +627,12 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseSubscribeForOrderUpdates(resp),
                     is_update: false,
                     has_more: false,
                     multi_response: false,
                     error,
-                    source: self.source.clone(),
-                }
-            }
-            310 => {
-                let resp = TradeRoute::decode(&mut Cursor::new(&data[4..])).unwrap();
-
-                RithmicResponse {
-                    request_id: "".to_string(),
-                    message: RithmicMessage::TradeRoute(resp),
-                    is_update: true,
-                    has_more: false,
-                    multi_response: false,
-                    error: None,
                     source: self.source.clone(),
                 }
             }
@@ -453,7 +642,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseTradeRoutes(resp),
                     is_update: false,
                     has_more,
@@ -468,7 +657,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseNewOrder(resp),
                     is_update: false,
                     has_more,
@@ -483,7 +672,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseModifyOrder(resp),
                     is_update: false,
                     has_more,
@@ -498,7 +687,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseCancelOrder(resp),
                     is_update: false,
                     has_more,
@@ -514,7 +703,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseShowOrderHistoryDates(resp),
                     is_update: false,
                     has_more,
@@ -528,7 +717,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseShowOrders(resp),
                     is_update: false,
                     has_more: false,
@@ -542,7 +731,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseShowOrderHistory(resp),
                     is_update: false,
                     has_more: false,
@@ -557,7 +746,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseShowOrderHistorySummary(resp),
                     is_update: false,
                     has_more: false,
@@ -572,7 +761,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseShowOrderHistoryDetail(resp),
                     is_update: false,
                     has_more: false,
@@ -587,7 +776,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseBracketOrder(resp),
                     is_update: false,
                     has_more,
@@ -602,7 +791,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseUpdateTargetBracketLevel(resp),
                     is_update: false,
                     has_more: false,
@@ -617,7 +806,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseUpdateStopBracketLevel(resp),
                     is_update: false,
                     has_more: false,
@@ -632,7 +821,7 @@ impl RithmicReceiverApi {
                 let error = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseSubscribeToBracketUpdates(resp),
                     is_update: false,
                     has_more: false,
@@ -647,7 +836,7 @@ impl RithmicReceiverApi {
                 let err = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseShowBrackets(resp),
                     is_update: false,
                     has_more,
@@ -662,7 +851,7 @@ impl RithmicReceiverApi {
                 let err = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseShowBracketStops(resp),
                     is_update: false,
                     has_more,
@@ -676,12 +865,25 @@ impl RithmicReceiverApi {
                 let err = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseCancelAllOrders(resp),
                     is_update: false,
                     has_more: false,
                     multi_response: false,
                     error: err,
+                    source: self.source.clone(),
+                }
+            }
+            350 => {
+                let resp = TradeRoute::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::TradeRoute(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
                     source: self.source.clone(),
                 }
             }
@@ -724,18 +926,29 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
-            3505 => {
-                let resp = ResponseExitPosition::decode(&mut Cursor::new(&data[4..])).unwrap();
-                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
-                let err = self.get_error(&resp.rp_code);
+            354 => {
+                let resp = AccountListUpdates::decode(&mut Cursor::new(&data[4..])).unwrap();
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
-                    message: RithmicMessage::ResponseExitPosition(resp),
-                    is_update: false,
-                    has_more,
-                    multi_response: true,
-                    error: err,
+                    request_id: "".to_string(),
+                    message: RithmicMessage::AccountListUpdates(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
+                    source: self.source.clone(),
+                }
+            }
+            356 => {
+                let resp = AccountRmsUpdates::decode(&mut Cursor::new(&data[4..])).unwrap();
+
+                RithmicResponse {
+                    request_id: "".to_string(),
+                    message: RithmicMessage::AccountRmsUpdates(resp),
+                    is_update: true,
+                    has_more: false,
+                    multi_response: false,
+                    error: None,
                     source: self.source.clone(),
                 }
             }
@@ -745,7 +958,7 @@ impl RithmicReceiverApi {
                 let err = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponsePnLPositionUpdates(resp),
                     is_update: false,
                     has_more: false,
@@ -760,7 +973,7 @@ impl RithmicReceiverApi {
                 let err = self.get_error(&resp.rp_code);
 
                 RithmicResponse {
-                    request_id: resp.user_msg[0].clone(),
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponsePnLPositionSnapshot(resp),
                     is_update: false,
                     has_more: false,
@@ -793,6 +1006,35 @@ impl RithmicReceiverApi {
                     has_more: false,
                     multi_response: false,
                     error: None,
+                    source: self.source.clone(),
+                }
+            }
+            3505 => {
+                let resp = ResponseExitPosition::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let has_more = self.has_multiple(&resp.rq_handler_rp_code);
+                let err = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseExitPosition(resp),
+                    is_update: false,
+                    has_more,
+                    multi_response: true,
+                    error: err,
+                    source: self.source.clone(),
+                }
+            }
+            3509 => {
+                let resp = ResponseAccountRmsUpdates::decode(&mut Cursor::new(&data[4..])).unwrap();
+                let error = self.get_error(&resp.rp_code);
+
+                RithmicResponse {
+                    request_id: resp.user_msg.first().cloned().unwrap_or_default(),
+                    message: RithmicMessage::ResponseAccountRmsUpdates(resp),
+                    is_update: false,
+                    has_more: false,
+                    multi_response: false,
+                    error,
                     source: self.source.clone(),
                 }
             }
