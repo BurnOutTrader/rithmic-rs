@@ -18,7 +18,7 @@ use crate::{
         request_market_data_update_by_underlying, request_search_symbols,
     },
     ws::{
-        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
+        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, connect_with_strategy,
         get_heartbeat_interval, get_ping_interval,
     },
 };
@@ -39,7 +39,7 @@ use tokio::{
     time::{Interval, sleep_until},
 };
 
-pub enum TickerPlantCommand {
+pub(crate) enum TickerPlantCommand {
     Close,
     ListSystemInfo {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
@@ -159,10 +159,8 @@ pub enum TickerPlantCommand {
 ///
 /// ```no_run
 /// use rithmic_rs::{
-///     RithmicConfig, RithmicEnv, ConnectStrategy,
-///     plants::ticker_plant::RithmicTickerPlant,
+///     RithmicConfig, RithmicEnv, ConnectStrategy, RithmicTickerPlant,
 ///     rti::messages::RithmicMessage,
-///     ws::RithmicStream,
 /// };
 ///
 /// #[tokio::main]
@@ -277,10 +275,12 @@ impl RithmicTickerPlant {
     }
 }
 
-impl RithmicStream for RithmicTickerPlant {
-    type Handle = RithmicTickerPlantHandle;
-
-    fn get_handle(&self) -> RithmicTickerPlantHandle {
+impl RithmicTickerPlant {
+    /// Get a handle to interact with the ticker plant.
+    ///
+    /// The handle provides methods to subscribe to market data and receive updates.
+    /// Multiple handles can be created from the same plant.
+    pub fn get_handle(&self) -> RithmicTickerPlantHandle {
         RithmicTickerPlantHandle {
             sender: self.sender.clone(),
             subscription_sender: self.subscription_sender.clone(),
@@ -290,7 +290,7 @@ impl RithmicStream for RithmicTickerPlant {
 }
 
 #[derive(Debug)]
-pub struct TickerPlant {
+struct TickerPlant {
     config: RithmicConfig,
     interval: Interval,
     logged_in: bool,
@@ -944,6 +944,10 @@ pub struct RithmicTickerPlantHandle {
 }
 
 impl RithmicTickerPlantHandle {
+    /// List available Rithmic system infrastructure information.
+    ///
+    /// Returns information about the connected Rithmic system, including
+    /// system name, gateway info, and available services.
     pub async fn list_system_info(&self) -> Result<RithmicResponse, String> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
 

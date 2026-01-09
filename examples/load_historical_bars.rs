@@ -10,7 +10,6 @@ use tracing::info;
 use rithmic_rs::{
     ConnectStrategy, RithmicConfig, RithmicEnv, RithmicHistoryPlant,
     rti::{messages::RithmicMessage, request_time_bar_replay::BarType},
-    ws::RithmicStream,
 };
 
 fn default_start_time() -> i32 {

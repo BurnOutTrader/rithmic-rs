@@ -119,98 +119,57 @@ pub enum RithmicMessage {
     UpdateEasyToBorrowList(UpdateEasyToBorrowList),
     UserAccountUpdate(UserAccountUpdate),
 
-    /// WebSocket connection error.
+    /// The WebSocket connection failed unexpectedly.
     ///
-    /// This variant is sent when a plant's WebSocket connection experiences a fatal error
-    /// and the plant is shutting down. The specific error details are in the `error` field
-    /// of the [`RithmicResponse`](crate::api::receiver_api::RithmicResponse).
+    /// *Note: This is a synthetic message from rithmic-rs, not from Rithmic servers.*
     ///
-    /// ## Error Types Handled
+    /// This means the network connection to Rithmic was lost (e.g., internet dropped,
+    /// server closed the connection, or a network timeout). The plant has stopped and
+    /// you'll need to reconnect.
     ///
-    /// - **ConnectionClosed**: Normal WebSocket closure
-    /// - **AlreadyClosed**: Attempted to use an already-closed connection
-    /// - **Io errors**: Network/socket I/O failures (e.g., connection lost, timeout)
-    /// - **ResetWithoutClosingHandshake**: Connection reset without proper WebSocket close
-    /// - **SendAfterClosing**: Attempted to send data after closing frame sent
-    /// - **ReceivedAfterClosing**: Received data after closing frame sent
+    /// # Example
     ///
-    /// ## Handling Connection Errors
-    ///
-    /// When you receive a `ConnectionError`, the plant has already stopped and its channels
-    /// will close. Your application should:
-    ///
-    /// 1. Check the `error` field for specific error details
-    /// 2. Check the `source` field to identify which plant failed
-    /// 3. Implement reconnection logic if appropriate
-    /// 4. Clean up any state associated with that plant
-    ///
-    /// ## Example
-    ///
-    /// ```no_run
-    /// use rithmic_rs::rti::messages::RithmicMessage;
-    /// # use rithmic_rs::api::receiver_api::RithmicResponse;
-    /// # fn example(response: RithmicResponse) {
-    /// match response.message {
+    /// ```ignore
+    /// match update.message {
     ///     RithmicMessage::ConnectionError => {
-    ///         eprintln!(
-    ///             "Plant {} connection error: {}",
-    ///             response.source,
-    ///             response.error.unwrap_or_else(|| "Unknown error".to_string())
-    ///         );
-    ///         // Implement reconnection logic here
-    ///         // The plant has stopped and channels will close
-    ///     }
-    ///     RithmicMessage::ForcedLogout(_) => {
-    ///         // Server-initiated logout - different from connection errors
+    ///         log::error!("Connection lost: {:?}", update.error);
+    ///         // Trigger your reconnection logic
     ///     }
     ///     _ => {}
     /// }
-    /// # }
     /// ```
-    ///
-    /// ## Notes
-    ///
-    /// - This message always has `is_update: true` and routes to the subscription channel
-    /// - The plant has already terminated when you receive this message
-    /// - The subscription channel will close shortly after this message
-    /// - Unlike [`ForcedLogout`], which is a server-initiated action, `ConnectionError`
-    ///   indicates a transport-level failure
     ConnectionError,
 
-    /// Heartbeat response timeout.
+    /// The connection appears to be dead (no response to keep-alive pings).
     ///
-    /// Sent when a heartbeat request expecting a response does not receive a reply
-    /// within the timeout period (default 30 seconds). This may indicate network issues,
-    /// server delays, or connection degradation.
+    /// *Note: This is a synthetic message from rithmic-rs, not from Rithmic servers.*
     ///
-    /// When `expect_heartbeat_response` is enabled, heartbeat requests expect server
-    /// responses. If no response arrives within the timeout, this error is sent as an update.
+    /// This is sent when the library's internal health checks detect the connection
+    /// is unresponsive. The plant will stop after sending this message.
     ///
-    /// ## Handling Heartbeat Timeouts
+    /// This typically happens when:
+    /// - Network connectivity is lost but the socket hasn't closed yet
+    /// - The Rithmic server is overloaded or unresponsive
+    /// - A firewall or proxy silently dropped the connection
     ///
-    /// Unlike `ConnectionError`, a timeout doesn't mean the connection is dead—the plant
-    /// continues operating. However, repeated timeouts suggest connection issues that may
-    /// warrant logging, monitoring, or triggering reconnection
+    /// # Example
     ///
-    /// ## Example
-    ///
-    /// ```no_run
-    /// use rithmic_rs::rti::messages::RithmicMessage;
-    /// # use rithmic_rs::api::receiver_api::RithmicResponse;
-    /// # fn example(response: RithmicResponse) {
-    /// match response.message {
+    /// ```ignore
+    /// match update.message {
     ///     RithmicMessage::HeartbeatTimeout => {
-    ///         eprintln!(
-    ///             "Heartbeat timeout on {}: {}",
-    ///             response.source,
-    ///             response.error.unwrap_or_else(|| "No response".to_string())
-    ///         );
-    ///         // Log, alert, or trigger reconnection logic
+    ///         log::warn!("Connection unresponsive: {:?}", update.error);
+    ///         // Trigger your reconnection logic
     ///     }
     ///     _ => {}
     /// }
-    /// # }
     /// ```
     HeartbeatTimeout,
+
+    /// A message type that this library doesn't recognize.
+    ///
+    /// *Note: This is a synthetic message from rithmic-rs, not from Rithmic servers.*
+    ///
+    /// This shouldn't happen in normal usage. If you see this, it may indicate
+    /// a newer Rithmic protocol version with message types not yet supported.
     Unknown,
 }

@@ -23,7 +23,7 @@ use crate::{
         request_new_order,
     },
     ws::{
-        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
+        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, connect_with_strategy,
         get_heartbeat_interval, get_ping_interval,
     },
 };
@@ -40,7 +40,7 @@ use tokio::{
     time::{Interval, sleep_until},
 };
 
-pub enum OrderPlantCommand {
+pub(crate) enum OrderPlantCommand {
     Close,
     ListSystemInfo {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
@@ -227,11 +227,9 @@ pub enum OrderPlantCommand {
 ///
 /// ```no_run
 /// use rithmic_rs::{
-///     RithmicConfig, RithmicEnv, ConnectStrategy,
-///     plants::order_plant::RithmicOrderPlant,
-///     api::rithmic_command_types::RithmicBracketOrder,
+///     RithmicConfig, RithmicEnv, ConnectStrategy, RithmicOrderPlant, RithmicBracketOrder,
+///     BracketTransactionType, BracketDuration, BracketPriceType,
 ///     rti::messages::RithmicMessage,
-///     ws::RithmicStream,
 /// };
 ///
 /// #[tokio::main]
@@ -247,11 +245,11 @@ pub enum OrderPlantCommand {
 ///
 ///     // Place a bracket order
 ///     let bracket_order = RithmicBracketOrder {
-///         action: 1, // Buy
-///         duration: 2, // Day
+///         action: BracketTransactionType::Buy,
+///         duration: BracketDuration::Day,
 ///         exchange: "CME".to_string(),
 ///         localid: "order1".to_string(),
-///         ordertype: 1, // Limit
+///         price_type: BracketPriceType::Limit,
 ///         price: Some(4500.00),
 ///         profit_ticks: 8,
 ///         qty: 1,
@@ -345,10 +343,12 @@ impl RithmicOrderPlant {
     }
 }
 
-impl RithmicStream for RithmicOrderPlant {
-    type Handle = RithmicOrderPlantHandle;
-
-    fn get_handle(&self) -> RithmicOrderPlantHandle {
+impl RithmicOrderPlant {
+    /// Get a handle to interact with the order plant.
+    ///
+    /// The handle provides methods to place orders, subscribe to updates, and manage positions.
+    /// Multiple handles can be created from the same plant.
+    pub fn get_handle(&self) -> RithmicOrderPlantHandle {
         RithmicOrderPlantHandle {
             sender: self.sender.clone(),
             subscription_receiver: self.subscription_sender.subscribe(),
@@ -356,7 +356,7 @@ impl RithmicStream for RithmicOrderPlant {
     }
 }
 
-pub struct OrderPlant {
+struct OrderPlant {
     config: RithmicConfig,
     interval: Interval,
     logged_in: bool,
@@ -770,7 +770,7 @@ impl PlantActor for OrderPlant {
                     &order.symbol,
                     order.qty,
                     order.price,
-                    order.ordertype,
+                    order.price_type,
                 );
 
                 self.request_handler.register_request(RithmicRequest {
@@ -1294,10 +1294,10 @@ pub struct RithmicOrderPlantHandle {
 }
 
 impl RithmicOrderPlantHandle {
-    /// Get the list of available systems
+    /// List available Rithmic system infrastructure information.
     ///
-    /// # Returns
-    /// The list of systems response or an error message
+    /// Returns information about the connected Rithmic system, including
+    /// system name, gateway info, and available services.
     pub async fn list_system_info(&self) -> Result<RithmicResponse, String> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
 

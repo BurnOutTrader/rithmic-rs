@@ -7,7 +7,6 @@ use tracing::info;
 
 use rithmic_rs::{
     ConnectStrategy, RithmicConfig, RithmicEnv, RithmicTickerPlant, rti::messages::RithmicMessage,
-    ws::RithmicStream,
 };
 
 #[tokio::main]

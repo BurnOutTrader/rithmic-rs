@@ -16,9 +16,10 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use rithmic_rs::{RithmicConfig, RithmicEnv, ConnectStrategy, RithmicTickerPlant};
-//! use rithmic_rs::rti::messages::RithmicMessage;
-//! use rithmic_rs::ws::RithmicStream;
+//! use rithmic_rs::{
+//!     RithmicConfig, RithmicEnv, ConnectStrategy, RithmicTickerPlant,
+//!     rti::messages::RithmicMessage,
+//! };
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -125,3 +126,11 @@ pub use config::{ConfigError, RithmicConfig, RithmicEnv};
 
 // Re-export connection strategy
 pub use ws::ConnectStrategy;
+
+// Re-export API types
+pub use api::{
+    BracketDuration, BracketPriceType, BracketTransactionType, EasyToBorrowRequest,
+    ModifyPriceType, NewOrderDuration, NewOrderPriceType, NewOrderTransactionType, OcoDuration,
+    OcoPriceType, OcoTransactionType, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
+    RithmicOcoOrderLeg, RithmicResponse,
+};

@@ -20,7 +20,7 @@ use crate::{
         request_time_bar_replay::BarType, request_time_bar_update,
     },
     ws::{
-        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
+        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, connect_with_strategy,
         get_heartbeat_interval, get_ping_interval,
     },
 };
@@ -37,7 +37,7 @@ use tokio::{
     time::{Interval, sleep_until},
 };
 
-pub enum HistoryPlantCommand {
+pub(crate) enum HistoryPlantCommand {
     Close,
     ListSystemInfo {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
@@ -111,8 +111,9 @@ pub enum HistoryPlantCommand {
 /// # Example
 ///
 /// ```no_run
-/// use rithmic_rs::{RithmicConfig, RithmicEnv, ConnectStrategy, plants::history_plant::RithmicHistoryPlant};
-/// use rithmic_rs::ws::RithmicStream;
+/// use rithmic_rs::{
+///     RithmicConfig, RithmicEnv, ConnectStrategy, RithmicHistoryPlant,
+/// };
 /// use tokio::time::{sleep, Duration};
 ///
 /// #[tokio::main]
@@ -192,10 +193,12 @@ impl RithmicHistoryPlant {
     }
 }
 
-impl RithmicStream for RithmicHistoryPlant {
-    type Handle = RithmicHistoryPlantHandle;
-
-    fn get_handle(&self) -> RithmicHistoryPlantHandle {
+impl RithmicHistoryPlant {
+    /// Get a handle to interact with the history plant.
+    ///
+    /// The handle provides methods to load historical ticks, time bars, and subscribe to bar updates.
+    /// Multiple handles can be created from the same plant.
+    pub fn get_handle(&self) -> RithmicHistoryPlantHandle {
         RithmicHistoryPlantHandle {
             sender: self.sender.clone(),
             subscription_receiver: self.subscription_sender.subscribe(),
@@ -205,7 +208,7 @@ impl RithmicStream for RithmicHistoryPlant {
 }
 
 #[derive(Debug)]
-pub struct HistoryPlant {
+struct HistoryPlant {
     config: RithmicConfig,
     interval: Interval,
     logged_in: bool,
@@ -712,10 +715,10 @@ pub struct RithmicHistoryPlantHandle {
 }
 
 impl RithmicHistoryPlantHandle {
-    /// Get the list of available systems
+    /// List available Rithmic system infrastructure information.
     ///
-    /// # Returns
-    /// The list of systems response or an error message
+    /// Returns information about the connected Rithmic system, including
+    /// system name, gateway info, and available services.
     pub async fn list_system_info(&self) -> Result<RithmicResponse, String> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
 

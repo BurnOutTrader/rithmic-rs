@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+#### Order Types Now Use Enums Instead of Raw Integers
+- **`RithmicBracketOrder`**: Field types and names changed
+  - `action: i32` → `action: BracketTransactionType` (enum)
+  - `ordertype: i32` → `price_type: BracketPriceType` (enum, **renamed**)
+  - `duration: i32` → `duration: BracketDuration` (enum)
+- **`RithmicModifyOrder`**: Field type changed
+  - `ordertype: i32` → `price_type: ModifyPriceType` (enum, **renamed**)
+
+**Migration example:**
+```rust
+// Old (0.6.x)
+let order = RithmicBracketOrder {
+    action: 1,      // Buy
+    ordertype: 1,   // Limit
+    duration: 2,    // Day
+    // ...
+};
+
+// New
+use rithmic_rs::{BracketTransactionType, BracketPriceType, BracketDuration};
+let order = RithmicBracketOrder {
+    action: BracketTransactionType::Buy,
+    price_type: BracketPriceType::Limit,
+    duration: BracketDuration::Day,
+    // ...
+};
+```
+
+### Added
+
+#### Cleaner Public API
+- All order-related types and enums now re-exported from crate root:
+  - `RithmicBracketOrder`, `RithmicModifyOrder`, `RithmicCancelOrder`, `RithmicOcoOrderLeg`
+  - `BracketTransactionType`, `BracketDuration`, `BracketPriceType`
+  - `ModifyPriceType`
+  - `RithmicResponse`, `RithmicStream`
+- Internal implementation details hidden with `pub(crate)` visibility
+- Users can now import all types from `rithmic_rs::*` instead of deep module paths
+
+#### Improved Documentation
+- Added comprehensive doc comments and examples for all order types
+- Simplified `ConnectionError` and `HeartbeatTimeout` documentation
+
+### Removed
+- Removed unused `HEARTBEAT_TIMEOUT_SECS` constant (dead code from removed HeartbeatManager)
+
 ## [0.6.2] - 2025-12-20
 
 ### Added

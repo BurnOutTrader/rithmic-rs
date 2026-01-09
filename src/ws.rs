@@ -13,16 +13,13 @@ use tokio_tungstenite::{
 };
 
 /// Number of seconds between heartbeats sent to the server.
-pub const HEARTBEAT_SECS: u64 = 60;
-
-/// Timeout in seconds for heartbeat response when expecting a reply.
-pub const HEARTBEAT_TIMEOUT_SECS: u64 = 30;
+pub(crate) const HEARTBEAT_SECS: u64 = 60;
 
 /// Number of seconds between WebSocket ping frames sent to detect dead connections.
-pub const PING_INTERVAL_SECS: u64 = 60;
+pub(crate) const PING_INTERVAL_SECS: u64 = 60;
 
 /// Timeout in seconds for WebSocket pong response.
-pub const PING_TIMEOUT_SECS: u64 = 50;
+pub(crate) const PING_TIMEOUT_SECS: u64 = 50;
 
 /// Connection attempt timeout in seconds.
 const CONNECT_TIMEOUT_SECS: u64 = 2;
@@ -44,15 +41,8 @@ pub enum ConnectStrategy {
     AlternateWithRetry,
 }
 
-/// A generic stream over the Rithmic connection exposing a handle for external control.
-pub trait RithmicStream {
-    type Handle;
-
-    fn get_handle(&self) -> Self::Handle;
-}
-
 #[async_trait]
-pub trait PlantActor {
+pub(crate) trait PlantActor {
     type Command;
 
     async fn run(&mut self);
@@ -61,7 +51,7 @@ pub trait PlantActor {
     -> Result<bool, ()>;
 }
 
-pub fn get_heartbeat_interval(override_secs: Option<u64>) -> Interval {
+pub(crate) fn get_heartbeat_interval(override_secs: Option<u64>) -> Interval {
     let secs = override_secs.unwrap_or(HEARTBEAT_SECS);
     let heartbeat_interval = Duration::from_secs(secs);
     let start_offset = Instant::now() + heartbeat_interval;
@@ -72,7 +62,7 @@ pub fn get_heartbeat_interval(override_secs: Option<u64>) -> Interval {
 /// Creates an interval for sending WebSocket pings.
 ///
 /// Returns an interval starting after the first ping period elapses.
-pub fn get_ping_interval(override_secs: Option<u64>) -> Interval {
+pub(crate) fn get_ping_interval(override_secs: Option<u64>) -> Interval {
     let secs = override_secs.unwrap_or(PING_INTERVAL_SECS);
     let ping_interval = Duration::from_secs(secs);
     let start_offset = Instant::now() + ping_interval;
@@ -199,7 +189,7 @@ async fn connect_with_retry(
 ///
 /// # Returns
 /// WebSocketStream on success, error on failure.
-pub async fn connect_with_strategy(
+pub(crate) async fn connect_with_strategy(
     primary_url: &str,
     beta_url: &str,
     strategy: ConnectStrategy,
