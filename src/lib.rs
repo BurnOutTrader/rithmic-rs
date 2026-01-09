@@ -1,16 +1,13 @@
 //! # rithmic-rs
 //!
 //! `rithmic-rs` is a Rust client library for the Rithmic R | Protocol API.
-//! This crate provides tools to build algorithmic trading systems that
-//! interact with the Rithmic trading platform.
 //!
 //! ## Features
 //!
-//! - Connect to Rithmic's WebSocket API with configurable connection strategies
 //! - Stream real-time market data (trades, quotes, order book depth)
 //! - Submit and manage orders (bracket orders, modifications, cancellations)
 //! - Access historical market data (ticks and time bars)
-//! - Track positions and P&L
+//! - Manage risk and track positions and P&L
 //! - Connection health monitoring with heartbeat and forced logout handling
 //!
 //! ## Quick Start
@@ -103,14 +100,40 @@
 //! - [`rti`]: Protocol message definitions
 //! - [`ws`]: WebSocket connectivity and connection strategies
 
+/// Low-level API types for Rithmic communication.
+///
+/// This module provides the command types and response structures used internally
+/// by the plant modules. Most users should use the high-level plant APIs instead.
+///
+/// Re-exports include order types ([`RithmicBracketOrder`], [`RithmicModifyOrder`], etc.)
+/// and their associated enums for transaction types, durations, and price types.
 pub mod api;
+
 /// Configuration API for connecting to Rithmic
 pub mod config;
 mod ping_manager;
-/// Plants for handling different types of market data and order interactions
+/// Specialized clients ("plants") for different Rithmic services.
+///
+/// Each plant connects to a specific Rithmic infrastructure component:
+///
+/// - [`ticker_plant`](plants::ticker_plant): Real-time market data (trades, quotes, order book)
+/// - [`order_plant`](plants::order_plant): Order entry and management
+/// - [`history_plant`](plants::history_plant): Historical tick and bar data
+/// - [`pnl_plant`](plants::pnl_plant): Position and P&L tracking
+///
+/// Plants run as independent async tasks using the actor pattern, communicating
+/// via tokio channels. This allows running multiple plants concurrently and
+/// reconnecting them independently.
 pub mod plants;
+
 mod request_handler;
-/// Definitions for RTI protocol messages
+
+/// Rithmic protocol message definitions (protobuf-generated).
+///
+/// This module contains the protocol buffer message types used by the Rithmic API.
+/// The main type you'll interact with is [`rti::messages::RithmicMessage`], an enum
+/// covering all message types including market data, order notifications, and
+/// connection health events.
 pub mod rti;
 /// WebSocket connectivity layer
 pub mod ws;

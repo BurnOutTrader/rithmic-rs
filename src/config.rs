@@ -28,11 +28,8 @@ use std::{env, fmt, str::FromStr};
 /// Determines which Rithmic environment to connect to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RithmicEnv {
-    /// Demo/Paper trading environment
     Demo,
-    /// Live production trading environment
     Live,
-    /// Test environment (limited support)
     Test,
 }
 
@@ -118,6 +115,9 @@ pub struct RithmicConfig {
 
 impl RithmicConfig {
     /// Create a configuration by loading values from environment variables.
+    ///
+    /// See [`examples/.env.blank`](https://github.com/pbeets/rithmic-rs/blob/main/examples/.env.blank)
+    /// for a template of all required environment variables.
     ///
     /// # Required environment variables
     ///
