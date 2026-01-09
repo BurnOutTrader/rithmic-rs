@@ -1,104 +1,62 @@
-use tracing::{Level, event};
+//! Example: Load historical tick data
+//!
+//! Run with: cargo run --example load_historical_ticks
+//!
+//! Optional env vars: SYMBOL, EXCHANGE, START_TIME (unix seconds)
+
+use std::{env, time::SystemTime};
+use tracing::info;
 
 use rithmic_rs::{
     ConnectStrategy, RithmicConfig, RithmicEnv, RithmicHistoryPlant, rti::messages::RithmicMessage,
-    ws::RithmicStream,
 };
 
-fn parse_args() -> Result<(String, String, i32), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().collect();
-
-    let mut symbol = None;
-    let mut exchange = None;
-    let mut start_time_sec = None;
-
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--symbol" => {
-                i += 1;
-                if i < args.len() {
-                    symbol = Some(args[i].clone());
-                }
-            }
-            "--exchange" => {
-                i += 1;
-                if i < args.len() {
-                    exchange = Some(args[i].clone());
-                }
-            }
-            "--start-time-sec" => {
-                i += 1;
-                if i < args.len() {
-                    start_time_sec = Some(args[i].parse()?);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-
-    let symbol = symbol.ok_or("Missing required argument: --symbol")?;
-    let exchange = exchange.ok_or("Missing required argument: --exchange")?;
-    let start_time_sec = start_time_sec.ok_or("Missing required argument: --start-time-sec")?;
-
-    Ok((symbol, exchange, start_time_sec))
+fn default_start_time() -> i32 {
+    // Note: Rithmic API uses i32 timestamps. This will overflow in 2038.
+    // We use try_into() to safely convert and fall back to a recent timestamp if needed.
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i32::try_from(d.as_secs()).ok())
+        .map(|s| s - (24 * 60 * 60))
+        .unwrap_or(0)
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (symbol, exchange, start_time_sec) = parse_args()?;
-
-    // Load environment variables from .env file
     dotenvy::dotenv().ok();
-
-    // Create configuration from environment variables
-    let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
-
     tracing_subscriber::fmt().init();
 
+    let symbol = env::var("SYMBOL").unwrap_or_else(|_| "ESH5".to_string());
+    let exchange = env::var("EXCHANGE").unwrap_or_else(|_| "CME".to_string());
+    let start_time: i32 = env::var("START_TIME")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(default_start_time);
+    let end_time = start_time + (23 * 60 * 60);
+
+    let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
     let history_plant = RithmicHistoryPlant::connect(&config, ConnectStrategy::Simple).await?;
     let handle = history_plant.get_handle();
-
     handle.login().await?;
 
-    let start_time = start_time_sec;
-    let end_time = start_time + (23 * 60 * 60); // Add 23 hours in seconds
-
-    event!(
-        Level::INFO,
+    info!(
         "Loading ticks for {} from {} to {}",
-        symbol,
-        start_time,
-        end_time
+        symbol, start_time, end_time
     );
 
-    // Rithmic only returns 10_000 ticks at a time, and note that there can be several ticks sharing the same timestamp
-    let tick_responses = handle
-        .load_ticks(symbol.clone(), exchange, start_time, end_time)
+    let ticks = handle
+        .load_ticks(symbol, exchange, start_time, end_time)
         .await?;
 
-    event!(
-        Level::INFO,
-        "Received {} tick responses",
-        tick_responses.len()
-    );
+    info!("Received {} tick responses", ticks.len());
 
-    // Process the tick responses
-    for r in tick_responses.iter() {
-        match &r.message {
-            RithmicMessage::ResponseTickBarReplay(tick_message) => {
-                event!(Level::INFO, "Tick: {:#?}", tick_message);
-            }
-            _ => {
-                event!(Level::WARN, "Received unexpected message type");
-            }
+    for r in ticks.iter().take(5) {
+        if let RithmicMessage::ResponseTickBarReplay(tick) = &r.message {
+            info!("Tick: {:?}", tick);
         }
     }
 
-    let _ = handle.disconnect().await;
-
-    event!(Level::INFO, "Disconnected from Rithmic History Plant");
-
+    handle.disconnect().await?;
     Ok(())
 }

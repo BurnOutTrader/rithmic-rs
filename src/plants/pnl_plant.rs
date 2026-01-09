@@ -12,7 +12,7 @@ use crate::{
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType, request_pn_l_position_updates},
     ws::{
-        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, RithmicStream, connect_with_strategy,
+        HEARTBEAT_SECS, PING_TIMEOUT_SECS, PlantActor, connect_with_strategy,
         get_heartbeat_interval, get_ping_interval,
     },
 };
@@ -33,7 +33,7 @@ use tokio_tungstenite::{
     tungstenite::{Error, Message, error::ProtocolError},
 };
 
-pub enum PnlPlantCommand {
+pub(crate) enum PnlPlantCommand {
     Close,
     ListSystemInfo {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
@@ -70,9 +70,10 @@ pub enum PnlPlantCommand {
 /// # Example
 ///
 /// ```no_run
-/// use rithmic_rs::{RithmicConfig, RithmicEnv, ConnectStrategy, plants::pnl_plant::RithmicPnlPlant};
-/// use rithmic_rs::rti::messages::RithmicMessage;
-/// use rithmic_rs::ws::RithmicStream;
+/// use rithmic_rs::{
+///     RithmicConfig, RithmicEnv, ConnectStrategy, RithmicPnlPlant,
+///     rti::messages::RithmicMessage,
+/// };
 /// use tokio::time::{sleep, Duration};
 ///
 /// #[tokio::main]
@@ -155,10 +156,12 @@ impl RithmicPnlPlant {
     }
 }
 
-impl RithmicStream for RithmicPnlPlant {
-    type Handle = RithmicPnlPlantHandle;
-
-    fn get_handle(&self) -> Self::Handle {
+impl RithmicPnlPlant {
+    /// Get a handle to interact with the PnL plant.
+    ///
+    /// The handle provides methods to subscribe to PnL updates and retrieve position snapshots.
+    /// Multiple handles can be created from the same plant.
+    pub fn get_handle(&self) -> RithmicPnlPlantHandle {
         RithmicPnlPlantHandle {
             sender: self.sender.clone(),
             subscription_receiver: self.subscription_sender.subscribe(),
@@ -167,7 +170,7 @@ impl RithmicStream for RithmicPnlPlant {
 }
 
 #[derive(Debug)]
-pub struct PnlPlant {
+struct PnlPlant {
     config: RithmicConfig,
     interval: Interval,
     logged_in: bool,
@@ -559,10 +562,10 @@ pub struct RithmicPnlPlantHandle {
 }
 
 impl RithmicPnlPlantHandle {
-    /// Get the list of available systems
+    /// List available Rithmic system infrastructure information.
     ///
-    /// # Returns
-    /// The list of systems response or an error message
+    /// Returns information about the connected Rithmic system, including
+    /// system name, gateway info, and available services.
     pub async fn list_system_info(&self) -> Result<RithmicResponse, String> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
 

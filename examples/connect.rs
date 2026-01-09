@@ -1,9 +1,7 @@
 //! Example: Connect to the RithmicTickerPlant
 use tracing::info;
 
-use rithmic_rs::{
-    ConnectStrategy, RithmicConfig, RithmicEnv, RithmicTickerPlant, ws::RithmicStream,
-};
+use rithmic_rs::{ConnectStrategy, RithmicConfig, RithmicEnv, RithmicTickerPlant};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

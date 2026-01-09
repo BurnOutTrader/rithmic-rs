@@ -1,3 +1,4 @@
+use super::rithmic_command_types::{RithmicBracketOrder, RithmicOcoOrderLeg};
 use prost::Message;
 
 use crate::{
@@ -29,21 +30,19 @@ use crate::{
         request_easy_to_borrow_list,
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
-        request_market_data_update_by_underlying, request_new_order, request_oco_order,
-        request_pn_l_position_updates, request_search_symbols,
+        request_market_data_update_by_underlying, request_modify_order, request_new_order,
+        request_oco_order, request_pn_l_position_updates, request_search_symbols,
         request_tick_bar_replay::{BarSubType, BarType, Direction, TimeOrder},
         request_tick_bar_update, request_time_bar_replay, request_time_bar_update,
     },
 };
 
-use super::rithmic_command_types::{RithmicBracketOrder, RithmicOcoOrderLeg};
-
-pub const TRADE_ROUTE_LIVE: &str = "globex";
-pub const TRADE_ROUTE_DEMO: &str = "simulator";
-pub const USER_TYPE: i32 = 3;
+pub(crate) const TRADE_ROUTE_LIVE: &str = "globex";
+pub(crate) const TRADE_ROUTE_DEMO: &str = "simulator";
+pub(crate) const USER_TYPE: i32 = 3;
 
 #[derive(Debug, Clone)]
-pub struct RithmicSenderApi {
+pub(crate) struct RithmicSenderApi {
     account_id: String,
     env: RithmicEnv,
     fcm_id: String,
@@ -52,7 +51,7 @@ pub struct RithmicSenderApi {
 }
 
 impl RithmicSenderApi {
-    pub fn new(config: &RithmicConfig) -> Self {
+    pub(crate) fn new(config: &RithmicConfig) -> Self {
         RithmicSenderApi {
             account_id: config.account_id.clone(),
             env: config.env.clone(),
@@ -506,16 +505,16 @@ impl RithmicSenderApi {
             symbol: Some(bracket_order.symbol),
             user_type: Some(USER_TYPE),
             quantity: Some(bracket_order.qty),
-            transaction_type: Some(bracket_order.action),
-            price_type: Some(bracket_order.ordertype),
+            transaction_type: Some(bracket_order.action.into()),
+            price_type: Some(bracket_order.price_type.into()),
             manual_or_auto: Some(2),
-            duration: Some(bracket_order.duration),
+            duration: Some(bracket_order.duration.into()),
             bracket_type: Some(6),
             target_quantity: vec![bracket_order.qty],
             stop_quantity: vec![bracket_order.qty],
             target_ticks: vec![bracket_order.profit_ticks],
             stop_ticks: vec![bracket_order.stop_ticks],
-            price: if bracket_order.ordertype != request_bracket_order::PriceType::Market as i32 {
+            price: if bracket_order.price_type != request_bracket_order::PriceType::Market {
                 bracket_order.price
             } else {
                 None
@@ -535,7 +534,7 @@ impl RithmicSenderApi {
         symbol: &str,
         qty: i32,
         price: f64,
-        ordertype: i32,
+        price_type: request_modify_order::PriceType,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
 
@@ -548,12 +547,13 @@ impl RithmicSenderApi {
             manual_or_auto: Some(2),
             exchange: Some(exchange.into()),
             symbol: Some(symbol.into()),
-            price_type: Some(ordertype),
+            price_type: Some(price_type.into()),
             quantity: Some(qty),
             price: Some(price),
             user_msg: vec![id.clone()],
-            trigger_price: match ordertype {
-                3 | 4 => Some(price),
+            trigger_price: match price_type {
+                request_modify_order::PriceType::StopLimit
+                | request_modify_order::PriceType::StopMarket => Some(price),
                 _ => None,
             },
             ..RequestModifyOrder::default()

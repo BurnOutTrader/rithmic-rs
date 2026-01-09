@@ -67,7 +67,7 @@ use crate::rti::{
 /// ## Example: Handling Errors
 ///
 /// ```no_run
-/// # use rithmic_rs::api::receiver_api::RithmicResponse;
+/// # use rithmic_rs::RithmicResponse;
 /// # use rithmic_rs::rti::messages::RithmicMessage;
 /// # fn handle_response(response: RithmicResponse) {
 /// match response.message {
@@ -108,12 +108,12 @@ pub struct RithmicResponse {
 }
 
 #[derive(Debug)]
-pub struct RithmicReceiverApi {
-    pub source: String,
+pub(crate) struct RithmicReceiverApi {
+    pub(crate) source: String,
 }
 
 impl RithmicReceiverApi {
-    pub fn buf_to_message(&self, data: Bytes) -> Result<RithmicResponse, RithmicResponse> {
+    pub(crate) fn buf_to_message(&self, data: Bytes) -> Result<RithmicResponse, RithmicResponse> {
         let payload = &data[4..];
 
         let parsed_message = match MessageType::decode(payload) {
