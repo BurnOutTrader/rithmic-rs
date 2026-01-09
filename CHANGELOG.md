@@ -51,6 +51,15 @@ let order = RithmicBracketOrder {
 #### Improved Documentation
 - Added comprehensive doc comments and examples for all order types
 - Simplified `ConnectionError` and `HeartbeatTimeout` documentation
+- Added module-level documentation for `api`, `plants`, and `rti` modules
+- Added `.env.blank` reference to `RithmicConfig::from_env()` docs
+- Streamlined README with clearer quick start and architecture sections
+
+#### Reorganized Examples
+- Added `ticker.rs`: Market data subscription and symbol discovery
+- Added `pnl.rs`: P&L monitoring example
+- Added `reconnect.rs`: Reconnection handling with subscription tracking
+- Removed `market_data.rs` (replaced by `ticker.rs`)
 
 ### Removed
 - Removed unused `HEARTBEAT_TIMEOUT_SECS` constant (dead code from removed HeartbeatManager)
