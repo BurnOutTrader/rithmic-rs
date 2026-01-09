@@ -58,12 +58,10 @@ See [`examples/`](examples/) for more usage patterns including [reconnection han
 
 This library uses the **actor pattern** where each Rithmic service (called a "plant") runs as an independent async task, communicating via tokio channels. Connect only to what you need, run them on separate tasks, and reconnect individually.
 
-| Plant | Purpose | Example |
-|-------|---------|---------|
-| `RithmicTickerPlant` | Real-time market data | `handle.subscribe("ESU5", "CME").await?` |
-| `RithmicOrderPlant` | Order management | `handle.place_limit_order(...).await?` |
-| `RithmicPnlPlant` | P&L monitoring | `handle.subscribe_pnl_updates().await?` |
-| `RithmicHistoryPlant` | Historical data | `handle.load_time_bars(...).await?` |
+- **`RithmicTickerPlant`** - Real-time market data (trades, quotes, order book)
+- **`RithmicOrderPlant`** - Order entry and management
+- **`RithmicHistoryPlant`** - Historical tick and bar data
+- **`RithmicPnlPlant`** - Position and P&L tracking
 
 ### Ticker Plant
 
