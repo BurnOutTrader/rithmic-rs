@@ -13,7 +13,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rithmic-rs = "0.6.2"
+rithmic-rs = "0.7.0"
 ```
 
 Set your environment variables:
@@ -56,7 +56,7 @@ See [`examples/`](examples/) for more usage patterns including [reconnection han
 
 ## Architecture
 
-This library uses the **actor pattern** where each Rithmic service (called a "plant") runs as an independent async task, communicating via tokio channels. Connect only to what you need, run them on separate tasks, and reconnect individually.
+This library uses the actor pattern where each Rithmic service runs independently in its own thread. All communication happens through tokio channels.
 
 - **`RithmicTickerPlant`** - Real-time market data (trades, quotes, order book)
 - **`RithmicOrderPlant`** - Order entry and management
