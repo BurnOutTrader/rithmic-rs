@@ -1,7 +1,9 @@
 # Rust Rithmic R | Protocol API client
 
 [![Crates.io](https://img.shields.io/crates/v/rithmic-rs.svg)](https://crates.io/crates/rithmic-rs)
-[![Documentation](https://docs.rs/rithmic-rs/badge.svg)](https://docs.rs/rithmic-rs)
+[![docs.rs](https://img.shields.io/docsrs/rithmic-rs)](https://docs.rs/rithmic-rs)
+[![CI](https://github.com/pbeets/rithmic-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/pbeets/rithmic-rs/actions)
+[![License](https://img.shields.io/crates/l/rithmic-rs)](LICENSE-MIT)
 
 [Official Rithmic API](https://www.rithmic.com/apis)
 

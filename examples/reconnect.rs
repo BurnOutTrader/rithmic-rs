@@ -48,26 +48,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Subscribed to {} on {}", symbol, exchange);
         }
 
-        // Inner loop: process until disconnect
-        loop {
-            match handle.subscription_receiver.recv().await {
-                Ok(update) => match &update.message {
-                    RithmicMessage::HeartbeatTimeout
-                    | RithmicMessage::ForcedLogout(_)
-                    | RithmicMessage::ConnectionError => {
-                        warn!("Disconnected, reconnecting...");
-                        break;
-                    }
-                    RithmicMessage::LastTrade(t) => {
-                        info!(
-                            "Trade: {} @ {}",
-                            t.trade_size.unwrap_or(0),
-                            t.trade_price.unwrap_or(0.0)
-                        );
-                    }
-                    _ => {}
-                },
-                Err(_) => break,
+        // Process until disconnect
+        while let Ok(update) = handle.subscription_receiver.recv().await {
+            match &update.message {
+                RithmicMessage::HeartbeatTimeout
+                | RithmicMessage::ForcedLogout(_)
+                | RithmicMessage::ConnectionError => {
+                    warn!("Disconnected, reconnecting...");
+                    break;
+                }
+                RithmicMessage::LastTrade(t) => {
+                    info!(
+                        "Trade: {} @ {}",
+                        t.trade_size.unwrap_or(0),
+                        t.trade_price.unwrap_or(0.0)
+                    );
+                }
+                _ => {}
             }
         }
 

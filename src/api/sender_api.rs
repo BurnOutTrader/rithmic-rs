@@ -440,6 +440,7 @@ impl RithmicSenderApi {
     ///
     /// # Returns
     /// A tuple of (serialized request buffer, request ID)
+    #[allow(clippy::too_many_arguments)]
     pub fn request_new_order(
         &mut self,
         exchange: &str,
@@ -855,6 +856,7 @@ impl RithmicSenderApi {
     /// a round number of bars (e.g., 10000) or does not cover the entire requested
     /// time period, use [`request_resume_bars`](Self::request_resume_bars) with the
     /// `request_key` from the response to fetch the remaining data.
+    #[allow(clippy::too_many_arguments)]
     pub fn request_volume_profile_minute_bars(
         &mut self,
         symbol: &str,

@@ -880,6 +880,7 @@ impl RithmicHistoryPlantHandle {
     ///
     /// # Returns
     /// The volume profile minute bar responses or an error message
+    #[allow(clippy::too_many_arguments)]
     pub async fn load_volume_profile_minute_bars(
         &self,
         symbol: String,

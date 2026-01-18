@@ -113,6 +113,10 @@ pub(crate) struct RithmicReceiverApi {
 }
 
 impl RithmicReceiverApi {
+    // TODO: Consider boxing RithmicMessage or using a dedicated error type to reduce
+    // Result size (~1296 bytes). Current impact is minimal since the Result is
+    // immediately matched and not passed through deep call stacks.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn buf_to_message(&self, data: Bytes) -> Result<RithmicResponse, RithmicResponse> {
         let payload = &data[4..];
 

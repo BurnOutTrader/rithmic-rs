@@ -1726,6 +1726,7 @@ impl RithmicOrderPlantHandle {
     ///
     /// # Returns
     /// A vector of order placement responses or an error message
+    #[allow(clippy::too_many_arguments)]
     pub async fn place_new_order(
         &self,
         exchange: &str,
