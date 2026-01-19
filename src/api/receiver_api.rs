@@ -107,6 +107,116 @@ pub struct RithmicResponse {
     pub source: String,
 }
 
+impl RithmicResponse {
+    /// Returns true if this response represents an error condition.
+    ///
+    /// This checks both:
+    /// - The `error` field being set (Rithmic protocol errors)
+    /// - Connection issues (WebSocket errors, heartbeat timeouts, forced logout)
+    ///
+    /// # Example
+    /// ```ignore
+    /// if response.is_error() {
+    ///     eprintln!("Error: {:?}", response.error);
+    /// }
+    /// ```
+    pub fn is_error(&self) -> bool {
+        self.error.is_some() || self.is_connection_issue()
+    }
+
+    /// Returns true if this response indicates a connection health issue.
+    ///
+    /// Connection issues include:
+    /// - `ConnectionError`: WebSocket connection failed
+    /// - `HeartbeatTimeout`: Connection appears dead
+    /// - `ForcedLogout`: Server forcibly logged out the client
+    ///
+    /// These conditions typically require reconnection logic.
+    ///
+    /// # Example
+    /// ```ignore
+    /// if response.is_connection_issue() {
+    ///     // Trigger reconnection
+    /// }
+    /// ```
+    pub fn is_connection_issue(&self) -> bool {
+        matches!(
+            self.message,
+            RithmicMessage::ConnectionError
+                | RithmicMessage::HeartbeatTimeout
+                | RithmicMessage::ForcedLogout(_)
+        )
+    }
+
+    /// Returns true if this response contains market data.
+    ///
+    /// Market data messages include:
+    /// - `BestBidOffer`: Top-of-book quotes
+    /// - `LastTrade`: Trade executions
+    /// - `DepthByOrder`: Order book depth updates
+    /// - `DepthByOrderEndEvent`: End of depth snapshot marker
+    /// - `OrderBook`: Aggregated order book
+    ///
+    /// # Example
+    /// ```ignore
+    /// if response.is_market_data() {
+    ///     // Process market data update
+    /// }
+    /// ```
+    pub fn is_market_data(&self) -> bool {
+        matches!(
+            self.message,
+            RithmicMessage::BestBidOffer(_)
+                | RithmicMessage::LastTrade(_)
+                | RithmicMessage::DepthByOrder(_)
+                | RithmicMessage::DepthByOrderEndEvent(_)
+                | RithmicMessage::OrderBook(_)
+        )
+    }
+
+    /// Returns true if this response is an order update notification.
+    ///
+    /// Order update messages include:
+    /// - `RithmicOrderNotification`: Order status updates from Rithmic
+    /// - `ExchangeOrderNotification`: Order status updates from exchange
+    /// - `BracketUpdates`: Bracket order updates
+    ///
+    /// # Example
+    /// ```ignore
+    /// if response.is_order_update() {
+    ///     // Process order status change
+    /// }
+    /// ```
+    pub fn is_order_update(&self) -> bool {
+        matches!(
+            self.message,
+            RithmicMessage::RithmicOrderNotification(_)
+                | RithmicMessage::ExchangeOrderNotification(_)
+                | RithmicMessage::BracketUpdates(_)
+        )
+    }
+
+    /// Returns true if this response is a P&L or position update.
+    ///
+    /// P&L update messages include:
+    /// - `AccountPnLPositionUpdate`: Account-level P&L updates
+    /// - `InstrumentPnLPositionUpdate`: Per-instrument P&L updates
+    ///
+    /// # Example
+    /// ```ignore
+    /// if response.is_pnl_update() {
+    ///     // Update position tracking
+    /// }
+    /// ```
+    pub fn is_pnl_update(&self) -> bool {
+        matches!(
+            self.message,
+            RithmicMessage::AccountPnLPositionUpdate(_)
+                | RithmicMessage::InstrumentPnLPositionUpdate(_)
+        )
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RithmicReceiverApi {
     pub(crate) source: String,
@@ -1436,4 +1546,203 @@ fn get_error(rp_code: &[String]) -> Option<String> {
 
 fn check_message_error(message: &RithmicResponse) -> Option<String> {
     message.error.as_ref().map(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a test response with a specific message type
+    fn make_response(message: RithmicMessage) -> RithmicResponse {
+        RithmicResponse {
+            request_id: String::new(),
+            message,
+            is_update: false,
+            has_more: false,
+            multi_response: false,
+            error: None,
+            source: "test".to_string(),
+        }
+    }
+
+    fn make_response_with_error(message: RithmicMessage, error: &str) -> RithmicResponse {
+        RithmicResponse {
+            error: Some(error.to_string()),
+            ..make_response(message)
+        }
+    }
+
+    // =========================================================================
+    // is_error() tests
+    // =========================================================================
+
+    #[test]
+    fn is_error_true_when_error_field_set() {
+        // Even with a normal message, if error field is set, is_error should be true
+        let response = make_response_with_error(
+            RithmicMessage::ResponseHeartbeat(ResponseHeartbeat::default()),
+            "some error",
+        );
+        assert!(response.is_error());
+    }
+
+    #[test]
+    fn is_error_true_for_connection_issues_without_error_field() {
+        // Connection issues should be errors even without error field set
+        let response = make_response(RithmicMessage::ConnectionError);
+        assert!(response.is_error());
+        assert!(response.error.is_none()); // Verify error field is not set
+    }
+
+    #[test]
+    fn is_error_false_for_normal_response() {
+        let response = make_response(RithmicMessage::ResponseHeartbeat(
+            ResponseHeartbeat::default(),
+        ));
+        assert!(!response.is_error());
+    }
+
+    // =========================================================================
+    // is_connection_issue() tests
+    // =========================================================================
+
+    #[test]
+    fn is_connection_issue_detects_all_connection_error_types() {
+        // Test all three connection issue types
+        let connection_error = make_response(RithmicMessage::ConnectionError);
+        let heartbeat_timeout = make_response(RithmicMessage::HeartbeatTimeout);
+        let forced_logout = make_response(RithmicMessage::ForcedLogout(ForcedLogout::default()));
+
+        assert!(connection_error.is_connection_issue());
+        assert!(heartbeat_timeout.is_connection_issue());
+        assert!(forced_logout.is_connection_issue());
+    }
+
+    #[test]
+    fn is_connection_issue_false_for_reject() {
+        // Reject is an error but NOT a connection issue
+        let response = make_response(RithmicMessage::Reject(Reject::default()));
+        assert!(!response.is_connection_issue());
+    }
+
+    // =========================================================================
+    // is_market_data() tests
+    // =========================================================================
+
+    #[test]
+    fn is_market_data_true_for_market_data_types() {
+        let bbo = make_response(RithmicMessage::BestBidOffer(BestBidOffer::default()));
+        let trade = make_response(RithmicMessage::LastTrade(LastTrade::default()));
+        let depth = make_response(RithmicMessage::DepthByOrder(DepthByOrder::default()));
+        let depth_end = make_response(RithmicMessage::DepthByOrderEndEvent(
+            DepthByOrderEndEvent::default(),
+        ));
+        let orderbook = make_response(RithmicMessage::OrderBook(OrderBook::default()));
+
+        assert!(bbo.is_market_data());
+        assert!(trade.is_market_data());
+        assert!(depth.is_market_data());
+        assert!(depth_end.is_market_data());
+        assert!(orderbook.is_market_data());
+    }
+
+    #[test]
+    fn is_market_data_false_for_order_notifications() {
+        // Order notifications are NOT market data
+        let response = make_response(RithmicMessage::RithmicOrderNotification(
+            RithmicOrderNotification::default(),
+        ));
+        assert!(!response.is_market_data());
+    }
+
+    // =========================================================================
+    // is_order_update() tests
+    // =========================================================================
+
+    #[test]
+    fn is_order_update_true_for_order_notification_types() {
+        let rithmic_notif = make_response(RithmicMessage::RithmicOrderNotification(
+            RithmicOrderNotification::default(),
+        ));
+        let exchange_notif = make_response(RithmicMessage::ExchangeOrderNotification(
+            ExchangeOrderNotification::default(),
+        ));
+        let bracket = make_response(RithmicMessage::BracketUpdates(BracketUpdates::default()));
+
+        assert!(rithmic_notif.is_order_update());
+        assert!(exchange_notif.is_order_update());
+        assert!(bracket.is_order_update());
+    }
+
+    #[test]
+    fn is_order_update_false_for_market_data() {
+        // Market data is NOT an order update
+        let response = make_response(RithmicMessage::BestBidOffer(BestBidOffer::default()));
+        assert!(!response.is_order_update());
+    }
+
+    // =========================================================================
+    // is_pnl_update() tests
+    // =========================================================================
+
+    #[test]
+    fn is_pnl_update_true_for_pnl_types() {
+        let account_pnl = make_response(RithmicMessage::AccountPnLPositionUpdate(
+            AccountPnLPositionUpdate::default(),
+        ));
+        let instrument_pnl = make_response(RithmicMessage::InstrumentPnLPositionUpdate(
+            InstrumentPnLPositionUpdate::default(),
+        ));
+
+        assert!(account_pnl.is_pnl_update());
+        assert!(instrument_pnl.is_pnl_update());
+    }
+
+    #[test]
+    fn is_pnl_update_false_for_order_updates() {
+        // Order updates are NOT P&L updates
+        let response = make_response(RithmicMessage::RithmicOrderNotification(
+            RithmicOrderNotification::default(),
+        ));
+        assert!(!response.is_pnl_update());
+    }
+
+    // =========================================================================
+    // Mutual exclusivity tests - verify categories don't overlap unexpectedly
+    // =========================================================================
+
+    #[test]
+    fn categories_are_mutually_exclusive() {
+        // Market data should not be flagged as order update or pnl
+        let market_data = make_response(RithmicMessage::BestBidOffer(BestBidOffer::default()));
+        assert!(market_data.is_market_data());
+        assert!(!market_data.is_order_update());
+        assert!(!market_data.is_pnl_update());
+        assert!(!market_data.is_connection_issue());
+
+        // Order update should not be flagged as market data or pnl
+        let order = make_response(RithmicMessage::RithmicOrderNotification(
+            RithmicOrderNotification::default(),
+        ));
+        assert!(order.is_order_update());
+        assert!(!order.is_market_data());
+        assert!(!order.is_pnl_update());
+        assert!(!order.is_connection_issue());
+
+        // PnL should not be flagged as market data or order update
+        let pnl = make_response(RithmicMessage::AccountPnLPositionUpdate(
+            AccountPnLPositionUpdate::default(),
+        ));
+        assert!(pnl.is_pnl_update());
+        assert!(!pnl.is_market_data());
+        assert!(!pnl.is_order_update());
+        assert!(!pnl.is_connection_issue());
+
+        // Connection issue should not be in any other category
+        let conn_err = make_response(RithmicMessage::ConnectionError);
+        assert!(conn_err.is_connection_issue());
+        assert!(!conn_err.is_market_data());
+        assert!(!conn_err.is_order_update());
+        assert!(!conn_err.is_pnl_update());
+    }
 }
