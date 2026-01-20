@@ -54,7 +54,7 @@ impl RithmicSenderApi {
     pub(crate) fn new(config: &RithmicConfig) -> Self {
         RithmicSenderApi {
             account_id: config.account_id.clone(),
-            env: config.env.clone(),
+            env: config.env,
             fcm_id: config.fcm_id.clone(),
             ib_id: config.ib_id.clone(),
             message_id_counter: 0,

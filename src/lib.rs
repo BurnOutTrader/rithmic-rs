@@ -99,6 +99,7 @@
 //! - [`api`]: Low-level API interfaces for sending and receiving messages
 //! - [`rti`]: Protocol message definitions
 //! - [`ws`]: WebSocket connectivity and connection strategies
+//! - [`util`]: Utility types and helpers (timestamps, order status, instrument info)
 
 /// Low-level API types for Rithmic communication.
 ///
@@ -111,7 +112,9 @@ pub mod api;
 
 /// Configuration API for connecting to Rithmic
 pub mod config;
+
 mod ping_manager;
+
 /// Specialized clients ("plants") for different Rithmic services.
 ///
 /// Each plant connects to a specific Rithmic infrastructure component:
@@ -135,6 +138,10 @@ mod request_handler;
 /// covering all message types including market data, order notifications, and
 /// connection health events.
 pub mod rti;
+
+/// Utility types for working with Rithmic data.
+pub mod util;
+
 /// WebSocket connectivity layer
 pub mod ws;
 
@@ -157,3 +164,6 @@ pub use api::{
     OcoPriceType, OcoTransactionType, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
     RithmicOcoOrderLeg, RithmicResponse,
 };
+
+// Re-export utility types for convenience
+pub use util::{InstrumentInfo, OrderStatus, rithmic_to_unix_nanos, rithmic_to_unix_nanos_precise};

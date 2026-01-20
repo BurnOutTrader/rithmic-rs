@@ -26,8 +26,11 @@ use std::{env, fmt, str::FromStr};
 /// Trading environment selector.
 ///
 /// Determines which Rithmic environment to connect to.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum RithmicEnv {
+    #[default]
     Demo,
     Live,
     Test,
@@ -367,6 +370,7 @@ impl RithmicConfigBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::env;
 
     // Helper to set up test environment variables
@@ -476,6 +480,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_demo_success() {
         setup_demo_env_vars();
 
@@ -495,6 +500,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_live_success() {
         setup_live_env_vars();
 
@@ -510,6 +516,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_missing_account_id() {
         cleanup_env_vars();
         unsafe {
@@ -537,6 +544,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_missing_credentials() {
         cleanup_env_vars();
         unsafe {
@@ -563,6 +571,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_from_env_missing_url() {
         cleanup_env_vars();
         unsafe {
