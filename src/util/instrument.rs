@@ -140,6 +140,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn test_price_precision() {
         let mut info = InstrumentInfo::default();
 

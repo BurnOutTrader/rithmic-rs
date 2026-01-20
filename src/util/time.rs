@@ -9,8 +9,8 @@
 /// ```
 /// use rithmic_rs::rithmic_to_unix_nanos;
 ///
-/// let nanos = rithmic_to_unix_nanos(1704067200, 500000);
-/// assert_eq!(nanos, 1704067200_500_000_000);
+/// let nanos = rithmic_to_unix_nanos(1_704_067_200, 500_000);
+/// assert_eq!(nanos, 1_704_067_200_500_000_000);
 /// ```
 pub fn rithmic_to_unix_nanos(ssboe: i32, usecs: i32) -> u64 {
     debug_assert!(ssboe >= 0, "ssboe must be non-negative, got {}", ssboe);
@@ -27,8 +27,8 @@ pub fn rithmic_to_unix_nanos(ssboe: i32, usecs: i32) -> u64 {
 /// use rithmic_rs::rithmic_to_unix_nanos_precise;
 ///
 /// // With nanoseconds from exchange
-/// let nanos = rithmic_to_unix_nanos_precise(1704067200, 500000, Some(123));
-/// assert_eq!(nanos, 1704067200_500_000_123);
+/// let nanos = rithmic_to_unix_nanos_precise(1_704_067_200, 500_000, Some(123));
+/// assert_eq!(nanos, 1_704_067_200_500_000_123);
 /// ```
 pub fn rithmic_to_unix_nanos_precise(ssboe: i32, usecs: i32, nsecs: Option<i32>) -> u64 {
     debug_assert!(ssboe >= 0, "ssboe must be non-negative, got {}", ssboe);
@@ -53,8 +53,8 @@ mod tests {
         assert_eq!(rithmic_to_unix_nanos(1, 1), 1_000_001_000);
         assert_eq!(rithmic_to_unix_nanos(1, 999999), 1_999_999_000);
         assert_eq!(
-            rithmic_to_unix_nanos(1704067200, 500000),
-            1704067200_500_000_000
+            rithmic_to_unix_nanos(1_704_067_200, 500_000),
+            1_704_067_200_500_000_000
         );
     }
 
