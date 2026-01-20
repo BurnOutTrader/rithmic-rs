@@ -26,8 +26,11 @@ use std::{env, fmt, str::FromStr};
 /// Trading environment selector.
 ///
 /// Determines which Rithmic environment to connect to.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum RithmicEnv {
+    #[default]
     Demo,
     Live,
     Test,
