@@ -1086,6 +1086,67 @@ impl RithmicTickerPlantHandle {
             .remove(0))
     }
 
+    /// Unsubscribe from market data for a specific symbol
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESM1")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    ///
+    /// # Returns
+    /// The unsubscription response or an error message
+    pub async fn unsubscribe(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::Subscribe {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            fields: vec![UpdateBits::LastTrade, UpdateBits::Bbo],
+            request_type: Request::Unsubscribe,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0))
+    }
+
+    /// Unsubscribe from order book depth-by-order updates for a specific symbol
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., "ESM1")
+    /// * `exchange` - The exchange code (e.g., "CME")
+    ///
+    /// # Returns
+    /// The unsubscription response or an error message
+    pub async fn unsubscribe_order_book(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = TickerPlantCommand::SubscribeOrderBook {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            request_type: request_depth_by_order_updates::Request::Unsubscribe,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        Ok(rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0))
+    }
+
     /// Request a snapshot of the order book depth-by-order for a specific symbol
     ///
     /// # Arguments

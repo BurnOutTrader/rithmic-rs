@@ -1,4 +1,4 @@
-use super::rithmic_command_types::{RithmicBracketOrder, RithmicOcoOrderLeg};
+use super::rithmic_command_types::{RithmicBracketOrder, RithmicOcoOrderLeg, RithmicOrder};
 use prost::Message;
 
 use crate::{
@@ -479,6 +479,49 @@ impl RithmicSenderApi {
             },
             user_msg: vec![id.clone()],
             user_tag: Some(localid.into()),
+            ..RequestNewOrder::default()
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Send a new order request using [`RithmicOrder`].
+    ///
+    /// This is the preferred method for placing orders as it supports
+    /// advanced features like trigger prices and trailing stops.
+    ///
+    /// # Arguments
+    /// * `order` - The order parameters
+    ///
+    /// # Returns
+    /// A tuple of (serialized request buffer, request ID)
+    pub fn request_order(&mut self, order: &RithmicOrder) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let trade_route = match self.env {
+            RithmicEnv::Live => TRADE_ROUTE_LIVE,
+            RithmicEnv::Demo | RithmicEnv::Test => TRADE_ROUTE_DEMO,
+        };
+
+        let req = RequestNewOrder {
+            template_id: 312,
+            fcm_id: Some(self.fcm_id.clone()),
+            ib_id: Some(self.ib_id.clone()),
+            account_id: Some(self.account_id.clone()),
+            trade_route: Some(trade_route.into()),
+            exchange: Some(order.exchange.clone()),
+            symbol: Some(order.symbol.clone()),
+            quantity: Some(order.quantity),
+            price: Some(order.price),
+            transaction_type: Some(order.transaction_type.into()),
+            price_type: Some(order.price_type.into()),
+            manual_or_auto: Some(2),
+            duration: order.duration.map(|d| d.into()).or(Some(1)),
+            user_msg: vec![id.clone()],
+            user_tag: Some(order.user_tag.clone()),
+            trigger_price: order.trigger_price,
+            trailing_stop: order.trailing_stop.as_ref().map(|_| true),
+            trail_by_ticks: order.trailing_stop.as_ref().map(|ts| ts.trail_by_ticks),
             ..RequestNewOrder::default()
         };
 

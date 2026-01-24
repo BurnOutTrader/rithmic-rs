@@ -162,7 +162,7 @@ pub use api::{
     BracketDuration, BracketPriceType, BracketTransactionType, EasyToBorrowRequest,
     ModifyPriceType, NewOrderDuration, NewOrderPriceType, NewOrderTransactionType, OcoDuration,
     OcoPriceType, OcoTransactionType, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
-    RithmicOcoOrderLeg, RithmicResponse,
+    RithmicOcoOrderLeg, RithmicOrder, RithmicResponse, TrailingStop,
 };
 
 // Re-export utility types for convenience

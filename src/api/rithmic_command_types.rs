@@ -1,4 +1,6 @@
-use crate::rti::{request_bracket_order, request_modify_order, request_oco_order};
+use crate::rti::{
+    request_bracket_order, request_modify_order, request_new_order, request_oco_order,
+};
 
 /// One leg of an OCO (One-Cancels-Other) order pair.
 ///
@@ -151,4 +153,126 @@ pub struct RithmicModifyOrder {
 pub struct RithmicCancelOrder {
     /// The `basket_id` from the order notification
     pub id: String,
+}
+
+/// Configuration for trailing stop orders.
+///
+/// When a trailing stop is configured, the stop price follows the market
+/// by the specified number of ticks.
+///
+/// # Example
+///
+/// ```ignore
+/// use rithmic_rs::TrailingStop;
+///
+/// let trailing = TrailingStop { trail_by_ticks: 20 };
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct TrailingStop {
+    /// Number of ticks to trail behind the market price
+    pub trail_by_ticks: i32,
+}
+
+/// A standalone order (not a bracket order).
+///
+/// Use this struct with `RithmicOrderPlantHandle::place_order()` to submit
+/// orders with advanced features like trigger prices and trailing stops.
+///
+/// For orders with automatic profit targets and stop losses, use
+/// [`RithmicBracketOrder`] instead.
+///
+/// # Example: Simple Limit Order
+///
+/// ```ignore
+/// use rithmic_rs::{RithmicOrder, NewOrderTransactionType, NewOrderPriceType};
+///
+/// let order = RithmicOrder {
+///     symbol: "ESM5".to_string(),
+///     exchange: "CME".to_string(),
+///     quantity: 1,
+///     price: 5000.0,
+///     transaction_type: NewOrderTransactionType::Buy,
+///     price_type: NewOrderPriceType::Limit,
+///     user_tag: "my-order-1".to_string(),
+///     ..Default::default()
+/// };
+/// handle.place_order(order).await?;
+/// ```
+///
+/// # Example: Stop-Limit Order with Trigger Price
+///
+/// ```ignore
+/// use rithmic_rs::{RithmicOrder, NewOrderTransactionType, NewOrderPriceType};
+///
+/// let order = RithmicOrder {
+///     symbol: "ESM5".to_string(),
+///     exchange: "CME".to_string(),
+///     quantity: 1,
+///     price: 4980.0,                // Limit price after trigger
+///     trigger_price: Some(4985.0),  // Stop triggers at this price
+///     transaction_type: NewOrderTransactionType::Sell,
+///     price_type: NewOrderPriceType::StopLimit,
+///     user_tag: "stop-order".to_string(),
+///     ..Default::default()
+/// };
+/// ```
+///
+/// # Example: Trailing Stop Order
+///
+/// ```ignore
+/// use rithmic_rs::{RithmicOrder, NewOrderTransactionType, NewOrderPriceType, TrailingStop};
+///
+/// let order = RithmicOrder {
+///     symbol: "ESM5".to_string(),
+///     exchange: "CME".to_string(),
+///     quantity: 1,
+///     price: 0.0,  // Not used for trailing stops
+///     transaction_type: NewOrderTransactionType::Sell,
+///     price_type: NewOrderPriceType::StopMarket,
+///     trailing_stop: Some(TrailingStop { trail_by_ticks: 20 }),
+///     user_tag: "trailing-stop".to_string(),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct RithmicOrder {
+    /// Trading symbol (e.g., "ESM5")
+    pub symbol: String,
+    /// Exchange code (e.g., "CME")
+    pub exchange: String,
+    /// Number of contracts
+    pub quantity: i32,
+    /// Order price (ignored for market orders)
+    pub price: f64,
+    /// Buy or Sell
+    pub transaction_type: request_new_order::TransactionType,
+    /// Order type (Limit, Market, StopLimit, StopMarket, etc.)
+    pub price_type: request_new_order::PriceType,
+    /// Your identifier for tracking this order
+    pub user_tag: String,
+    /// Order duration (defaults to Day if None)
+    pub duration: Option<request_new_order::Duration>,
+    /// Trigger price for stop orders (StopLimit, StopMarket, etc.)
+    ///
+    /// Required for stop orders; ignored for limit/market orders.
+    pub trigger_price: Option<f64>,
+    /// Trailing stop configuration
+    pub trailing_stop: Option<TrailingStop>,
+}
+
+impl Default for RithmicOrder {
+    fn default() -> Self {
+        Self {
+            symbol: String::new(),
+            exchange: String::new(),
+            quantity: 0,
+            price: 0.0,
+            transaction_type: request_new_order::TransactionType::Buy,
+            price_type: request_new_order::PriceType::Limit,
+            user_tag: String::new(),
+            duration: None,
+            trigger_price: None,
+            trailing_stop: None,
+        }
+    }
 }

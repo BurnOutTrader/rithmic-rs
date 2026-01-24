@@ -21,8 +21,10 @@ pub(crate) mod sender_api;
 
 // Re-export commonly used types
 pub use receiver_api::RithmicResponse;
+
 pub use rithmic_command_types::{
-    RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder, RithmicOcoOrderLeg,
+    RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder, RithmicOcoOrderLeg, RithmicOrder,
+    TrailingStop,
 };
 
 // Re-export bracket order enums
