@@ -139,6 +139,9 @@ mod request_handler;
 /// connection health events.
 pub mod rti;
 
+/// High-level trading types with serde support.
+pub mod types;
+
 /// Utility types for working with Rithmic data.
 pub mod util;
 
@@ -167,3 +170,9 @@ pub use api::{
 
 // Re-export utility types for convenience
 pub use util::{InstrumentInfo, OrderStatus, rithmic_to_unix_nanos, rithmic_to_unix_nanos_precise};
+
+// Re-export high-level trading types
+pub use types::{
+    OrderSide, OrderType, ParseOrderSideError, ParseOrderTypeError, ParseTimeInForceError,
+    TimeInForce,
+};
