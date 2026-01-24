@@ -728,7 +728,10 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap().remove(0))
+        Ok(rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0))
     }
 
     /// Log in to the Rithmic History plant
@@ -747,9 +750,15 @@ impl RithmicHistoryPlantHandle {
         };
 
         let _ = self.sender.send(command).await;
-        let response = rx.await.unwrap().unwrap().remove(0);
+        let response = rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0);
 
-        if response.error.is_none() {
+        if let Some(err) = response.error {
+            error!("history_plant: login failed {:?}", err);
+            Err(err)
+        } else {
             let _ = self.sender.send(HistoryPlantCommand::SetLogin).await;
 
             if let RithmicMessage::ResponseLogin(resp) = &response.message {
@@ -766,10 +775,6 @@ impl RithmicHistoryPlantHandle {
             info!("history_plant: logged in");
 
             Ok(response)
-        } else {
-            error!("history_plant: login failed {:?}", response.error);
-
-            Err(response.error.unwrap())
         }
     }
 
@@ -791,7 +796,10 @@ impl RithmicHistoryPlantHandle {
         };
 
         let _ = self.sender.send(command).await;
-        let response = rx.await.unwrap().unwrap().remove(0);
+        let response = rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0);
         let _ = self.sender.send(HistoryPlantCommand::Close).await;
 
         Ok(response)
@@ -826,7 +834,7 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap())
+        rx.await.map_err(|_| "Connection closed".to_string())?
     }
 
     /// Load historical time bar data for a specific symbol and time range
@@ -864,7 +872,7 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap())
+        rx.await.map_err(|_| "Connection closed".to_string())?
     }
 
     /// Load volume profile minute bars
@@ -906,7 +914,7 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap())
+        rx.await.map_err(|_| "Connection closed".to_string())?
     }
 
     /// Resume a previously truncated bars request
@@ -928,7 +936,7 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap())
+        rx.await.map_err(|_| "Connection closed".to_string())?
     }
 
     /// Subscribe to live time bar updates
@@ -963,7 +971,10 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap().remove(0))
+        Ok(rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0))
     }
 
     /// Subscribe to live tick bar updates
@@ -1001,7 +1012,10 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap().remove(0))
+        Ok(rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0))
     }
 }
 

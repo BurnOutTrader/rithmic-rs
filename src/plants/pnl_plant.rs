@@ -575,7 +575,10 @@ impl RithmicPnlPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap().remove(0))
+        Ok(rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0))
     }
 
     /// Log in to the Rithmic PnL plant
@@ -594,9 +597,15 @@ impl RithmicPnlPlantHandle {
         };
 
         let _ = self.sender.send(command).await;
-        let response = rx.await.unwrap().unwrap().remove(0);
+        let response = rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0);
 
-        if response.error.is_none() {
+        if let Some(err) = response.error {
+            error!("pnl_plant: login failed {:?}", err);
+            Err(err)
+        } else {
             let _ = self.sender.send(PnlPlantCommand::SetLogin).await;
 
             if let RithmicMessage::ResponseLogin(resp) = &response.message {
@@ -613,10 +622,6 @@ impl RithmicPnlPlantHandle {
             info!("pnl_plant: logged in");
 
             Ok(response)
-        } else {
-            error!("pnl_plant: login failed {:?}", response.error);
-
-            Err(response.error.unwrap())
         }
     }
 
@@ -638,7 +643,7 @@ impl RithmicPnlPlantHandle {
         };
 
         let _ = self.sender.send(command).await;
-        let mut r = rx.await.unwrap().unwrap();
+        let mut r = rx.await.map_err(|_| "Connection closed".to_string())??;
         let _ = self.sender.send(PnlPlantCommand::Close).await;
 
         Ok(r.remove(0))
@@ -657,7 +662,10 @@ impl RithmicPnlPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap().remove(0))
+        Ok(rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0))
     }
 
     /// Request a snapshot of all current position PnL data
@@ -695,6 +703,9 @@ impl RithmicPnlPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx.await.unwrap().unwrap().remove(0))
+        Ok(rx
+            .await
+            .map_err(|_| "Connection closed".to_string())??
+            .remove(0))
     }
 }
