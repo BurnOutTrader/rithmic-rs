@@ -1,5 +1,8 @@
 //! Order status types and utilities.
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
@@ -10,6 +13,7 @@ pub const CANCELLED: &str = "cancelled";
 pub const PENDING: &str = "pending";
 pub const REJECTED: &str = "rejected";
 pub const PARTIAL: &str = "partial";
+pub const EXPIRED: &str = "expired";
 
 /// Order status with helpers for checking terminal/active states.
 ///
@@ -25,6 +29,7 @@ pub const PARTIAL: &str = "partial";
 /// assert!(status.is_terminal());
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum OrderStatus {
     Open,
     Complete,
@@ -32,14 +37,18 @@ pub enum OrderStatus {
     Pending,
     Rejected,
     Partial,
+    Expired,
     #[default]
     Unknown,
 }
 
 impl OrderStatus {
-    /// Returns true if this is a terminal status (Complete, Cancelled, Rejected).
+    /// Returns true if this is a terminal status (Complete, Cancelled, Rejected, Expired).
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Complete | Self::Cancelled | Self::Rejected)
+        matches!(
+            self,
+            Self::Complete | Self::Cancelled | Self::Rejected | Self::Expired
+        )
     }
 
     /// Returns true if this is an active status (Open, Pending, Partial).
@@ -59,6 +68,7 @@ impl FromStr for OrderStatus {
             PENDING => Self::Pending,
             REJECTED => Self::Rejected,
             PARTIAL | "partially_filled" | "partially filled" => Self::Partial,
+            EXPIRED => Self::Expired,
             _ => Self::Unknown,
         };
         Ok(status)
@@ -74,6 +84,7 @@ impl fmt::Display for OrderStatus {
             Self::Pending => PENDING,
             Self::Rejected => REJECTED,
             Self::Partial => PARTIAL,
+            Self::Expired => EXPIRED,
             Self::Unknown => "unknown",
         };
         write!(f, "{}", s)
@@ -126,6 +137,7 @@ mod tests {
         assert!(OrderStatus::Complete.is_terminal());
         assert!(OrderStatus::Cancelled.is_terminal());
         assert!(OrderStatus::Rejected.is_terminal());
+        assert!(OrderStatus::Expired.is_terminal());
         assert!(!OrderStatus::Open.is_terminal());
         assert!(!OrderStatus::Pending.is_terminal());
         assert!(!OrderStatus::Partial.is_terminal());
@@ -140,6 +152,7 @@ mod tests {
         assert!(!OrderStatus::Complete.is_active());
         assert!(!OrderStatus::Cancelled.is_active());
         assert!(!OrderStatus::Rejected.is_active());
+        assert!(!OrderStatus::Expired.is_active());
         assert!(!OrderStatus::Unknown.is_active());
     }
 
@@ -161,6 +174,7 @@ mod tests {
             OrderStatus::Pending,
             OrderStatus::Rejected,
             OrderStatus::Partial,
+            OrderStatus::Expired,
         ] {
             let s = status.to_string();
             let parsed: OrderStatus = s.parse().unwrap();
