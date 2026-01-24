@@ -985,7 +985,10 @@ impl RithmicTickerPlantHandle {
             .map_err(|_| "Connection closed".to_string())??
             .remove(0);
 
-        if response.error.is_none() {
+        if let Some(err) = response.error {
+            error!("ticker_plant: login failed {:?}", err);
+            Err(err)
+        } else {
             let _ = self.sender.send(TickerPlantCommand::SetLogin).await;
 
             if let RithmicMessage::ResponseLogin(resp) = &response.message {
@@ -1002,10 +1005,6 @@ impl RithmicTickerPlantHandle {
             info!("ticker_plant: logged in");
 
             Ok(response)
-        } else {
-            error!("ticker_plant: login failed {:?}", response.error);
-
-            Err(response.error.unwrap())
         }
     }
 

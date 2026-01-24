@@ -602,7 +602,10 @@ impl RithmicPnlPlantHandle {
             .map_err(|_| "Connection closed".to_string())??
             .remove(0);
 
-        if response.error.is_none() {
+        if let Some(err) = response.error {
+            error!("pnl_plant: login failed {:?}", err);
+            Err(err)
+        } else {
             let _ = self.sender.send(PnlPlantCommand::SetLogin).await;
 
             if let RithmicMessage::ResponseLogin(resp) = &response.message {
@@ -619,10 +622,6 @@ impl RithmicPnlPlantHandle {
             info!("pnl_plant: logged in");
 
             Ok(response)
-        } else {
-            error!("pnl_plant: login failed {:?}", response.error);
-
-            Err(response.error.unwrap())
         }
     }
 
