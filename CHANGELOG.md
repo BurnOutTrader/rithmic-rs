@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### New Order API
+- **`RithmicOrder`**: New struct for placing standalone orders with advanced features
+  - Supports trigger prices for stop orders (StopLimit, StopMarket)
+  - Supports trailing stops via `TrailingStop` configuration
+  - Ergonomic API using `Default` trait for optional fields
+  - Comprehensive documentation with examples
+- **`TrailingStop`**: Configuration struct for trailing stop orders
+  - `trail_by_ticks`: Number of ticks to trail behind market price
+- **`place_order(RithmicOrder)`**: New method on `RithmicOrderPlantHandle`
+  - Preferred method for placing standalone orders
+  - Supports all order types including stop orders and trailing stops
+
+#### Ticker Plant Unsubscribe Methods
+- **`unsubscribe(symbol, exchange)`**: Unsubscribe from market data for a symbol
+- **`unsubscribe_order_book(symbol, exchange)`**: Unsubscribe from order book depth-by-order updates
+
+### Deprecated
+- **`place_new_order()`**: Use `place_order(RithmicOrder)` instead
+  - The new API supports trigger prices and trailing stops
+  - Marked with `#[deprecated(since = "0.7.2")]`
+
 ## [0.7.1] - 2026-01-23
 
 ### Added

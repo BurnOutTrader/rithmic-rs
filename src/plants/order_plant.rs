@@ -12,6 +12,7 @@ use crate::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         rithmic_command_types::{
             RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder, RithmicOcoOrderLeg,
+            RithmicOrder,
         },
         sender_api::RithmicSenderApi,
     },
@@ -129,6 +130,10 @@ pub(crate) enum OrderPlantCommand {
         ordertype: request_new_order::PriceType,
         localid: String,
         duration: Option<request_new_order::Duration>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    },
+    PlaceOrder {
+        order: RithmicOrder,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
     },
     PlaceOcoOrder {
@@ -1000,6 +1005,22 @@ impl PlantActor for OrderPlant {
                     .await
                     .unwrap();
             }
+            OrderPlantCommand::PlaceOrder {
+                order,
+                response_sender,
+            } => {
+                let (req_buf, id) = self.rithmic_sender_api.request_order(&order);
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.rithmic_sender
+                    .send(Message::Binary(req_buf.into()))
+                    .await
+                    .unwrap();
+            }
             OrderPlantCommand::PlaceOcoOrder {
                 order1,
                 order2,
@@ -1740,6 +1761,10 @@ impl RithmicOrderPlantHandle {
 
     /// Place a new single order (without brackets)
     ///
+    /// # Deprecated
+    /// Use [`place_order`](Self::place_order) instead, which accepts a [`RithmicOrder`]
+    /// struct and supports trigger prices and trailing stops.
+    ///
     /// # Arguments
     /// * `exchange` - The exchange code (e.g., "CME")
     /// * `symbol` - The trading symbol (e.g., "ESM1")
@@ -1752,6 +1777,7 @@ impl RithmicOrderPlantHandle {
     ///
     /// # Returns
     /// A vector of order placement responses or an error message
+    #[deprecated(since = "0.7.2", note = "Use place_order(RithmicOrder) instead")]
     #[allow(clippy::too_many_arguments)]
     pub async fn place_new_order(
         &self,
@@ -1775,6 +1801,51 @@ impl RithmicOrderPlantHandle {
             ordertype,
             localid: localid.to_string(),
             duration,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.map_err(|_| "Connection closed".to_string())?
+    }
+
+    /// Place a new order using [`RithmicOrder`]
+    ///
+    /// This is the preferred method for placing standalone orders. It supports
+    /// all order types including those with trigger prices (stop orders) and
+    /// trailing stops.
+    ///
+    /// For orders with automatic profit targets and stop losses, use
+    /// [`place_bracket_order`](Self::place_bracket_order) instead.
+    ///
+    /// # Arguments
+    /// * `order` - The order parameters
+    ///
+    /// # Returns
+    /// A vector of order placement responses or an error message
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use rithmic_rs::{RithmicOrder, NewOrderTransactionType, NewOrderPriceType};
+    ///
+    /// let order = RithmicOrder {
+    ///     symbol: "ESM5".to_string(),
+    ///     exchange: "CME".to_string(),
+    ///     quantity: 1,
+    ///     price: 5000.0,
+    ///     transaction_type: NewOrderTransactionType::Buy,
+    ///     price_type: NewOrderPriceType::Limit,
+    ///     user_tag: "my-order".to_string(),
+    ///     ..Default::default()
+    /// };
+    /// handle.place_order(order).await?;
+    /// ```
+    pub async fn place_order(&self, order: RithmicOrder) -> Result<Vec<RithmicResponse>, String> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+
+        let command = OrderPlantCommand::PlaceOrder {
+            order,
             response_sender: tx,
         };
 
