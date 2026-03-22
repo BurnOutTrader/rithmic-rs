@@ -30,8 +30,8 @@ use crate::{
         request_easy_to_borrow_list,
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
-        request_market_data_update_by_underlying, request_modify_order,
-        request_oco_order, request_pn_l_position_updates, request_search_symbols,
+        request_market_data_update_by_underlying, request_modify_order, request_oco_order,
+        request_pn_l_position_updates, request_search_symbols,
         request_tick_bar_replay::{BarSubType, BarType, Direction, TimeOrder},
         request_tick_bar_update, request_time_bar_replay, request_time_bar_update,
     },
@@ -95,6 +95,7 @@ impl RithmicSenderApi {
         infra_type: SysInfraType,
         user: &str,
         password: &str,
+        aggregated_quotes: Option<bool>,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
 
@@ -108,6 +109,7 @@ impl RithmicSenderApi {
             system_name: Some(system_name.to_string()),
             infra_type: Some(infra_type.into()),
             user_msg: vec![id.clone()],
+            aggregated_quotes,
             ..RequestLogin::default()
         };
 

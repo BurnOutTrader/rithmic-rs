@@ -121,9 +121,30 @@ handle.subscribe_pnl_updates().await?;
 let snapshot = handle.pnl_position_snapshots().await?;
 ```
 
+## Error Handling
+
+All plant handle methods return `Result<_, RithmicError>` with typed variants you can match on for recovery decisions:
+
+```rust
+use rithmic_rs::RithmicError;
+
+match handle.subscribe("ESH6", "CME").await {
+    Ok(resp) => { /* success */ }
+    Err(RithmicError::ConnectionClosed | RithmicError::SendFailed) => {
+        handle.abort();
+        // reconnect — see examples/reconnect.rs
+    }
+    Err(RithmicError::ServerError(msg)) => eprintln!("Server rejected: {}", msg),
+    Err(e) => eprintln!("{}", e),
+}
+```
+
+`RithmicError` implements `std::error::Error`, so `?` propagation works unchanged (as shown in the quick start above).
+
 ## Connection Strategies
 
 Three strategies for initial connection:
+
 - **`Simple`**: Single attempt, fast-fail
 - **`Retry`**: Exponential backoff, capped at 60 seconds (recommended default)
 - **`AlternateWithRetry`**: Alternates between primary and alt URLs

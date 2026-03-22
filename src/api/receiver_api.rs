@@ -223,11 +223,24 @@ pub(crate) struct RithmicReceiverApi {
 }
 
 impl RithmicReceiverApi {
-    // TODO: Consider boxing RithmicMessage or using a dedicated error type to reduce
-    // Result size (~1296 bytes). Current impact is minimal since the Result is
-    // immediately matched and not passed through deep call stacks.
+    // Large Result size (~1296 bytes) due to RithmicMessage enum, but acceptable since
+    // the Result is immediately matched and not passed through deep call stacks.
     #[allow(clippy::result_large_err)]
     pub(crate) fn buf_to_message(&self, data: Bytes) -> Result<RithmicResponse, RithmicResponse> {
+        if data.len() < 4 {
+            error!("Received message too short: {} bytes", data.len());
+
+            return Err(RithmicResponse {
+                request_id: "".to_string(),
+                message: RithmicMessage::Unknown,
+                is_update: false,
+                has_more: false,
+                multi_response: false,
+                error: Some(format!("Message too short: {} bytes", data.len())),
+                source: self.source.clone(),
+            });
+        }
+
         let payload = &data[4..];
 
         let parsed_message = match MessageType::decode(payload) {
@@ -252,7 +265,8 @@ impl RithmicReceiverApi {
 
         let response = match parsed_message.template_id {
             11 => {
-                let resp = ResponseLogin::decode(payload).unwrap();
+                let resp = ResponseLogin::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -266,7 +280,8 @@ impl RithmicReceiverApi {
                 }
             }
             13 => {
-                let resp = ResponseLogout::decode(payload).unwrap();
+                let resp = ResponseLogout::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -280,7 +295,8 @@ impl RithmicReceiverApi {
                 }
             }
             15 => {
-                let resp = ResponseReferenceData::decode(payload).unwrap();
+                let resp = ResponseReferenceData::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -294,7 +310,8 @@ impl RithmicReceiverApi {
                 }
             }
             17 => {
-                let resp = ResponseRithmicSystemInfo::decode(payload).unwrap();
+                let resp = ResponseRithmicSystemInfo::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -308,7 +325,8 @@ impl RithmicReceiverApi {
                 }
             }
             19 => {
-                let resp = ResponseHeartbeat::decode(payload).unwrap();
+                let resp = ResponseHeartbeat::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -322,7 +340,8 @@ impl RithmicReceiverApi {
                 }
             }
             21 => {
-                let resp = ResponseRithmicSystemGatewayInfo::decode(payload).unwrap();
+                let resp = ResponseRithmicSystemGatewayInfo::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -336,7 +355,8 @@ impl RithmicReceiverApi {
                 }
             }
             75 => {
-                let resp = Reject::decode(payload).unwrap();
+                let resp =
+                    Reject::decode(payload).map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -350,7 +370,8 @@ impl RithmicReceiverApi {
                 }
             }
             76 => {
-                let resp = UserAccountUpdate::decode(payload).unwrap();
+                let resp = UserAccountUpdate::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -363,7 +384,8 @@ impl RithmicReceiverApi {
                 }
             }
             77 => {
-                let resp = ForcedLogout::decode(payload).unwrap();
+                let resp = ForcedLogout::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -376,7 +398,8 @@ impl RithmicReceiverApi {
                 }
             }
             101 => {
-                let resp = ResponseMarketDataUpdate::decode(payload).unwrap();
+                let resp = ResponseMarketDataUpdate::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -390,7 +413,8 @@ impl RithmicReceiverApi {
                 }
             }
             103 => {
-                let resp = ResponseGetInstrumentByUnderlying::decode(payload).unwrap();
+                let resp = ResponseGetInstrumentByUnderlying::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -405,7 +429,8 @@ impl RithmicReceiverApi {
                 }
             }
             104 => {
-                let resp = ResponseGetInstrumentByUnderlyingKeys::decode(payload).unwrap();
+                let resp = ResponseGetInstrumentByUnderlyingKeys::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -419,7 +444,8 @@ impl RithmicReceiverApi {
                 }
             }
             106 => {
-                let resp = ResponseMarketDataUpdateByUnderlying::decode(payload).unwrap();
+                let resp = ResponseMarketDataUpdateByUnderlying::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -433,7 +459,8 @@ impl RithmicReceiverApi {
                 }
             }
             108 => {
-                let resp = ResponseGiveTickSizeTypeTable::decode(payload).unwrap();
+                let resp = ResponseGiveTickSizeTypeTable::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -448,7 +475,8 @@ impl RithmicReceiverApi {
                 }
             }
             110 => {
-                let resp = ResponseSearchSymbols::decode(payload).unwrap();
+                let resp = ResponseSearchSymbols::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -463,7 +491,8 @@ impl RithmicReceiverApi {
                 }
             }
             112 => {
-                let resp = ResponseProductCodes::decode(payload).unwrap();
+                let resp = ResponseProductCodes::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -478,7 +507,8 @@ impl RithmicReceiverApi {
                 }
             }
             114 => {
-                let resp = ResponseFrontMonthContract::decode(payload).unwrap();
+                let resp = ResponseFrontMonthContract::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -492,7 +522,8 @@ impl RithmicReceiverApi {
                 }
             }
             116 => {
-                let resp = ResponseDepthByOrderSnapshot::decode(payload).unwrap();
+                let resp = ResponseDepthByOrderSnapshot::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -507,7 +538,8 @@ impl RithmicReceiverApi {
                 }
             }
             118 => {
-                let resp = ResponseDepthByOrderUpdates::decode(payload).unwrap();
+                let resp = ResponseDepthByOrderUpdates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -521,7 +553,8 @@ impl RithmicReceiverApi {
                 }
             }
             120 => {
-                let resp = ResponseGetVolumeAtPrice::decode(payload).unwrap();
+                let resp = ResponseGetVolumeAtPrice::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -536,7 +569,8 @@ impl RithmicReceiverApi {
                 }
             }
             122 => {
-                let resp = ResponseAuxilliaryReferenceData::decode(payload).unwrap();
+                let resp = ResponseAuxilliaryReferenceData::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -550,7 +584,8 @@ impl RithmicReceiverApi {
                 }
             }
             150 => {
-                let resp = LastTrade::decode(payload).unwrap();
+                let resp =
+                    LastTrade::decode(payload).map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -563,7 +598,8 @@ impl RithmicReceiverApi {
                 }
             }
             151 => {
-                let resp = BestBidOffer::decode(payload).unwrap();
+                let resp = BestBidOffer::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -576,7 +612,8 @@ impl RithmicReceiverApi {
                 }
             }
             152 => {
-                let resp = TradeStatistics::decode(payload).unwrap();
+                let resp = TradeStatistics::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -589,7 +626,8 @@ impl RithmicReceiverApi {
                 }
             }
             153 => {
-                let resp = QuoteStatistics::decode(payload).unwrap();
+                let resp = QuoteStatistics::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -602,7 +640,8 @@ impl RithmicReceiverApi {
                 }
             }
             154 => {
-                let resp = IndicatorPrices::decode(payload).unwrap();
+                let resp = IndicatorPrices::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -615,7 +654,8 @@ impl RithmicReceiverApi {
                 }
             }
             155 => {
-                let resp = EndOfDayPrices::decode(payload).unwrap();
+                let resp = EndOfDayPrices::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -628,7 +668,8 @@ impl RithmicReceiverApi {
                 }
             }
             156 => {
-                let resp = OrderBook::decode(payload).unwrap();
+                let resp =
+                    OrderBook::decode(payload).map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -641,7 +682,8 @@ impl RithmicReceiverApi {
                 }
             }
             157 => {
-                let resp = MarketMode::decode(payload).unwrap();
+                let resp =
+                    MarketMode::decode(payload).map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -654,7 +696,8 @@ impl RithmicReceiverApi {
                 }
             }
             158 => {
-                let resp = OpenInterest::decode(payload).unwrap();
+                let resp = OpenInterest::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -667,7 +710,8 @@ impl RithmicReceiverApi {
                 }
             }
             159 => {
-                let resp = FrontMonthContractUpdate::decode(payload).unwrap();
+                let resp = FrontMonthContractUpdate::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -680,7 +724,8 @@ impl RithmicReceiverApi {
                 }
             }
             160 => {
-                let resp = DepthByOrder::decode(payload).unwrap();
+                let resp = DepthByOrder::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -693,7 +738,8 @@ impl RithmicReceiverApi {
                 }
             }
             161 => {
-                let resp = DepthByOrderEndEvent::decode(payload).unwrap();
+                let resp = DepthByOrderEndEvent::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -706,7 +752,8 @@ impl RithmicReceiverApi {
                 }
             }
             162 => {
-                let resp = SymbolMarginRate::decode(payload).unwrap();
+                let resp = SymbolMarginRate::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -719,7 +766,8 @@ impl RithmicReceiverApi {
                 }
             }
             163 => {
-                let resp = OrderPriceLimits::decode(payload).unwrap();
+                let resp = OrderPriceLimits::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -732,7 +780,8 @@ impl RithmicReceiverApi {
                 }
             }
             201 => {
-                let resp = ResponseTimeBarUpdate::decode(payload).unwrap();
+                let resp = ResponseTimeBarUpdate::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -746,7 +795,8 @@ impl RithmicReceiverApi {
                 }
             }
             203 => {
-                let resp = ResponseTimeBarReplay::decode(payload).unwrap();
+                let resp = ResponseTimeBarReplay::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -761,7 +811,8 @@ impl RithmicReceiverApi {
                 }
             }
             205 => {
-                let resp = ResponseTickBarUpdate::decode(payload).unwrap();
+                let resp = ResponseTickBarUpdate::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -775,7 +826,8 @@ impl RithmicReceiverApi {
                 }
             }
             207 => {
-                let resp = ResponseTickBarReplay::decode(payload).unwrap();
+                let resp = ResponseTickBarReplay::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -790,7 +842,8 @@ impl RithmicReceiverApi {
                 }
             }
             209 => {
-                let resp = ResponseVolumeProfileMinuteBars::decode(payload).unwrap();
+                let resp = ResponseVolumeProfileMinuteBars::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -805,7 +858,8 @@ impl RithmicReceiverApi {
                 }
             }
             211 => {
-                let resp = ResponseResumeBars::decode(payload).unwrap();
+                let resp = ResponseResumeBars::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -819,7 +873,8 @@ impl RithmicReceiverApi {
                 }
             }
             250 => {
-                let resp = TimeBar::decode(payload).unwrap();
+                let resp =
+                    TimeBar::decode(payload).map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -832,7 +887,8 @@ impl RithmicReceiverApi {
                 }
             }
             251 => {
-                let resp = TickBar::decode(payload).unwrap();
+                let resp =
+                    TickBar::decode(payload).map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -845,7 +901,8 @@ impl RithmicReceiverApi {
                 }
             }
             301 => {
-                let resp = ResponseLoginInfo::decode(payload).unwrap();
+                let resp = ResponseLoginInfo::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -859,7 +916,8 @@ impl RithmicReceiverApi {
                 }
             }
             303 => {
-                let resp = ResponseAccountList::decode(payload).unwrap();
+                let resp = ResponseAccountList::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -874,7 +932,8 @@ impl RithmicReceiverApi {
                 }
             }
             305 => {
-                let resp = ResponseAccountRmsInfo::decode(payload).unwrap();
+                let resp = ResponseAccountRmsInfo::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -889,7 +948,8 @@ impl RithmicReceiverApi {
                 }
             }
             307 => {
-                let resp = ResponseProductRmsInfo::decode(payload).unwrap();
+                let resp = ResponseProductRmsInfo::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -904,7 +964,8 @@ impl RithmicReceiverApi {
                 }
             }
             309 => {
-                let resp = ResponseSubscribeForOrderUpdates::decode(payload).unwrap();
+                let resp = ResponseSubscribeForOrderUpdates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -918,7 +979,8 @@ impl RithmicReceiverApi {
                 }
             }
             311 => {
-                let resp = ResponseTradeRoutes::decode(payload).unwrap();
+                let resp = ResponseTradeRoutes::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -933,7 +995,8 @@ impl RithmicReceiverApi {
                 }
             }
             313 => {
-                let resp = ResponseNewOrder::decode(payload).unwrap();
+                let resp = ResponseNewOrder::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -948,7 +1011,8 @@ impl RithmicReceiverApi {
                 }
             }
             315 => {
-                let resp = ResponseModifyOrder::decode(payload).unwrap();
+                let resp = ResponseModifyOrder::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -963,7 +1027,8 @@ impl RithmicReceiverApi {
                 }
             }
             317 => {
-                let resp = ResponseCancelOrder::decode(payload).unwrap();
+                let resp = ResponseCancelOrder::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -978,7 +1043,8 @@ impl RithmicReceiverApi {
                 }
             }
             319 => {
-                let resp = ResponseShowOrderHistoryDates::decode(payload).unwrap();
+                let resp = ResponseShowOrderHistoryDates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -993,7 +1059,8 @@ impl RithmicReceiverApi {
                 }
             }
             321 => {
-                let resp = ResponseShowOrders::decode(payload).unwrap();
+                let resp = ResponseShowOrders::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1007,7 +1074,8 @@ impl RithmicReceiverApi {
                 }
             }
             323 => {
-                let resp = ResponseShowOrderHistory::decode(payload).unwrap();
+                let resp = ResponseShowOrderHistory::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1021,7 +1089,8 @@ impl RithmicReceiverApi {
                 }
             }
             325 => {
-                let resp = ResponseShowOrderHistorySummary::decode(payload).unwrap();
+                let resp = ResponseShowOrderHistorySummary::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1035,7 +1104,8 @@ impl RithmicReceiverApi {
                 }
             }
             327 => {
-                let resp = ResponseShowOrderHistoryDetail::decode(payload).unwrap();
+                let resp = ResponseShowOrderHistoryDetail::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1049,7 +1119,8 @@ impl RithmicReceiverApi {
                 }
             }
             329 => {
-                let resp = ResponseOcoOrder::decode(payload).unwrap();
+                let resp = ResponseOcoOrder::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1064,7 +1135,8 @@ impl RithmicReceiverApi {
                 }
             }
             331 => {
-                let resp = ResponseBracketOrder::decode(payload).unwrap();
+                let resp = ResponseBracketOrder::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1079,7 +1151,8 @@ impl RithmicReceiverApi {
                 }
             }
             333 => {
-                let resp = ResponseUpdateTargetBracketLevel::decode(payload).unwrap();
+                let resp = ResponseUpdateTargetBracketLevel::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1093,7 +1166,8 @@ impl RithmicReceiverApi {
                 }
             }
             335 => {
-                let resp = ResponseUpdateStopBracketLevel::decode(payload).unwrap();
+                let resp = ResponseUpdateStopBracketLevel::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1107,7 +1181,8 @@ impl RithmicReceiverApi {
                 }
             }
             337 => {
-                let resp = ResponseSubscribeToBracketUpdates::decode(payload).unwrap();
+                let resp = ResponseSubscribeToBracketUpdates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1121,7 +1196,8 @@ impl RithmicReceiverApi {
                 }
             }
             339 => {
-                let resp = ResponseShowBrackets::decode(payload).unwrap();
+                let resp = ResponseShowBrackets::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1136,7 +1212,8 @@ impl RithmicReceiverApi {
                 }
             }
             341 => {
-                let resp = ResponseShowBracketStops::decode(payload).unwrap();
+                let resp = ResponseShowBracketStops::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1151,7 +1228,8 @@ impl RithmicReceiverApi {
                 }
             }
             343 => {
-                let resp = ResponseListExchangePermissions::decode(payload).unwrap();
+                let resp = ResponseListExchangePermissions::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1166,7 +1244,8 @@ impl RithmicReceiverApi {
                 }
             }
             345 => {
-                let resp = ResponseLinkOrders::decode(payload).unwrap();
+                let resp = ResponseLinkOrders::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1180,7 +1259,8 @@ impl RithmicReceiverApi {
                 }
             }
             347 => {
-                let resp = ResponseCancelAllOrders::decode(payload).unwrap();
+                let resp = ResponseCancelAllOrders::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1194,7 +1274,8 @@ impl RithmicReceiverApi {
                 }
             }
             349 => {
-                let resp = ResponseEasyToBorrowList::decode(payload).unwrap();
+                let resp = ResponseEasyToBorrowList::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1209,7 +1290,8 @@ impl RithmicReceiverApi {
                 }
             }
             350 => {
-                let resp = TradeRoute::decode(payload).unwrap();
+                let resp =
+                    TradeRoute::decode(payload).map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1222,7 +1304,8 @@ impl RithmicReceiverApi {
                 }
             }
             351 => {
-                let resp = RithmicOrderNotification::decode(payload).unwrap();
+                let resp = RithmicOrderNotification::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1235,7 +1318,8 @@ impl RithmicReceiverApi {
                 }
             }
             352 => {
-                let resp = ExchangeOrderNotification::decode(payload).unwrap();
+                let resp = ExchangeOrderNotification::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1248,7 +1332,8 @@ impl RithmicReceiverApi {
                 }
             }
             353 => {
-                let resp = BracketUpdates::decode(payload).unwrap();
+                let resp = BracketUpdates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1261,7 +1346,8 @@ impl RithmicReceiverApi {
                 }
             }
             354 => {
-                let resp = AccountListUpdates::decode(payload).unwrap();
+                let resp = AccountListUpdates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1274,7 +1360,8 @@ impl RithmicReceiverApi {
                 }
             }
             355 => {
-                let resp = UpdateEasyToBorrowList::decode(payload).unwrap();
+                let resp = UpdateEasyToBorrowList::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1287,7 +1374,8 @@ impl RithmicReceiverApi {
                 }
             }
             356 => {
-                let resp = AccountRmsUpdates::decode(payload).unwrap();
+                let resp = AccountRmsUpdates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1300,7 +1388,8 @@ impl RithmicReceiverApi {
                 }
             }
             401 => {
-                let resp = ResponsePnLPositionUpdates::decode(payload).unwrap();
+                let resp = ResponsePnLPositionUpdates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1314,7 +1403,8 @@ impl RithmicReceiverApi {
                 }
             }
             403 => {
-                let resp = ResponsePnLPositionSnapshot::decode(payload).unwrap();
+                let resp = ResponsePnLPositionSnapshot::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1328,7 +1418,8 @@ impl RithmicReceiverApi {
                 }
             }
             450 => {
-                let resp = InstrumentPnLPositionUpdate::decode(payload).unwrap();
+                let resp = InstrumentPnLPositionUpdate::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1341,7 +1432,8 @@ impl RithmicReceiverApi {
                 }
             }
             451 => {
-                let resp = AccountPnLPositionUpdate::decode(payload).unwrap();
+                let resp = AccountPnLPositionUpdate::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
                     request_id: "".to_string(),
@@ -1354,7 +1446,8 @@ impl RithmicReceiverApi {
                 }
             }
             501 => {
-                let resp = ResponseListUnacceptedAgreements::decode(payload).unwrap();
+                let resp = ResponseListUnacceptedAgreements::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1369,7 +1462,8 @@ impl RithmicReceiverApi {
                 }
             }
             503 => {
-                let resp = ResponseListAcceptedAgreements::decode(payload).unwrap();
+                let resp = ResponseListAcceptedAgreements::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1384,7 +1478,8 @@ impl RithmicReceiverApi {
                 }
             }
             505 => {
-                let resp = ResponseAcceptAgreement::decode(payload).unwrap();
+                let resp = ResponseAcceptAgreement::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1398,7 +1493,8 @@ impl RithmicReceiverApi {
                 }
             }
             507 => {
-                let resp = ResponseShowAgreement::decode(payload).unwrap();
+                let resp = ResponseShowAgreement::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1413,7 +1509,8 @@ impl RithmicReceiverApi {
                 }
             }
             509 => {
-                let resp = ResponseSetRithmicMrktDataSelfCertStatus::decode(payload).unwrap();
+                let resp = ResponseSetRithmicMrktDataSelfCertStatus::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1427,7 +1524,8 @@ impl RithmicReceiverApi {
                 }
             }
             3501 => {
-                let resp = ResponseModifyOrderReferenceData::decode(payload).unwrap();
+                let resp = ResponseModifyOrderReferenceData::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1441,7 +1539,8 @@ impl RithmicReceiverApi {
                 }
             }
             3503 => {
-                let resp = ResponseOrderSessionConfig::decode(payload).unwrap();
+                let resp = ResponseOrderSessionConfig::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1455,7 +1554,8 @@ impl RithmicReceiverApi {
                 }
             }
             3505 => {
-                let resp = ResponseExitPosition::decode(payload).unwrap();
+                let resp = ResponseExitPosition::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
                 let error = get_error(&resp.rp_code);
 
@@ -1470,7 +1570,8 @@ impl RithmicReceiverApi {
                 }
             }
             3507 => {
-                let resp = ResponseReplayExecutions::decode(payload).unwrap();
+                let resp = ResponseReplayExecutions::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1484,7 +1585,8 @@ impl RithmicReceiverApi {
                 }
             }
             3509 => {
-                let resp = ResponseAccountRmsUpdates::decode(payload).unwrap();
+                let resp = ResponseAccountRmsUpdates::decode(payload)
+                    .map_err(|e| decode_error(&self.source, e, false))?;
                 let error = get_error(&resp.rp_code);
 
                 RithmicResponse {
@@ -1540,12 +1642,31 @@ fn get_error(rp_code: &[String]) -> Option<String> {
     } else {
         error!("receiver_api: error {:#?}", rp_code);
 
-        Some(rp_code[1].clone())
+        let msg = rp_code
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| rp_code[0].clone());
+
+        Some(msg)
     }
 }
 
 fn check_message_error(message: &RithmicResponse) -> Option<String> {
     message.error.as_ref().map(|e| e.to_string())
+}
+
+fn decode_error(source: &str, e: prost::DecodeError, is_update: bool) -> RithmicResponse {
+    error!("Failed to decode protobuf message: {}", e);
+
+    RithmicResponse {
+        request_id: "".to_string(),
+        message: RithmicMessage::Unknown,
+        is_update,
+        has_more: false,
+        multi_response: false,
+        error: Some(format!("Failed to decode message: {}", e)),
+        source: source.to_string(),
+    }
 }
 
 #[cfg(test)]

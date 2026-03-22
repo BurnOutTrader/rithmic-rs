@@ -92,10 +92,32 @@
 //! }
 //! ```
 //!
+//! ## Error Handling
+//!
+//! All plant handle methods return [`Result<_, RithmicError>`]. The [`RithmicError`] enum
+//! lets you programmatically distinguish error kinds:
+//!
+//! ```ignore
+//! use rithmic_rs::RithmicError;
+//!
+//! match handle.subscribe("ESH6", "CME").await {
+//!     Ok(resp) => { /* success */ }
+//!     Err(RithmicError::ConnectionClosed) => { handle.abort(); /* reconnect */ }
+//!     Err(RithmicError::SendFailed) => { handle.abort(); /* reconnect */ }
+//!     Err(RithmicError::EmptyResponse) => { /* unexpected empty response */ }
+//!     Err(RithmicError::ServerError(msg)) => { eprintln!("Server: {}", msg); }
+//!     Err(e) => { eprintln!("Error: {}", e); }
+//! }
+//! ```
+//!
+//! `RithmicError` implements [`std::error::Error`] and [`Display`](std::fmt::Display),
+//! so it works with `?` in functions returning `Box<dyn Error>`.
+//!
 //! ## Module Organization
 //!
 //! - [`plants`]: Specialized clients for different data types (ticker, order, P&L, history)
 //! - [`config`]: Configuration API for connecting to Rithmic
+//! - [`error`]: Typed error enum for plant handle methods
 //! - [`api`]: Low-level API interfaces for sending and receiving messages
 //! - [`rti`]: Protocol message definitions
 //! - [`ws`]: WebSocket connectivity and connection strategies
@@ -112,6 +134,9 @@ pub mod api;
 
 /// Configuration API for connecting to Rithmic
 pub mod config;
+
+/// Error types for plant handle methods.
+pub mod error;
 
 mod ping_manager;
 
@@ -156,6 +181,9 @@ pub use plants::ticker_plant::{RithmicTickerPlant, RithmicTickerPlantHandle};
 
 // Re-export modern configuration types for convenience
 pub use config::{ConfigError, RithmicConfig, RithmicEnv};
+
+// Re-export error types
+pub use error::RithmicError;
 
 // Re-export connection strategy
 pub use ws::ConnectStrategy;

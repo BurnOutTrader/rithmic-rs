@@ -11,7 +11,8 @@ use std::{collections::HashSet, env};
 use tracing::{error, info, warn};
 
 use rithmic_rs::{
-    ConnectStrategy, RithmicConfig, RithmicEnv, RithmicTickerPlant, rti::messages::RithmicMessage,
+    ConnectStrategy, RithmicConfig, RithmicEnv, RithmicError, RithmicTickerPlant,
+    rti::messages::RithmicMessage,
 };
 
 #[tokio::main]
@@ -41,14 +42,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut handle = plant.get_handle();
 
         if let Err(e) = handle.login().await {
-            error!("Login failed: {}", e);
+            match &e {
+                RithmicError::ConnectionClosed | RithmicError::SendFailed => {
+                    error!("Login failed (connection issue): {}", e);
+                }
+                RithmicError::ServerError(msg) => {
+                    error!("Login rejected by server: {}", msg);
+                }
+                _ => {
+                    error!("Login failed: {}", e);
+                }
+            }
+
             continue;
         }
 
         // Subscribe to all tracked symbols
         for (symbol, exchange) in &subscriptions {
-            let _ = handle.subscribe(symbol, exchange).await;
-            info!("Subscribed to {} on {}", symbol, exchange);
+            if let Err(e) = handle.subscribe(symbol, exchange).await {
+                match e {
+                    RithmicError::ConnectionClosed | RithmicError::SendFailed => {
+                        warn!("Subscribe failed (connection lost), reconnecting...");
+                        break;
+                    }
+                    _ => warn!("Subscribe error for {} {}: {}", symbol, exchange, e),
+                }
+            } else {
+                info!("Subscribed to {} on {}", symbol, exchange);
+            }
         }
 
         // Process until disconnect

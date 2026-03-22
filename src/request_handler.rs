@@ -1,17 +1,20 @@
-use crate::{api::receiver_api::RithmicResponse, rti::messages::RithmicMessage};
 use std::collections::HashMap;
 use tokio::sync::oneshot;
 use tracing::error;
 
+use crate::{
+    api::receiver_api::RithmicResponse, error::RithmicError, rti::messages::RithmicMessage,
+};
+
 #[derive(Debug)]
 pub struct RithmicRequest {
     pub request_id: String,
-    pub responder: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+    pub responder: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
 }
 
 #[derive(Debug)]
 pub struct RithmicRequestHandler {
-    handle_map: HashMap<String, oneshot::Sender<Result<Vec<RithmicResponse>, String>>>,
+    handle_map: HashMap<String, oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>>,
     response_vec_map: HashMap<String, Vec<RithmicResponse>>,
 }
 
@@ -30,7 +33,7 @@ impl RithmicRequestHandler {
 
     fn send_to_responder(
         &self,
-        responder: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        responder: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
         responses: Vec<RithmicResponse>,
         request_id: &str,
     ) {
@@ -39,6 +42,18 @@ impl RithmicRequestHandler {
                 "Failed to send response: receiver dropped for request_id {}: {:#?}",
                 request_id, e
             );
+        }
+    }
+
+    /// Remove a pending request and send an error through its oneshot channel.
+    ///
+    /// Returns `true` if the request was found and the error was sent.
+    pub fn fail_request(&mut self, request_id: &str, error: RithmicError) -> bool {
+        if let Some(responder) = self.handle_map.remove(request_id) {
+            let _ = responder.send(Err(error));
+            true
+        } else {
+            false
         }
     }
 
@@ -84,6 +99,18 @@ impl RithmicRequestHandler {
                 }
             }
         }
+    }
+
+    /// Send [`RithmicError::ConnectionClosed`] to all pending request responders, then clear
+    /// internal state.
+    ///
+    /// Call this during an unclean shutdown (e.g., abort) to unblock any tasks that are
+    /// waiting for a response that will never arrive.
+    pub fn drain_and_drop(&mut self) {
+        for (_, responder) in self.handle_map.drain() {
+            let _ = responder.send(Err(RithmicError::ConnectionClosed));
+        }
+        self.response_vec_map.clear();
     }
 }
 

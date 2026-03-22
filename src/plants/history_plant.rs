@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use tracing::{error, info, warn};
 
 use tokio_tungstenite::{
@@ -13,6 +12,7 @@ use crate::{
         sender_api::RithmicSenderApi,
     },
     config::RithmicConfig,
+    error::RithmicError,
     ping_manager::PingManager,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{
@@ -39,15 +39,16 @@ use tokio::{
 
 pub(crate) enum HistoryPlantCommand {
     Close,
+    Abort,
     ListSystemInfo {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     Login {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SetLogin,
     Logout {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SendHeartbeat,
     UpdateHeartbeat {
@@ -56,7 +57,7 @@ pub(crate) enum HistoryPlantCommand {
     LoadTicks {
         end_time_sec: i32,
         exchange: String,
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
         start_time_sec: i32,
         symbol: String,
     },
@@ -65,7 +66,7 @@ pub(crate) enum HistoryPlantCommand {
         bar_type_period: i32,
         end_time_sec: i32,
         exchange: String,
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
         start_time_sec: i32,
         symbol: String,
     },
@@ -78,11 +79,11 @@ pub(crate) enum HistoryPlantCommand {
         end_time_sec: i32,
         user_max_count: Option<i32>,
         resume_bars: Option<bool>,
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ResumeBars {
         request_key: String,
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SubscribeTimeBarUpdates {
         symbol: String,
@@ -90,7 +91,7 @@ pub(crate) enum HistoryPlantCommand {
         bar_type: request_time_bar_update::BarType,
         bar_type_period: i32,
         request: request_time_bar_update::Request,
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SubscribeTickBarUpdates {
         symbol: String,
@@ -99,7 +100,7 @@ pub(crate) enum HistoryPlantCommand {
         bar_sub_type: request_tick_bar_update::BarSubType,
         bar_type_specifier: String,
         request: request_tick_bar_update::Request,
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
 }
 
@@ -264,7 +265,20 @@ impl HistoryPlant {
     }
 }
 
-#[async_trait]
+impl HistoryPlant {
+    async fn send_or_fail(&mut self, msg: Message, request_id: &str) {
+        if self.rithmic_sender.send(msg).await.is_err() {
+            error!(
+                "history_plant: WebSocket send failed for request {}",
+                request_id
+            );
+
+            self.request_handler
+                .fail_request(request_id, RithmicError::SendFailed);
+        }
+    }
+}
+
 impl PlantActor for HistoryPlant {
     type Command = HistoryPlantCommand;
 
@@ -304,10 +318,29 @@ impl PlantActor for HistoryPlant {
                 }
               }
               Some(message) = self.request_receiver.recv() => {
+                if matches!(message, HistoryPlantCommand::Abort) {
+                    info!("history_plant: abort requested, shutting down immediately");
+
+                    let error_response = RithmicResponse {
+                        request_id: "".to_string(),
+                        message: RithmicMessage::ConnectionError,
+                        is_update: true,
+                        has_more: false,
+                        multi_response: false,
+                        error: Some("Plant aborted".to_string()),
+                        source: self.rithmic_receiver_api.source.clone(),
+                    };
+
+                    let _ = self.subscription_sender.send(error_response);
+
+                    self.request_handler.drain_and_drop();
+
+                    break;
+                }
                 self.handle_command(message).await;
               }
               Some(message) = self.rithmic_reader.next() => {
-                let stop = self.handle_rithmic_message(message).await.unwrap();
+                let stop = self.handle_rithmic_message(message).await;
 
                 if stop {
                   break;
@@ -318,10 +351,7 @@ impl PlantActor for HistoryPlant {
         }
     }
 
-    async fn handle_rithmic_message(
-        &mut self,
-        message: Result<Message, Error>,
-    ) -> Result<bool, ()> {
+    async fn handle_rithmic_message(&mut self, message: Result<Message, Error>) -> bool {
         let mut stop = false;
 
         match message {
@@ -351,7 +381,7 @@ impl PlantActor for HistoryPlant {
                         }
 
                         // Always drop heartbeat responses (successful or error)
-                        return Ok(false);
+                        return false;
                     }
 
                     if response.is_update {
@@ -479,30 +509,27 @@ impl PlantActor for HistoryPlant {
             }
         }
 
-        Ok(stop)
+        stop
     }
 
     async fn handle_command(&mut self, command: HistoryPlantCommand) {
         match command {
             HistoryPlantCommand::Close => {
-                self.rithmic_sender
-                    .send(Message::Close(None))
-                    .await
-                    .unwrap();
+                let _ = self.rithmic_sender.send(Message::Close(None)).await;
             }
             HistoryPlantCommand::ListSystemInfo { response_sender } => {
                 let (list_system_info_buf, id) =
                     self.rithmic_sender_api.request_rithmic_system_info();
+
+                let request_id = id.clone();
 
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(list_system_info_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(list_system_info_buf.into()), &request_id)
+                    .await;
             }
             HistoryPlantCommand::Login { response_sender } => {
                 let (login_buf, id) = self.rithmic_sender_api.request_login(
@@ -510,19 +537,20 @@ impl PlantActor for HistoryPlant {
                     SysInfraType::HistoryPlant,
                     &self.config.user,
                     &self.config.password,
+                    None,
                 );
 
                 info!("history_plant: sending login request {}", id);
+
+                let request_id = id.clone();
 
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(login_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(login_buf.into()), &request_id)
+                    .await;
             }
             HistoryPlantCommand::SetLogin => {
                 self.logged_in = true;
@@ -530,15 +558,15 @@ impl PlantActor for HistoryPlant {
             HistoryPlantCommand::Logout { response_sender } => {
                 let (logout_buf, id) = self.rithmic_sender_api.request_logout();
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(logout_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(logout_buf.into()), &request_id)
+                    .await;
             }
             HistoryPlantCommand::SendHeartbeat => {
                 let (heartbeat_bf, _id) = self.rithmic_sender_api.request_heartbeat();
@@ -565,15 +593,15 @@ impl PlantActor for HistoryPlant {
                     end_time_sec,
                 );
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(tick_bar_replay_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(tick_bar_replay_buf.into()), &request_id)
+                    .await;
             }
             HistoryPlantCommand::LoadTimeBars {
                 bar_type,
@@ -593,15 +621,15 @@ impl PlantActor for HistoryPlant {
                     end_time_sec,
                 );
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(time_bar_replay_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(time_bar_replay_buf.into()), &request_id)
+                    .await;
             }
             HistoryPlantCommand::LoadVolumeProfileMinuteBars {
                 symbol,
@@ -623,15 +651,15 @@ impl PlantActor for HistoryPlant {
                     resume_bars,
                 );
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(buf.into()), &request_id)
+                    .await;
             }
             HistoryPlantCommand::ResumeBars {
                 request_key,
@@ -639,15 +667,15 @@ impl PlantActor for HistoryPlant {
             } => {
                 let (buf, id) = self.rithmic_sender_api.request_resume_bars(&request_key);
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(buf.into()), &request_id)
+                    .await;
             }
             HistoryPlantCommand::SubscribeTimeBarUpdates {
                 symbol,
@@ -665,15 +693,15 @@ impl PlantActor for HistoryPlant {
                     request,
                 );
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(buf.into()), &request_id)
+                    .await;
             }
             HistoryPlantCommand::SubscribeTickBarUpdates {
                 symbol,
@@ -693,15 +721,18 @@ impl PlantActor for HistoryPlant {
                     request,
                 );
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(buf.into()), &request_id)
+                    .await;
+            }
+            HistoryPlantCommand::Abort => {
+                unreachable!("Abort is handled in run() before handle_command");
             }
         }
     }
@@ -719,8 +750,8 @@ impl RithmicHistoryPlantHandle {
     ///
     /// Returns information about the connected Rithmic system, including
     /// system name, gateway info, and available services.
-    pub async fn list_system_info(&self) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    pub async fn list_system_info(&self) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::ListSystemInfo {
             response_sender: tx,
@@ -728,10 +759,11 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx
-            .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0))
+        rx.await
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)
     }
 
     /// Log in to the Rithmic History plant
@@ -740,10 +772,10 @@ impl RithmicHistoryPlantHandle {
     ///
     /// # Returns
     /// The login response or an error message
-    pub async fn login(&self) -> Result<RithmicResponse, String> {
+    pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
         info!("history_plant: logging in ");
 
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::Login {
             response_sender: tx,
@@ -752,12 +784,14 @@ impl RithmicHistoryPlantHandle {
         let _ = self.sender.send(command).await;
         let response = rx
             .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0);
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)?;
 
         if let Some(err) = response.error {
             error!("history_plant: login failed {:?}", err);
-            Err(err)
+            Err(RithmicError::ServerError(err))
         } else {
             let _ = self.sender.send(HistoryPlantCommand::SetLogin).await;
 
@@ -788,8 +822,8 @@ impl RithmicHistoryPlantHandle {
     ///
     /// # Returns
     /// The logout response or an error message
-    pub async fn disconnect(&self) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    pub async fn disconnect(&self) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::Logout {
             response_sender: tx,
@@ -798,11 +832,22 @@ impl RithmicHistoryPlantHandle {
         let _ = self.sender.send(command).await;
         let response = rx
             .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0);
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)?;
         let _ = self.sender.send(HistoryPlantCommand::Close).await;
 
         Ok(response)
+    }
+
+    /// Immediately shut down the history plant actor without a graceful logout.
+    ///
+    /// Use when the connection is known to be dead and `disconnect()` would hang.
+    /// All pending request callers will receive an error. The subscription channel
+    /// receives a `ConnectionError` notification. Safe to call if the actor is already dead.
+    pub fn abort(&self) {
+        let _ = self.sender.try_send(HistoryPlantCommand::Abort);
     }
 
     /// Load historical tick data for a specific symbol and time range
@@ -821,8 +866,8 @@ impl RithmicHistoryPlantHandle {
         exchange: String,
         start_time_sec: i32,
         end_time_sec: i32,
-    ) -> Result<Vec<RithmicResponse>, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::LoadTicks {
             exchange,
@@ -834,7 +879,7 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        rx.await.map_err(|_| "Connection closed".to_string())?
+        rx.await.map_err(|_| RithmicError::ConnectionClosed)?
     }
 
     /// Load historical time bar data for a specific symbol and time range
@@ -857,8 +902,8 @@ impl RithmicHistoryPlantHandle {
         bar_type_period: i32,
         start_time_sec: i32,
         end_time_sec: i32,
-    ) -> Result<Vec<RithmicResponse>, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::LoadTimeBars {
             bar_type,
@@ -872,7 +917,7 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        rx.await.map_err(|_| "Connection closed".to_string())?
+        rx.await.map_err(|_| RithmicError::ConnectionClosed)?
     }
 
     /// Load volume profile minute bars
@@ -898,8 +943,8 @@ impl RithmicHistoryPlantHandle {
         end_time_sec: i32,
         user_max_count: Option<i32>,
         resume_bars: Option<bool>,
-    ) -> Result<Vec<RithmicResponse>, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::LoadVolumeProfileMinuteBars {
             symbol,
@@ -914,7 +959,7 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        rx.await.map_err(|_| "Connection closed".to_string())?
+        rx.await.map_err(|_| RithmicError::ConnectionClosed)?
     }
 
     /// Resume a previously truncated bars request
@@ -926,8 +971,11 @@ impl RithmicHistoryPlantHandle {
     ///
     /// # Returns
     /// The remaining bar data responses or an error message
-    pub async fn resume_bars(&self, request_key: String) -> Result<Vec<RithmicResponse>, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    pub async fn resume_bars(
+        &self,
+        request_key: String,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::ResumeBars {
             request_key,
@@ -936,7 +984,7 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        rx.await.map_err(|_| "Connection closed".to_string())?
+        rx.await.map_err(|_| RithmicError::ConnectionClosed)?
     }
 
     /// Subscribe to live time bar updates
@@ -957,8 +1005,8 @@ impl RithmicHistoryPlantHandle {
         bar_type: request_time_bar_update::BarType,
         bar_type_period: i32,
         request: request_time_bar_update::Request,
-    ) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    ) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::SubscribeTimeBarUpdates {
             symbol: symbol.to_string(),
@@ -971,10 +1019,11 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx
-            .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0))
+        rx.await
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)
     }
 
     /// Subscribe to live tick bar updates
@@ -997,8 +1046,8 @@ impl RithmicHistoryPlantHandle {
         bar_sub_type: request_tick_bar_update::BarSubType,
         bar_type_specifier: &str,
         request: request_tick_bar_update::Request,
-    ) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    ) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::SubscribeTickBarUpdates {
             symbol: symbol.to_string(),
@@ -1012,10 +1061,11 @@ impl RithmicHistoryPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx
-            .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0))
+        rx.await
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)
     }
 }
 
