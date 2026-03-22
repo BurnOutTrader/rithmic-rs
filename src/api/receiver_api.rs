@@ -97,6 +97,8 @@ use crate::rti::{
 /// # }
 /// ```
 #[derive(Debug, Clone)]
+#[non_exhaustive]
+#[allow(missing_docs)]
 pub struct RithmicResponse {
     pub request_id: String,
     pub message: RithmicMessage,

@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Track subscriptions to restore after reconnect
     let mut subscriptions: HashSet<(String, String)> = HashSet::new();
-    let symbol = env::var("SYMBOL").unwrap_or_else(|_| "ESH6".to_string());
+    let symbol = env::var("SYMBOL").unwrap_or_else(|_| "ESM6".to_string());
     let exchange = env::var("EXCHANGE").unwrap_or_else(|_| "CME".to_string());
     subscriptions.insert((symbol, exchange));
 

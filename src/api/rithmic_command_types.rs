@@ -22,6 +22,7 @@ use crate::rti::{
 /// }).await?;
 /// ```
 #[derive(Debug, Clone, Default)]
+#[allow(missing_docs)]
 pub struct LoginConfig {
     /// Only applicable to the ticker plant.
     pub aggregated_quotes: Option<bool>,
@@ -101,7 +102,7 @@ pub struct RithmicOcoOrderLeg {
 ///     symbol: "ESH6".to_string(),
 ///     exchange: "CME".to_string(),
 ///     action: BracketTransactionType::Buy,
-///     qty: 1,
+///     quantity: 1,
 ///     price_type: BracketPriceType::Limit,
 ///     price: Some(5000.0),
 ///     duration: BracketDuration::Day,
@@ -127,7 +128,7 @@ pub struct RithmicBracketOrder {
     /// Profit target distance in ticks from entry
     pub profit_ticks: i32,
     /// Number of contracts
-    pub qty: i32,
+    pub quantity: i32,
     /// Stop loss distance in ticks from entry
     pub stop_ticks: i32,
     /// Trading symbol (e.g., "ESH6")

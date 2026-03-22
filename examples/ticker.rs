@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Front month: {:?}", front_month);
 
     // Subscribe to market data
-    let symbol = env::var("SYMBOL").unwrap_or_else(|_| format!("{}H6", product));
+    let symbol = env::var("SYMBOL").unwrap_or_else(|_| format!("{}M6", product));
     handle.subscribe(&symbol, &exchange).await?;
 
     let mut count = 0;
