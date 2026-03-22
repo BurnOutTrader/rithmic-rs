@@ -4,6 +4,7 @@ use crate::{
     ConnectStrategy,
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
+        rithmic_command_types::LoginConfig,
         sender_api::RithmicSenderApi,
     },
     config::RithmicConfig,
@@ -40,6 +41,7 @@ pub(crate) enum PnlPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     Login {
+        config: LoginConfig,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SetLogin,
@@ -491,13 +493,16 @@ impl PlantActor for PnlPlant {
                 self.send_or_fail(Message::Binary(list_system_info_buf.into()), &request_id)
                     .await;
             }
-            PnlPlantCommand::Login { response_sender } => {
+            PnlPlantCommand::Login {
+                config,
+                response_sender,
+            } => {
                 let (login_buf, id) = self.rithmic_sender_api.request_login(
                     &self.config.system_name,
                     SysInfraType::PnlPlant,
                     &self.config.user,
                     &self.config.password,
-                    None,
+                    &config,
                 );
 
                 info!("pnl_plant: sending login request {}", id);
@@ -622,11 +627,31 @@ impl RithmicPnlPlantHandle {
     /// # Returns
     /// The login response or an error message
     pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
+        self.login_with_config(LoginConfig::default()).await
+    }
+
+    /// Log in to the Rithmic PnL plant with custom configuration
+    ///
+    /// This must be called before subscribing to any PnL data.
+    ///
+    /// # Arguments
+    /// * `config` - Login configuration options. See [`LoginConfig`] for details.
+    ///
+    /// # Returns
+    /// The login response or an error message
+    pub async fn login_with_config(
+        &self,
+        config: LoginConfig,
+    ) -> Result<RithmicResponse, RithmicError> {
         info!("pnl_plant: logging in");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
+        let mut config = config;
+        config.aggregated_quotes = None;
+
         let command = PnlPlantCommand::Login {
+            config,
             response_sender: tx,
         };
 

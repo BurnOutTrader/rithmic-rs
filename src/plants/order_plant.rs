@@ -10,8 +10,8 @@ use crate::{
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         rithmic_command_types::{
-            RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder, RithmicOcoOrderLeg,
-            RithmicOrder,
+            LoginConfig, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
+            RithmicOcoOrderLeg, RithmicOrder,
         },
         sender_api::RithmicSenderApi,
     },
@@ -45,6 +45,7 @@ pub(crate) enum OrderPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     Login {
+        config: LoginConfig,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SetLogin,
@@ -668,13 +669,16 @@ impl PlantActor for OrderPlant {
                 self.send_or_fail(Message::Binary(list_system_info_buf.into()), &request_id)
                     .await;
             }
-            OrderPlantCommand::Login { response_sender } => {
+            OrderPlantCommand::Login {
+                config,
+                response_sender,
+            } => {
                 let (login_buf, id) = self.rithmic_sender_api.request_login(
                     &self.config.system_name,
                     SysInfraType::OrderPlant,
                     &self.config.user,
                     &self.config.password,
-                    None,
+                    &config,
                 );
 
                 info!("order_plant: sending login request {}", id);
@@ -1330,11 +1334,31 @@ impl RithmicOrderPlantHandle {
     /// # Returns
     /// The login response or an error message
     pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
+        self.login_with_config(LoginConfig::default()).await
+    }
+
+    /// Log in to the Rithmic Order plant with custom configuration
+    ///
+    /// This must be called before sending orders or subscriptions.
+    ///
+    /// # Arguments
+    /// * `config` - Login configuration options. See [`LoginConfig`] for details.
+    ///
+    /// # Returns
+    /// The login response or an error message
+    pub async fn login_with_config(
+        &self,
+        config: LoginConfig,
+    ) -> Result<RithmicResponse, RithmicError> {
         info!("order_plant: logging in");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
+        let mut config = config;
+        config.aggregated_quotes = None;
+
         let command = OrderPlantCommand::Login {
+            config,
             response_sender: tx,
         };
 

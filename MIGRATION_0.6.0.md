@@ -175,7 +175,7 @@ async fn main() {
     let ticker_plant = RithmicTickerPlant::new(&account_info).await;
     let handle = ticker_plant.get_handle();
 
-    handle.login(None).await.unwrap();
+    handle.login().await.unwrap();
     handle.subscribe("ESM1", "CME").await.unwrap();
 
     loop {
@@ -208,7 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ).await?;
     let handle = ticker_plant.get_handle();
 
-    handle.login(None).await?;
+    handle.login().await?;
     handle.subscribe("ESM1", "CME").await?;
 
     loop {

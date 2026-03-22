@@ -2,6 +2,34 @@ use crate::rti::{
     request_bracket_order, request_modify_order, request_new_order, request_oco_order,
 };
 
+/// Optional configuration for plant login requests.
+///
+/// All fields default to `None`, meaning the library's defaults are used.
+/// Use [`Default::default()`] for standard login behavior.
+///
+/// # Example
+///
+/// ```ignore
+/// use rithmic_rs::LoginConfig;
+///
+/// // Tick-by-tick quotes (default)
+/// handle.login().await?;
+///
+/// // Aggregated quotes
+/// handle.login_with_config(LoginConfig {
+///     aggregated_quotes: Some(true),
+///     ..Default::default()
+/// }).await?;
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct LoginConfig {
+    /// Only applicable to the ticker plant.
+    pub aggregated_quotes: Option<bool>,
+    pub mac_addr: Option<Vec<String>>,
+    pub os_version: Option<String>,
+    pub os_platform: Option<String>,
+}
+
 /// One leg of an OCO (One-Cancels-Other) order pair.
 ///
 /// When one leg fills, the other is automatically canceled.

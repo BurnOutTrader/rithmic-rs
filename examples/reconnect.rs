@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut handle = plant.get_handle();
 
-        if let Err(e) = handle.login(None).await {
+        if let Err(e) = handle.login().await {
             match &e {
                 RithmicError::ConnectionClosed | RithmicError::SendFailed => {
                     error!("Login failed (connection issue): {}", e);

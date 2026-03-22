@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
     let ticker_plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?;
     let mut handle = ticker_plant.get_handle();
-    handle.login(None).await?;
+    handle.login().await?;
 
     let product = env::var("PRODUCT").unwrap_or_else(|_| "ES".to_string());
     let exchange = env::var("EXCHANGE").unwrap_or_else(|_| "CME".to_string());

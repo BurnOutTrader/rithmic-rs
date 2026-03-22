@@ -4,6 +4,7 @@ use crate::{
     ConnectStrategy,
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
+        rithmic_command_types::LoginConfig,
         sender_api::RithmicSenderApi,
     },
     config::RithmicConfig,
@@ -46,7 +47,7 @@ pub(crate) enum TickerPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     Login {
-        aggregated_quotes: Option<bool>,
+        config: LoginConfig,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SetLogin,
@@ -175,7 +176,7 @@ pub(crate) enum TickerPlantCommand {
 ///     let mut handle = ticker_plant.get_handle();
 ///
 ///     // Login to the ticker plant
-///     handle.login(None).await?;
+///     handle.login().await?;
 ///
 ///     // Subscribe to market data for a symbol
 ///     handle.subscribe("ESH6", "CME").await?;
@@ -620,7 +621,7 @@ impl PlantActor for TickerPlant {
                     .await;
             }
             TickerPlantCommand::Login {
-                aggregated_quotes,
+                config,
                 response_sender,
             } => {
                 let (login_buf, id) = self.rithmic_sender_api.request_login(
@@ -628,7 +629,7 @@ impl PlantActor for TickerPlant {
                     SysInfraType::TickerPlant,
                     &self.config.user,
                     &self.config.password,
-                    aggregated_quotes,
+                    &config,
                 );
 
                 info!("ticker_plant: sending login request {}", id);
@@ -1004,24 +1005,41 @@ impl RithmicTickerPlantHandle {
     /// Log in to the Rithmic ticker plant
     ///
     /// This must be called before subscribing to any market data.
+    /// Defaults to tick-by-tick (non-aggregated) quotes.
     ///
-    /// # Arguments
-    /// * `aggregated_quotes` - Controls whether the server aggregates multiple quote updates
-    ///   into a single message. `Some(false)` requests tick-by-tick updates, `Some(true)`
-    ///   allows aggregation. Defaults to `Some(false)` when `None`.
+    /// To customize login options, use [`login_with_config`](Self::login_with_config).
     ///
     /// # Returns
     /// The login response or an error message
-    pub async fn login(
+    pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
+        self.login_with_config(LoginConfig::default()).await
+    }
+
+    /// Log in to the Rithmic ticker plant with custom configuration
+    ///
+    /// This must be called before subscribing to any market data.
+    ///
+    /// # Arguments
+    /// * `config` - Login configuration options. See [`LoginConfig`] for details.
+    ///
+    /// # Returns
+    /// The login response or an error message
+    pub async fn login_with_config(
         &self,
-        aggregated_quotes: Option<bool>,
+        config: LoginConfig,
     ) -> Result<RithmicResponse, RithmicError> {
         info!("ticker_plant: logging in");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
+        // Default aggregated_quotes to false for ticker plant
+        let mut config = config;
+        if config.aggregated_quotes.is_none() {
+            config.aggregated_quotes = Some(false);
+        }
+
         let command = TickerPlantCommand::Login {
-            aggregated_quotes: Some(aggregated_quotes.unwrap_or(false)),
+            config,
             response_sender: tx,
         };
 

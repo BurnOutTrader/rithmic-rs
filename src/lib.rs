@@ -28,7 +28,7 @@
 //!     let mut handle = ticker_plant.get_handle();
 //!
 //!     // Login and subscribe to market data
-//!     handle.login(None).await?;
+//!     handle.login().await?;
 //!     handle.subscribe("ESH6", "CME").await?;
 //!
 //!     // Process real-time updates
@@ -193,7 +193,7 @@ pub use ws::ConnectStrategy;
 
 // Re-export API types
 pub use api::{
-    BracketDuration, BracketPriceType, BracketTransactionType, EasyToBorrowRequest,
+    BracketDuration, BracketPriceType, BracketTransactionType, EasyToBorrowRequest, LoginConfig,
     ModifyPriceType, NewOrderDuration, NewOrderPriceType, NewOrderTransactionType, OcoDuration,
     OcoPriceType, OcoTransactionType, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
     RithmicOcoOrderLeg, RithmicOrder, RithmicResponse, TrailingStop,

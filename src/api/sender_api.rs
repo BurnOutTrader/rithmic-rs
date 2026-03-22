@@ -1,4 +1,6 @@
-use super::rithmic_command_types::{RithmicBracketOrder, RithmicOcoOrderLeg, RithmicOrder};
+use super::rithmic_command_types::{
+    LoginConfig, RithmicBracketOrder, RithmicOcoOrderLeg, RithmicOrder,
+};
 use prost::Message;
 
 use crate::{
@@ -99,7 +101,7 @@ impl RithmicSenderApi {
         infra_type: SysInfraType,
         user: &str,
         password: &str,
-        aggregated_quotes: Option<bool>,
+        config: &LoginConfig,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
 
@@ -113,8 +115,10 @@ impl RithmicSenderApi {
             system_name: Some(system_name.to_string()),
             infra_type: Some(infra_type.into()),
             user_msg: vec![id.clone()],
-            aggregated_quotes,
-            ..RequestLogin::default()
+            aggregated_quotes: config.aggregated_quotes,
+            mac_addr: config.mac_addr.clone().unwrap_or_default(),
+            os_version: config.os_version.clone(),
+            os_platform: config.os_platform.clone(),
         };
 
         self.request_to_buf(req, id)
