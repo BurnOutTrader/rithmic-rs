@@ -46,6 +46,7 @@ pub(crate) enum TickerPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     Login {
+        aggregated_quotes: Option<bool>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SetLogin,
@@ -174,7 +175,7 @@ pub(crate) enum TickerPlantCommand {
 ///     let mut handle = ticker_plant.get_handle();
 ///
 ///     // Login to the ticker plant
-///     handle.login().await?;
+///     handle.login(None).await?;
 ///
 ///     // Subscribe to market data for a symbol
 ///     handle.subscribe("ESH6", "CME").await?;
@@ -618,13 +619,16 @@ impl PlantActor for TickerPlant {
                 self.send_or_fail(Message::Binary(list_system_info_buf.into()), &request_id)
                     .await;
             }
-            TickerPlantCommand::Login { response_sender } => {
+            TickerPlantCommand::Login {
+                aggregated_quotes,
+                response_sender,
+            } => {
                 let (login_buf, id) = self.rithmic_sender_api.request_login(
                     &self.config.system_name,
                     SysInfraType::TickerPlant,
                     &self.config.user,
                     &self.config.password,
-                    None,
+                    aggregated_quotes,
                 );
 
                 info!("ticker_plant: sending login request {}", id);
@@ -999,16 +1003,25 @@ impl RithmicTickerPlantHandle {
 
     /// Log in to the Rithmic ticker plant
     ///
-    /// This must be called before subscribing to any market data
+    /// This must be called before subscribing to any market data.
+    ///
+    /// # Arguments
+    /// * `aggregated_quotes` - Controls whether the server aggregates multiple quote updates
+    ///   into a single message. `Some(false)` requests tick-by-tick updates, `Some(true)`
+    ///   allows aggregation. Defaults to `Some(false)` when `None`.
     ///
     /// # Returns
     /// The login response or an error message
-    pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
+    pub async fn login(
+        &self,
+        aggregated_quotes: Option<bool>,
+    ) -> Result<RithmicResponse, RithmicError> {
         info!("ticker_plant: logging in");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = TickerPlantCommand::Login {
+            aggregated_quotes: Some(aggregated_quotes.unwrap_or(false)),
             response_sender: tx,
         };
 

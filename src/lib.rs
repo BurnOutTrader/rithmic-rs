@@ -28,7 +28,7 @@
 //!     let mut handle = ticker_plant.get_handle();
 //!
 //!     // Login and subscribe to market data
-//!     handle.login().await?;
+//!     handle.login(None).await?;
 //!     handle.subscribe("ESH6", "CME").await?;
 //!
 //!     // Process real-time updates

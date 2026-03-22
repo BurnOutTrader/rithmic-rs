@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?;
     let mut handle = plant.get_handle();
 
-    handle.login().await?;
+    handle.login(None).await?;
     handle.subscribe("ESH6", "CME").await?;
 
     while let Ok(update) = handle.subscription_receiver.recv().await {
