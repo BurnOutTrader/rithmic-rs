@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -8,6 +7,7 @@ use crate::{
         sender_api::RithmicSenderApi,
     },
     config::RithmicConfig,
+    error::RithmicError,
     ping_manager::PingManager,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType, request_pn_l_position_updates},
@@ -35,28 +35,29 @@ use tokio_tungstenite::{
 
 pub(crate) enum PnlPlantCommand {
     Close,
+    Abort,
     ListSystemInfo {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     Login {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SetLogin,
     Logout {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     PnlPositionSnapshots {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SendHeartbeat,
     UpdateHeartbeat {
         seconds: u64,
     },
     SubscribePnlUpdates {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     UnsubscribePnlUpdates {
-        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, String>>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
 }
 
@@ -225,7 +226,20 @@ impl PnlPlant {
     }
 }
 
-#[async_trait]
+impl PnlPlant {
+    async fn send_or_fail(&mut self, msg: Message, request_id: &str) {
+        if self.rithmic_sender.send(msg).await.is_err() {
+            error!(
+                "pnl_plant: WebSocket send failed for request {}",
+                request_id
+            );
+
+            self.request_handler
+                .fail_request(request_id, RithmicError::SendFailed);
+        }
+    }
+}
+
 impl PlantActor for PnlPlant {
     type Command = PnlPlantCommand;
 
@@ -239,6 +253,7 @@ impl PlantActor for PnlPlant {
                 }
                 _ = self.ping_interval.tick() => {
                     self.ping_manager.sent();
+
                     let _ = self.rithmic_sender.send(Message::Ping(vec![].into())).await;
                 }
                 _ = async {
@@ -260,15 +275,35 @@ impl PlantActor for PnlPlant {
                             error: Some("WebSocket ping timeout - connection dead".to_string()),
                             source: self.rithmic_receiver_api.source.clone(),
                         };
+
                         let _ = self.subscription_sender.send(error_response);
+
                         break;
                     }
                 }
                 Some(message) = self.request_receiver.recv() => {
+                    if matches!(message, PnlPlantCommand::Abort) {
+                        info!("pnl_plant: abort requested, shutting down immediately");
+
+                        let error_response = RithmicResponse {
+                            request_id: "".to_string(),
+                            message: RithmicMessage::ConnectionError,
+                            is_update: true,
+                            has_more: false,
+                            multi_response: false,
+                            error: Some("Plant aborted".to_string()),
+                            source: self.rithmic_receiver_api.source.clone(),
+                        };
+
+                        let _ = self.subscription_sender.send(error_response);
+
+                        self.request_handler.drain_and_drop();
+                        break;
+                    }
                     self.handle_command(message).await;
                 }
                 Some(message) = self.rithmic_reader.next() => {
-                    let stop = self.handle_rithmic_message(message).await.unwrap();
+                    let stop = self.handle_rithmic_message(message).await;
 
                     if stop {
                         break;
@@ -279,10 +314,7 @@ impl PlantActor for PnlPlant {
         }
     }
 
-    async fn handle_rithmic_message(
-        &mut self,
-        message: Result<Message, Error>,
-    ) -> Result<bool, ()> {
+    async fn handle_rithmic_message(&mut self, message: Result<Message, Error>) -> bool {
         let mut stop = false;
 
         match message {
@@ -312,7 +344,7 @@ impl PlantActor for PnlPlant {
                         }
 
                         // Always drop heartbeat responses (successful or error)
-                        return Ok(false);
+                        return false;
                     }
 
                     if response.is_update {
@@ -437,30 +469,27 @@ impl PlantActor for PnlPlant {
             }
         }
 
-        Ok(stop)
+        stop
     }
 
     async fn handle_command(&mut self, command: PnlPlantCommand) {
         match command {
             PnlPlantCommand::Close => {
-                self.rithmic_sender
-                    .send(Message::Close(None))
-                    .await
-                    .unwrap();
+                let _ = self.rithmic_sender.send(Message::Close(None)).await;
             }
             PnlPlantCommand::ListSystemInfo { response_sender } => {
                 let (list_system_info_buf, id) =
                     self.rithmic_sender_api.request_rithmic_system_info();
+
+                let request_id = id.clone();
 
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(list_system_info_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(list_system_info_buf.into()), &request_id)
+                    .await;
             }
             PnlPlantCommand::Login { response_sender } => {
                 let (login_buf, id) = self.rithmic_sender_api.request_login(
@@ -468,19 +497,20 @@ impl PlantActor for PnlPlant {
                     SysInfraType::PnlPlant,
                     &self.config.user,
                     &self.config.password,
+                    None,
                 );
 
                 info!("pnl_plant: sending login request {}", id);
+
+                let request_id = id.clone();
 
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(login_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(login_buf.into()), &request_id)
+                    .await;
             }
             PnlPlantCommand::SetLogin => {
                 self.logged_in = true;
@@ -488,15 +518,15 @@ impl PlantActor for PnlPlant {
             PnlPlantCommand::Logout { response_sender } => {
                 let (logout_buf, id) = self.rithmic_sender_api.request_logout();
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(logout_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(logout_buf.into()), &request_id)
+                    .await;
             }
             PnlPlantCommand::SendHeartbeat => {
                 let (heartbeat_buf, _id) = self.rithmic_sender_api.request_heartbeat();
@@ -514,43 +544,46 @@ impl PlantActor for PnlPlant {
                     request_pn_l_position_updates::Request::Subscribe,
                 );
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(subscribe_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(subscribe_buf.into()), &request_id)
+                    .await;
             }
             PnlPlantCommand::PnlPositionSnapshots { response_sender } => {
                 let (snapshot_buf, id) = self.rithmic_sender_api.request_pnl_position_snapshot();
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(snapshot_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(snapshot_buf.into()), &request_id)
+                    .await;
             }
             PnlPlantCommand::UnsubscribePnlUpdates { response_sender } => {
                 let (unsubscribe_buf, id) = self.rithmic_sender_api.request_pnl_position_updates(
                     request_pn_l_position_updates::Request::Unsubscribe,
                 );
 
+                let request_id = id.clone();
+
                 self.request_handler.register_request(RithmicRequest {
                     request_id: id,
                     responder: response_sender,
                 });
 
-                self.rithmic_sender
-                    .send(Message::Binary(unsubscribe_buf.into()))
-                    .await
-                    .unwrap();
+                self.send_or_fail(Message::Binary(unsubscribe_buf.into()), &request_id)
+                    .await;
+            }
+            PnlPlantCommand::Abort => {
+                unreachable!("Abort is handled in run() before handle_command");
             }
         }
     }
@@ -566,8 +599,8 @@ impl RithmicPnlPlantHandle {
     ///
     /// Returns information about the connected Rithmic system, including
     /// system name, gateway info, and available services.
-    pub async fn list_system_info(&self) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    pub async fn list_system_info(&self) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::ListSystemInfo {
             response_sender: tx,
@@ -575,10 +608,11 @@ impl RithmicPnlPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx
-            .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0))
+        rx.await
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)
     }
 
     /// Log in to the Rithmic PnL plant
@@ -587,10 +621,10 @@ impl RithmicPnlPlantHandle {
     ///
     /// # Returns
     /// The login response or an error message
-    pub async fn login(&self) -> Result<RithmicResponse, String> {
+    pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
         info!("pnl_plant: logging in");
 
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::Login {
             response_sender: tx,
@@ -599,12 +633,14 @@ impl RithmicPnlPlantHandle {
         let _ = self.sender.send(command).await;
         let response = rx
             .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0);
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)?;
 
         if let Some(err) = response.error {
             error!("pnl_plant: login failed {:?}", err);
-            Err(err)
+            Err(RithmicError::ServerError(err))
         } else {
             let _ = self.sender.send(PnlPlantCommand::SetLogin).await;
 
@@ -635,26 +671,35 @@ impl RithmicPnlPlantHandle {
     ///
     /// # Returns
     /// The logout response or an error message
-    pub async fn disconnect(&self) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    pub async fn disconnect(&self) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::Logout {
             response_sender: tx,
         };
 
         let _ = self.sender.send(command).await;
-        let mut r = rx.await.map_err(|_| "Connection closed".to_string())??;
+        let r = rx.await.map_err(|_| RithmicError::ConnectionClosed)??;
         let _ = self.sender.send(PnlPlantCommand::Close).await;
 
-        Ok(r.remove(0))
+        r.into_iter().next().ok_or(RithmicError::EmptyResponse)
+    }
+
+    /// Immediately shut down the PnL plant actor without a graceful logout.
+    ///
+    /// Use when the connection is known to be dead and `disconnect()` would hang.
+    /// All pending request callers will receive an error. The subscription channel
+    /// receives a `ConnectionError` notification. Safe to call if the actor is already dead.
+    pub fn abort(&self) {
+        let _ = self.sender.try_send(PnlPlantCommand::Abort);
     }
 
     /// Subscribe to PnL updates for all positions
     ///
     /// # Returns
     /// The subscription response or an error message
-    pub async fn subscribe_pnl_updates(&self) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    pub async fn subscribe_pnl_updates(&self) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::SubscribePnlUpdates {
             response_sender: tx,
@@ -662,18 +707,19 @@ impl RithmicPnlPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx
-            .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0))
+        rx.await
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)
     }
 
     /// Request a snapshot of all current position PnL data
     ///
     /// # Returns
     /// The position snapshot response or an error message
-    pub async fn pnl_position_snapshots(&self) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    pub async fn pnl_position_snapshots(&self) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::PnlPositionSnapshots {
             response_sender: tx,
@@ -681,21 +727,19 @@ impl RithmicPnlPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        let response = rx.await;
-
-        if let Ok(Ok(mut v)) = response {
-            Ok(v.remove(0))
-        } else {
-            Err("error with pnl position snapshot payload".to_string())
-        }
+        rx.await
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)
     }
 
     /// Unsubscribe from PnL updates
     ///
     /// # Returns
     /// The unsubscription response or an error message
-    pub async fn unsubscribe_pnl_updates(&self) -> Result<RithmicResponse, String> {
-        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, String>>();
+    pub async fn unsubscribe_pnl_updates(&self) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::UnsubscribePnlUpdates {
             response_sender: tx,
@@ -703,9 +747,10 @@ impl RithmicPnlPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        Ok(rx
-            .await
-            .map_err(|_| "Connection closed".to_string())??
-            .remove(0))
+        rx.await
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)
     }
 }

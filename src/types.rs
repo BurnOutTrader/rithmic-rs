@@ -13,6 +13,7 @@ use crate::rti::{
 /// Buy or sell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub enum OrderSide {
     #[default]
     Buy,
@@ -80,6 +81,7 @@ impl From<OrderSide> for request_oco_order::TransactionType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub enum OrderType {
     Market,
     #[default]
@@ -170,6 +172,7 @@ impl From<OrderType> for request_oco_order::PriceType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub enum TimeInForce {
     #[default]
     Day,

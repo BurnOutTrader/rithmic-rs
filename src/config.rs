@@ -29,6 +29,7 @@ use std::{env, fmt, str::FromStr};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+#[non_exhaustive]
 pub enum RithmicEnv {
     #[default]
     Demo,
@@ -61,6 +62,7 @@ impl FromStr for RithmicEnv {
 
 /// Configuration error types.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum ConfigError {
     /// A required environment variable is missing
     MissingEnvVar(String),

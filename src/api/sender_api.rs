@@ -30,8 +30,8 @@ use crate::{
         request_easy_to_borrow_list,
         request_login::SysInfraType,
         request_market_data_update::{Request, UpdateBits},
-        request_market_data_update_by_underlying, request_modify_order, request_new_order,
-        request_oco_order, request_pn_l_position_updates, request_search_symbols,
+        request_market_data_update_by_underlying, request_modify_order, request_oco_order,
+        request_pn_l_position_updates, request_search_symbols,
         request_tick_bar_replay::{BarSubType, BarType, Direction, TimeOrder},
         request_tick_bar_update, request_time_bar_replay, request_time_bar_update,
     },
@@ -95,6 +95,7 @@ impl RithmicSenderApi {
         infra_type: SysInfraType,
         user: &str,
         password: &str,
+        aggregated_quotes: Option<bool>,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
 
@@ -108,6 +109,7 @@ impl RithmicSenderApi {
             system_name: Some(system_name.to_string()),
             infra_type: Some(infra_type.into()),
             user_msg: vec![id.clone()],
+            aggregated_quotes,
             ..RequestLogin::default()
         };
 
@@ -423,68 +425,6 @@ impl RithmicSenderApi {
         self.request_to_buf(req, id)
     }
 
-    /// Request a new single order (without bracket orders)
-    ///
-    /// This places a standalone order without automatic profit targets or stop losses.
-    /// For orders with brackets (stop loss and profit target), use `request_bracket_order` instead.
-    ///
-    /// # Arguments
-    /// * `exchange` - The exchange code (e.g., "CME")
-    /// * `symbol` - The trading symbol (e.g., "ESH6")
-    /// * `qty` - Order quantity
-    /// * `price` - Order price (ignored for market orders)
-    /// * `action` - Buy or Sell
-    /// * `ordertype` - Order type (Limit, Market, Stop, etc.)
-    /// * `localid` - User-defined identifier for this order
-    /// * `duration` - Time in force (Day, GTC, etc.)
-    ///
-    /// # Returns
-    /// A tuple of (serialized request buffer, request ID)
-    #[allow(clippy::too_many_arguments)]
-    pub fn request_new_order(
-        &mut self,
-        exchange: &str,
-        symbol: &str,
-        qty: i32,
-        price: f64,
-        action: request_new_order::TransactionType,
-        ordertype: request_new_order::PriceType,
-        localid: &str,
-        duration: Option<request_new_order::Duration>,
-    ) -> (Vec<u8>, String) {
-        let id = self.get_next_message_id();
-
-        let trade_route = match self.env {
-            RithmicEnv::Live => TRADE_ROUTE_LIVE,
-            RithmicEnv::Demo | RithmicEnv::Test => TRADE_ROUTE_DEMO, // NOTE: Not sure if this is correct valuef for test environment
-        };
-
-        let req = RequestNewOrder {
-            template_id: 312,
-            fcm_id: Some(self.fcm_id.clone()),
-            ib_id: Some(self.ib_id.clone()),
-            account_id: Some(self.account_id.clone()),
-            trade_route: Some(trade_route.into()),
-            exchange: Some(exchange.into()),
-            symbol: Some(symbol.into()),
-            quantity: Some(qty),
-            price: Some(price),
-            transaction_type: Some(action.into()),
-            price_type: Some(ordertype.into()),
-            manual_or_auto: Some(2),
-            duration: if let Some(d) = duration {
-                Some(d.into())
-            } else {
-                Some(1)
-            },
-            user_msg: vec![id.clone()],
-            user_tag: Some(localid.into()),
-            ..RequestNewOrder::default()
-        };
-
-        self.request_to_buf(req, id)
-    }
-
     /// Send a new order request using [`RithmicOrder`].
     ///
     /// This is the preferred method for placing orders as it supports
@@ -536,7 +476,7 @@ impl RithmicSenderApi {
 
         let trade_route = match self.env {
             RithmicEnv::Live => TRADE_ROUTE_LIVE,
-            RithmicEnv::Demo | RithmicEnv::Test => TRADE_ROUTE_DEMO, // NOTE: Not sure if this is correct valuef for test environment
+            RithmicEnv::Demo | RithmicEnv::Test => TRADE_ROUTE_DEMO, // NOTE: Not sure if this is correct value for test environment
         };
 
         let req = RequestBracketOrder {
