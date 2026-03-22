@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -32,6 +31,7 @@ const MAX_BACKOFF_SECS: u64 = 60;
 
 /// Connection strategy for connecting to Rithmic servers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ConnectStrategy {
     /// Single connection attempt. Fast-fail, no retries.
     Simple,
@@ -41,14 +41,12 @@ pub enum ConnectStrategy {
     AlternateWithRetry,
 }
 
-#[async_trait]
 pub(crate) trait PlantActor {
     type Command;
 
     async fn run(&mut self);
     async fn handle_command(&mut self, command: Self::Command);
-    async fn handle_rithmic_message(&mut self, message: Result<Message, Error>)
-    -> Result<bool, ()>;
+    async fn handle_rithmic_message(&mut self, message: Result<Message, Error>) -> bool;
 }
 
 pub(crate) fn get_heartbeat_interval(override_secs: Option<u64>) -> Interval {
@@ -119,7 +117,7 @@ async fn connect_with_retry_single_url(
             Err(e) => warn!("connect_async to {} timed out: {:?}", url, e),
         }
 
-        let backoff_ms: u64 = BACKOFF_MS_BASE * attempt;
+        let backoff_ms: u64 = BACKOFF_MS_BASE.saturating_mul(attempt);
         let backoff_duration =
             Duration::from_millis(backoff_ms).min(Duration::from_secs(MAX_BACKOFF_SECS));
 
@@ -169,7 +167,7 @@ async fn connect_with_retry(
             Err(e) => warn!("connect_async to {} timed out: {:?}", selected_url, e),
         }
 
-        let backoff_ms: u64 = BACKOFF_MS_BASE * attempt;
+        let backoff_ms: u64 = BACKOFF_MS_BASE.saturating_mul(attempt);
         let backoff_duration =
             Duration::from_millis(backoff_ms).min(Duration::from_secs(MAX_BACKOFF_SECS));
 

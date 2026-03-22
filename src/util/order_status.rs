@@ -30,6 +30,7 @@ pub const EXPIRED: &str = "expired";
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub enum OrderStatus {
     Open,
     Complete,

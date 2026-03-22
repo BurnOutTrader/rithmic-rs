@@ -38,7 +38,7 @@ pub use crate::rti::request_oco_order::{
     Duration as OcoDuration, PriceType as OcoPriceType, TransactionType as OcoTransactionType,
 };
 
-// Re-export new order enums for place_new_order()
+// Re-export new order enums for RithmicOrder fields
 pub use crate::rti::request_new_order::{
     Duration as NewOrderDuration, PriceType as NewOrderPriceType,
     TransactionType as NewOrderTransactionType,
