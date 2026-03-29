@@ -57,6 +57,7 @@ pub(crate) enum HistoryPlantCommand {
         seconds: u64,
     },
     LoadTicks {
+        bar_type_specifier: String,
         end_time_sec: i32,
         exchange: String,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
@@ -593,6 +594,7 @@ impl PlantActor for HistoryPlant {
                 self.interval = get_heartbeat_interval(Some(seconds));
             }
             HistoryPlantCommand::LoadTicks {
+                bar_type_specifier,
                 exchange,
                 symbol,
                 start_time_sec,
@@ -602,6 +604,7 @@ impl PlantActor for HistoryPlant {
                 let (tick_bar_replay_buf, id) = self.rithmic_sender_api.request_tick_bar_replay(
                     &symbol,
                     &exchange,
+                    &bar_type_specifier,
                     start_time_sec,
                     end_time_sec,
                 );
@@ -898,16 +901,26 @@ impl RithmicHistoryPlantHandle {
         let _ = self.sender.try_send(HistoryPlantCommand::Abort);
     }
 
-    /// Load historical tick data for a specific symbol and time range
+    /// Load historical tick data for a specific symbol and time range.
+    ///
+    /// This is a convenience wrapper around [`load_tick_bars`](Self::load_tick_bars) with
+    /// `bar_length = 1`, so each response contains a single tick.
     ///
     /// # Arguments
-    /// * `symbol` - The trading symbol (e.g., "ESH6")
-    /// * `exchange` - The exchange code (e.g., "CME")
-    /// * `start_time_sec` - Start time in Unix timestamp (seconds)
-    /// * `end_time_sec` - End time in Unix timestamp (seconds)
+    /// * `symbol` - The trading symbol (e.g., `"ESH6"`)
+    /// * `exchange` - The exchange code (e.g., `"CME"`)
+    /// * `start_time_sec` - Start time as a Unix timestamp (seconds)
+    /// * `end_time_sec` - End time as a Unix timestamp (seconds)
     ///
     /// # Returns
-    /// The historical data responses or an error message
+    /// The historical tick data responses, or a [`RithmicError`] on failure.
+    ///
+    /// # Note
+    ///
+    /// Large requests may be truncated by the server. If the response contains a
+    /// round number of bars (e.g., 10 000) or does not cover the full time range,
+    /// use the `request_key` from the response with `request_resume_bars` on the
+    /// sender API to fetch the remaining data.
     pub async fn load_ticks(
         &self,
         symbol: String,
@@ -915,9 +928,53 @@ impl RithmicHistoryPlantHandle {
         start_time_sec: i32,
         end_time_sec: i32,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.load_tick_bars(symbol, exchange, 1, start_time_sec, end_time_sec)
+            .await
+    }
+
+    /// Load historical tick bar data for a specific symbol and time range.
+    ///
+    /// Each response contains a bar that aggregates `bar_length` ticks. For
+    /// example, `bar_length = 5` returns 5-tick bars.
+    ///
+    /// # Arguments
+    /// * `symbol` - The trading symbol (e.g., `"ESH6"`)
+    /// * `exchange` - The exchange code (e.g., `"CME"`)
+    /// * `bar_length` - Number of ticks per bar (must be &ge; 1)
+    /// * `start_time_sec` - Start time as a Unix timestamp (seconds)
+    /// * `end_time_sec` - End time as a Unix timestamp (seconds)
+    ///
+    /// # Returns
+    /// The historical tick bar data responses, or a [`RithmicError`] on failure.
+    ///
+    /// # Errors
+    /// * [`RithmicError::InvalidArgument`] if `bar_length` is 0.
+    /// * [`RithmicError::ConnectionClosed`] if the history plant has shut down.
+    ///
+    /// # Note
+    ///
+    /// Large requests may be truncated by the server. If the response contains a
+    /// round number of bars (e.g., 10 000) or does not cover the full time range,
+    /// use the `request_key` from the response with `request_resume_bars` on the
+    /// sender API to fetch the remaining data.
+    pub async fn load_tick_bars(
+        &self,
+        symbol: String,
+        exchange: String,
+        bar_length: u32,
+        start_time_sec: i32,
+        end_time_sec: i32,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        if bar_length == 0 {
+            return Err(RithmicError::InvalidArgument(
+                "bar_length must be at least 1".to_string(),
+            ));
+        }
+
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = HistoryPlantCommand::LoadTicks {
+            bar_type_specifier: bar_length.to_string(),
             exchange,
             symbol,
             start_time_sec,

@@ -9,6 +9,7 @@ use std::fmt;
 ///         handle.abort();
 ///         // reconnect — see examples/reconnect.rs
 ///     }
+///     Err(RithmicError::InvalidArgument(msg)) => eprintln!("bad input: {msg}"),
 ///     Err(RithmicError::ServerError(msg)) => eprintln!("rejected: {msg}"),
 ///     Err(e) => eprintln!("{e}"),
 /// }
@@ -26,6 +27,9 @@ pub enum RithmicError {
     EmptyResponse,
     /// Protocol-level rejection from Rithmic (the `rp_code` text).
     ServerError(String),
+    /// A caller-supplied argument is invalid (the message describes which argument
+    /// and why).
+    InvalidArgument(String),
 }
 
 impl fmt::Display for RithmicError {
@@ -36,6 +40,7 @@ impl fmt::Display for RithmicError {
             RithmicError::SendFailed => write!(f, "WebSocket send failed"),
             RithmicError::EmptyResponse => write!(f, "empty response"),
             RithmicError::ServerError(msg) => write!(f, "server error: {msg}"),
+            RithmicError::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
         }
     }
 }
