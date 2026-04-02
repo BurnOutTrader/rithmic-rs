@@ -2,6 +2,36 @@ use crate::rti::{
     request_bracket_order, request_modify_order, request_new_order, request_oco_order,
 };
 
+/// Typed account identity used for account-scoped order and PnL requests.
+///
+/// This keeps account overrides ergonomic at the API layer without exposing
+/// raw protobuf fields to callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RithmicAccount {
+    /// Futures Commission Merchant identifier.
+    pub fcm_id: String,
+    /// Introducing Broker identifier.
+    pub ib_id: String,
+    /// Trading account identifier.
+    pub account_id: String,
+}
+
+impl RithmicAccount {
+    /// Creates a new typed Rithmic account identity.
+    pub fn new(
+        fcm_id: impl Into<String>,
+        ib_id: impl Into<String>,
+        account_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            fcm_id: fcm_id.into(),
+            ib_id: ib_id.into(),
+            account_id: account_id.into(),
+        }
+    }
+}
+
 /// Optional configuration for plant login requests.
 ///
 /// All fields default to `None`, meaning the library's defaults are used.

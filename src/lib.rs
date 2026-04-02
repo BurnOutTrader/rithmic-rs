@@ -207,8 +207,8 @@ pub use ws::ConnectStrategy;
 pub use api::{
     BracketDuration, BracketPriceType, BracketTransactionType, EasyToBorrowRequest, LoginConfig,
     ModifyPriceType, NewOrderDuration, NewOrderPriceType, NewOrderTransactionType, OcoDuration,
-    OcoPriceType, OcoTransactionType, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
-    RithmicOcoOrderLeg, RithmicOrder, RithmicResponse, TrailingStop,
+    OcoPriceType, OcoTransactionType, RithmicAccount, RithmicBracketOrder, RithmicCancelOrder,
+    RithmicModifyOrder, RithmicOcoOrderLeg, RithmicOrder, RithmicResponse, TrailingStop,
 };
 
 // Re-export utility types for convenience
