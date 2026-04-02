@@ -579,13 +579,7 @@ impl RithmicSenderApi {
         price_type: request_modify_order::PriceType,
     ) -> (Vec<u8>, String) {
         self.request_modify_order_with_account(
-            basket_id,
-            exchange,
-            symbol,
-            qty,
-            price,
-            price_type,
-            None,
+            basket_id, exchange, symbol, qty, price, price_type, None,
         )
     }
 

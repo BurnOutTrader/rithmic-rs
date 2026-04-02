@@ -853,7 +853,8 @@ impl RithmicPnlPlantHandle {
     /// # Returns
     /// The unsubscription response or an error message
     pub async fn unsubscribe_pnl_updates(&self) -> Result<RithmicResponse, RithmicError> {
-        self.unsubscribe_pnl_updates_for_account_internal(None).await
+        self.unsubscribe_pnl_updates_for_account_internal(None)
+            .await
     }
 
     /// Unsubscribe from PnL updates for a specific account identity.

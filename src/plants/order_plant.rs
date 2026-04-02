@@ -11,8 +11,7 @@ use crate::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         rithmic_command_types::{
             LoginConfig, RithmicAccount, RithmicBracketOrder, RithmicCancelOrder,
-            RithmicModifyOrder,
-            RithmicOcoOrderLeg, RithmicOrder,
+            RithmicModifyOrder, RithmicOcoOrderLeg, RithmicOrder,
         },
         sender_api::RithmicSenderApi,
     },
@@ -757,7 +756,9 @@ impl PlantActor for OrderPlant {
                     Some(account) => self
                         .rithmic_sender_api
                         .request_subscribe_for_order_updates_for_account(account),
-                    None => self.rithmic_sender_api.request_subscribe_for_order_updates(),
+                    None => self
+                        .rithmic_sender_api
+                        .request_subscribe_for_order_updates(),
                 };
 
                 let request_id = id.clone();
@@ -1527,7 +1528,8 @@ impl RithmicOrderPlantHandle {
     /// # Returns
     /// The subscription response or an error message
     pub async fn subscribe_order_updates(&self) -> Result<RithmicResponse, RithmicError> {
-        self.subscribe_order_updates_for_account_internal(None).await
+        self.subscribe_order_updates_for_account_internal(None)
+            .await
     }
 
     /// Subscribe to order status updates for a specific account identity.
