@@ -1002,6 +1002,38 @@ impl std::fmt::Debug for RithmicTickerPlantHandle {
 }
 
 impl RithmicTickerPlantHandle {
+    /// Request arbitrary market-data update bits for a specific symbol.
+    ///
+    /// This is the generic ticker-plant subscription surface. It can be used to
+    /// subscribe or unsubscribe from any combination of supported update bits,
+    /// such as `ORDER_BOOK`, `MARKET_MODE`, `OPEN_INTEREST`, and related
+    /// statistics/indicator fields.
+    pub async fn request_market_data_update(
+        &self,
+        symbol: &str,
+        exchange: &str,
+        fields: Vec<UpdateBits>,
+        request_type: Request,
+    ) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+
+        let command = TickerPlantCommand::Subscribe {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            fields,
+            request_type,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await
+            .map_err(|_| RithmicError::ConnectionClosed)??
+            .into_iter()
+            .next()
+            .ok_or(RithmicError::EmptyResponse)
+    }
+
     /// List available Rithmic system infrastructure information.
     ///
     /// Returns information about the connected Rithmic system, including
