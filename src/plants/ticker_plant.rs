@@ -1002,13 +1002,7 @@ impl std::fmt::Debug for RithmicTickerPlantHandle {
 }
 
 impl RithmicTickerPlantHandle {
-    /// Request arbitrary market-data update bits for a specific symbol.
-    ///
-    /// This is the generic ticker-plant subscription surface. It can be used to
-    /// subscribe or unsubscribe from any combination of supported update bits,
-    /// such as `ORDER_BOOK`, `MARKET_MODE`, `OPEN_INTEREST`, and related
-    /// statistics/indicator fields.
-    pub async fn request_market_data_update(
+    async fn request_market_data_update(
         &self,
         symbol: &str,
         exchange: &str,
@@ -1032,6 +1026,286 @@ impl RithmicTickerPlantHandle {
             .into_iter()
             .next()
             .ok_or(RithmicError::EmptyResponse)
+    }
+
+    /// Subscribe to venue instrument-status (`MarketMode`) updates for a specific symbol.
+    pub async fn subscribe_instrument_status(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::MarketMode],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from venue instrument-status (`MarketMode`) updates for a specific symbol.
+    pub async fn unsubscribe_instrument_status(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::MarketMode],
+            Request::Unsubscribe,
+        )
+        .await
+    }
+
+    /// Subscribe to top-of-book depth (`OrderBook`) updates for a specific symbol.
+    pub async fn subscribe_order_book_depth(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::OrderBook],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from top-of-book depth (`OrderBook`) updates for a specific symbol.
+    pub async fn unsubscribe_order_book_depth(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::OrderBook],
+            Request::Unsubscribe,
+        )
+        .await
+    }
+
+    /// Subscribe to trade statistics updates for a specific symbol.
+    pub async fn subscribe_trade_statistics(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::Open, UpdateBits::HighLow],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from trade statistics updates for a specific symbol.
+    pub async fn unsubscribe_trade_statistics(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::Open, UpdateBits::HighLow],
+            Request::Unsubscribe,
+        )
+        .await
+    }
+
+    /// Subscribe to quote statistics updates for a specific symbol.
+    pub async fn subscribe_quote_statistics(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::HighBidLowAsk],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from quote statistics updates for a specific symbol.
+    pub async fn unsubscribe_quote_statistics(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::HighBidLowAsk],
+            Request::Unsubscribe,
+        )
+        .await
+    }
+
+    /// Subscribe to indicator price updates for a specific symbol.
+    pub async fn subscribe_indicator_prices(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::OpeningIndicator, UpdateBits::ClosingIndicator],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from indicator price updates for a specific symbol.
+    pub async fn unsubscribe_indicator_prices(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::OpeningIndicator, UpdateBits::ClosingIndicator],
+            Request::Unsubscribe,
+        )
+        .await
+    }
+
+    /// Subscribe to open-interest updates for a specific symbol.
+    pub async fn subscribe_open_interest(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::OpenInterest],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from open-interest updates for a specific symbol.
+    pub async fn unsubscribe_open_interest(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::OpenInterest],
+            Request::Unsubscribe,
+        )
+        .await
+    }
+
+    /// Subscribe to end-of-day price updates for a specific symbol.
+    pub async fn subscribe_end_of_day_prices(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![
+                UpdateBits::Close,
+                UpdateBits::Settlement,
+                UpdateBits::ProjectedSettlement,
+                UpdateBits::AdjustedClose,
+            ],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from end-of-day price updates for a specific symbol.
+    pub async fn unsubscribe_end_of_day_prices(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![
+                UpdateBits::Close,
+                UpdateBits::Settlement,
+                UpdateBits::ProjectedSettlement,
+                UpdateBits::AdjustedClose,
+            ],
+            Request::Unsubscribe,
+        )
+        .await
+    }
+
+    /// Subscribe to order price limit updates for a specific symbol.
+    pub async fn subscribe_order_price_limits(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::HighPriceLimit, UpdateBits::LowPriceLimit],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from order price limit updates for a specific symbol.
+    pub async fn unsubscribe_order_price_limits(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::HighPriceLimit, UpdateBits::LowPriceLimit],
+            Request::Unsubscribe,
+        )
+        .await
+    }
+
+    /// Subscribe to symbol margin rate updates for a specific symbol.
+    pub async fn subscribe_symbol_margin_rate(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::MarginRate],
+            Request::Subscribe,
+        )
+        .await
+    }
+
+    /// Unsubscribe from symbol margin rate updates for a specific symbol.
+    pub async fn unsubscribe_symbol_margin_rate(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.request_market_data_update(
+            symbol,
+            exchange,
+            vec![UpdateBits::MarginRate],
+            Request::Unsubscribe,
+        )
+        .await
     }
 
     /// List available Rithmic system infrastructure information.
