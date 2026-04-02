@@ -43,6 +43,15 @@ pub(crate) const TRADE_ROUTE_LIVE: &str = "globex";
 pub(crate) const TRADE_ROUTE_DEMO: &str = "simulator";
 pub(crate) const USER_TYPE: i32 = 3;
 
+struct ModifyOrderRequest<'a> {
+    basket_id: &'a str,
+    exchange: &'a str,
+    symbol: &'a str,
+    qty: i32,
+    price: f64,
+    price_type: request_modify_order::PriceType,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RithmicSenderApi {
     account_id: String,
@@ -578,11 +587,18 @@ impl RithmicSenderApi {
         price: f64,
         price_type: request_modify_order::PriceType,
     ) -> (Vec<u8>, String) {
-        self.request_modify_order_with_account(
-            basket_id, exchange, symbol, qty, price, price_type, None,
-        )
+        let request = ModifyOrderRequest {
+            basket_id,
+            exchange,
+            symbol,
+            qty,
+            price,
+            price_type,
+        };
+        self.request_modify_order_with_account(request, None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn request_modify_order_for_account(
         &mut self,
         basket_id: &str,
@@ -593,25 +609,20 @@ impl RithmicSenderApi {
         price_type: request_modify_order::PriceType,
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
-        self.request_modify_order_with_account(
+        let request = ModifyOrderRequest {
             basket_id,
             exchange,
             symbol,
             qty,
             price,
             price_type,
-            Some(account),
-        )
+        };
+        self.request_modify_order_with_account(request, Some(account))
     }
 
     fn request_modify_order_with_account(
         &mut self,
-        basket_id: &str,
-        exchange: &str,
-        symbol: &str,
-        qty: i32,
-        price: f64,
-        price_type: request_modify_order::PriceType,
+        request: ModifyOrderRequest<'_>,
         account: Option<&RithmicAccount>,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
@@ -622,17 +633,17 @@ impl RithmicSenderApi {
             fcm_id: Some(fcm_id),
             ib_id: Some(ib_id),
             account_id: Some(account_id),
-            basket_id: Some(basket_id.into()),
+            basket_id: Some(request.basket_id.into()),
             manual_or_auto: Some(2),
-            exchange: Some(exchange.into()),
-            symbol: Some(symbol.into()),
-            price_type: Some(price_type.into()),
-            quantity: Some(qty),
-            price: Some(price),
+            exchange: Some(request.exchange.into()),
+            symbol: Some(request.symbol.into()),
+            price_type: Some(request.price_type.into()),
+            quantity: Some(request.qty),
+            price: Some(request.price),
             user_msg: vec![id.clone()],
-            trigger_price: match price_type {
+            trigger_price: match request.price_type {
                 request_modify_order::PriceType::StopLimit
-                | request_modify_order::PriceType::StopMarket => Some(price),
+                | request_modify_order::PriceType::StopMarket => Some(request.price),
                 _ => None,
             },
             ..RequestModifyOrder::default()
