@@ -10,7 +10,8 @@ use crate::{
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         rithmic_command_types::{
-            LoginConfig, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
+            LoginConfig, RithmicAccount, RithmicBracketOrder, RithmicCancelOrder,
+            RithmicModifyOrder,
             RithmicOcoOrderLeg, RithmicOrder,
         },
         sender_api::RithmicSenderApi,
@@ -60,6 +61,7 @@ pub(crate) enum OrderPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SubscribeOrderUpdates {
+        account: Option<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SubscribeBracketUpdates {
@@ -71,6 +73,7 @@ pub(crate) enum OrderPlantCommand {
     },
     ModifyOrder {
         order: RithmicModifyOrder,
+        account: Option<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ModifyStop {
@@ -85,12 +88,15 @@ pub(crate) enum OrderPlantCommand {
     },
     CancelOrder {
         order_id: String,
+        account: Option<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ShowOrders {
+        account: Option<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     CancelAllOrders {
+        account: Option<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetAccountRmsInfo {
@@ -121,6 +127,7 @@ pub(crate) enum OrderPlantCommand {
     },
     PlaceOrder {
         order: RithmicOrder,
+        account: Option<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     PlaceOcoOrder {
@@ -159,6 +166,7 @@ pub(crate) enum OrderPlantCommand {
     ReplayExecutions {
         start_index_sec: i32,
         finish_index_sec: i32,
+        account: Option<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SubscribeAccountRmsUpdates {
@@ -741,10 +749,16 @@ impl PlantActor for OrderPlant {
                 self.send_or_fail(Message::Binary(req_buf.into()), &request_id)
                     .await;
             }
-            OrderPlantCommand::SubscribeOrderUpdates { response_sender } => {
-                let (req_buf, id) = self
-                    .rithmic_sender_api
-                    .request_subscribe_for_order_updates();
+            OrderPlantCommand::SubscribeOrderUpdates {
+                account,
+                response_sender,
+            } => {
+                let (req_buf, id) = match account.as_ref() {
+                    Some(account) => self
+                        .rithmic_sender_api
+                        .request_subscribe_for_order_updates_for_account(account),
+                    None => self.rithmic_sender_api.request_subscribe_for_order_updates(),
+                };
 
                 let request_id = id.clone();
 
@@ -789,16 +803,28 @@ impl PlantActor for OrderPlant {
             }
             OrderPlantCommand::ModifyOrder {
                 order,
+                account,
                 response_sender,
             } => {
-                let (req_buf, id) = self.rithmic_sender_api.request_modify_order(
-                    &order.id,
-                    &order.exchange,
-                    &order.symbol,
-                    order.qty,
-                    order.price,
-                    order.price_type,
-                );
+                let (req_buf, id) = match account.as_ref() {
+                    Some(account) => self.rithmic_sender_api.request_modify_order_for_account(
+                        &order.id,
+                        &order.exchange,
+                        &order.symbol,
+                        order.qty,
+                        order.price,
+                        order.price_type,
+                        account,
+                    ),
+                    None => self.rithmic_sender_api.request_modify_order(
+                        &order.id,
+                        &order.exchange,
+                        &order.symbol,
+                        order.qty,
+                        order.price,
+                        order.price_type,
+                    ),
+                };
 
                 let request_id = id.clone();
 
@@ -812,9 +838,15 @@ impl PlantActor for OrderPlant {
             }
             OrderPlantCommand::CancelOrder {
                 order_id,
+                account,
                 response_sender,
             } => {
-                let (req_buf, id) = self.rithmic_sender_api.request_cancel_order(&order_id);
+                let (req_buf, id) = match account.as_ref() {
+                    Some(account) => self
+                        .rithmic_sender_api
+                        .request_cancel_order_for_account(&order_id, account),
+                    None => self.rithmic_sender_api.request_cancel_order(&order_id),
+                };
 
                 let request_id = id.clone();
 
@@ -864,8 +896,16 @@ impl PlantActor for OrderPlant {
                 self.send_or_fail(Message::Binary(req_buf.into()), &request_id)
                     .await;
             }
-            OrderPlantCommand::ShowOrders { response_sender } => {
-                let (req_buf, id) = self.rithmic_sender_api.request_show_orders();
+            OrderPlantCommand::ShowOrders {
+                account,
+                response_sender,
+            } => {
+                let (req_buf, id) = match account.as_ref() {
+                    Some(account) => self
+                        .rithmic_sender_api
+                        .request_show_orders_for_account(account),
+                    None => self.rithmic_sender_api.request_show_orders(),
+                };
 
                 let request_id = id.clone();
 
@@ -877,8 +917,16 @@ impl PlantActor for OrderPlant {
                 self.send_or_fail(Message::Binary(req_buf.into()), &request_id)
                     .await;
             }
-            OrderPlantCommand::CancelAllOrders { response_sender } => {
-                let (req_buf, id) = self.rithmic_sender_api.request_cancel_all_orders();
+            OrderPlantCommand::CancelAllOrders {
+                account,
+                response_sender,
+            } => {
+                let (req_buf, id) = match account.as_ref() {
+                    Some(account) => self
+                        .rithmic_sender_api
+                        .request_cancel_all_orders_for_account(account),
+                    None => self.rithmic_sender_api.request_cancel_all_orders(),
+                };
 
                 let request_id = id.clone();
 
@@ -1004,9 +1052,15 @@ impl PlantActor for OrderPlant {
             }
             OrderPlantCommand::PlaceOrder {
                 order,
+                account,
                 response_sender,
             } => {
-                let (req_buf, id) = self.rithmic_sender_api.request_order(&order);
+                let (req_buf, id) = match account.as_ref() {
+                    Some(account) => self
+                        .rithmic_sender_api
+                        .request_order_for_account(&order, account),
+                    None => self.rithmic_sender_api.request_order(&order),
+                };
 
                 let request_id = id.clone();
 
@@ -1154,11 +1208,21 @@ impl PlantActor for OrderPlant {
             OrderPlantCommand::ReplayExecutions {
                 start_index_sec,
                 finish_index_sec,
+                account,
                 response_sender,
             } => {
-                let (req_buf, id) = self
-                    .rithmic_sender_api
-                    .request_replay_executions(start_index_sec, finish_index_sec);
+                let (req_buf, id) = match account.as_ref() {
+                    Some(account) => self
+                        .rithmic_sender_api
+                        .request_replay_executions_for_account(
+                            start_index_sec,
+                            finish_index_sec,
+                            account,
+                        ),
+                    None => self
+                        .rithmic_sender_api
+                        .request_replay_executions(start_index_sec, finish_index_sec),
+                };
 
                 let request_id = id.clone();
 
@@ -1463,9 +1527,26 @@ impl RithmicOrderPlantHandle {
     /// # Returns
     /// The subscription response or an error message
     pub async fn subscribe_order_updates(&self) -> Result<RithmicResponse, RithmicError> {
+        self.subscribe_order_updates_for_account_internal(None).await
+    }
+
+    /// Subscribe to order status updates for a specific account identity.
+    pub async fn subscribe_order_updates_for_account(
+        &self,
+        account: RithmicAccount,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.subscribe_order_updates_for_account_internal(Some(account))
+            .await
+    }
+
+    async fn subscribe_order_updates_for_account_internal(
+        &self,
+        account: Option<RithmicAccount>,
+    ) -> Result<RithmicResponse, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::SubscribeOrderUpdates {
+            account,
             response_sender: tx,
         };
 
@@ -1532,10 +1613,29 @@ impl RithmicOrderPlantHandle {
         &self,
         order: RithmicModifyOrder,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.modify_order_for_account_internal(order, None).await
+    }
+
+    /// Modify an existing order for a specific account identity.
+    pub async fn modify_order_for_account(
+        &self,
+        order: RithmicModifyOrder,
+        account: RithmicAccount,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.modify_order_for_account_internal(order, Some(account))
+            .await
+    }
+
+    async fn modify_order_for_account_internal(
+        &self,
+        order: RithmicModifyOrder,
+        account: Option<RithmicAccount>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::ModifyOrder {
             order,
+            account,
             response_sender: tx,
         };
 
@@ -1555,10 +1655,29 @@ impl RithmicOrderPlantHandle {
         &self,
         order: RithmicCancelOrder,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.cancel_order_for_account_internal(order, None).await
+    }
+
+    /// Cancel an order for a specific account identity.
+    pub async fn cancel_order_for_account(
+        &self,
+        order: RithmicCancelOrder,
+        account: RithmicAccount,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.cancel_order_for_account_internal(order, Some(account))
+            .await
+    }
+
+    async fn cancel_order_for_account_internal(
+        &self,
+        order: RithmicCancelOrder,
+        account: Option<RithmicAccount>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::CancelOrder {
             order_id: order.id,
+            account,
             response_sender: tx,
         };
 
@@ -1628,9 +1747,25 @@ impl RithmicOrderPlantHandle {
     /// # Returns
     /// The order list response or an error message
     pub async fn show_orders(&self) -> Result<RithmicResponse, RithmicError> {
+        self.show_orders_for_account_internal(None).await
+    }
+
+    /// Request a list of all open orders for a specific account identity.
+    pub async fn show_orders_for_account(
+        &self,
+        account: RithmicAccount,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.show_orders_for_account_internal(Some(account)).await
+    }
+
+    async fn show_orders_for_account_internal(
+        &self,
+        account: Option<RithmicAccount>,
+    ) -> Result<RithmicResponse, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::ShowOrders {
+            account,
             response_sender: tx,
         };
 
@@ -1654,9 +1789,26 @@ impl RithmicOrderPlantHandle {
     /// # Returns
     /// The cancellation response or an error message
     pub async fn cancel_all_orders(&self) -> Result<RithmicResponse, RithmicError> {
+        self.cancel_all_orders_for_account_internal(None).await
+    }
+
+    /// Cancel all open orders for a specific account identity.
+    pub async fn cancel_all_orders_for_account(
+        &self,
+        account: RithmicAccount,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.cancel_all_orders_for_account_internal(Some(account))
+            .await
+    }
+
+    async fn cancel_all_orders_for_account_internal(
+        &self,
+        account: Option<RithmicAccount>,
+    ) -> Result<RithmicResponse, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::CancelAllOrders {
+            account,
             response_sender: tx,
         };
 
@@ -1852,10 +2004,29 @@ impl RithmicOrderPlantHandle {
         &self,
         order: RithmicOrder,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.place_order_for_account_internal(order, None).await
+    }
+
+    /// Place an order for a specific account identity.
+    pub async fn place_order_for_account(
+        &self,
+        order: RithmicOrder,
+        account: RithmicAccount,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.place_order_for_account_internal(order, Some(account))
+            .await
+    }
+
+    async fn place_order_for_account_internal(
+        &self,
+        order: RithmicOrder,
+        account: Option<RithmicAccount>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::PlaceOrder {
             order,
+            account,
             response_sender: tx,
         };
 
@@ -2074,11 +2245,37 @@ impl RithmicOrderPlantHandle {
         start_index_sec: i32,
         finish_index_sec: i32,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.replay_executions_for_account_internal(start_index_sec, finish_index_sec, None)
+            .await
+    }
+
+    /// Replay historical executions for a specific account identity.
+    pub async fn replay_executions_for_account(
+        &self,
+        start_index_sec: i32,
+        finish_index_sec: i32,
+        account: RithmicAccount,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.replay_executions_for_account_internal(
+            start_index_sec,
+            finish_index_sec,
+            Some(account),
+        )
+        .await
+    }
+
+    async fn replay_executions_for_account_internal(
+        &self,
+        start_index_sec: i32,
+        finish_index_sec: i32,
+        account: Option<RithmicAccount>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::ReplayExecutions {
             start_index_sec,
             finish_index_sec,
+            account,
             response_sender: tx,
         };
 

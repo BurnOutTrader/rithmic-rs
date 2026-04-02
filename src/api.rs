@@ -23,8 +23,8 @@ pub(crate) mod sender_api;
 pub use receiver_api::RithmicResponse;
 
 pub use rithmic_command_types::{
-    LoginConfig, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder, RithmicOcoOrderLeg,
-    RithmicOrder, TrailingStop,
+    LoginConfig, RithmicAccount, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
+    RithmicOcoOrderLeg, RithmicOrder, TrailingStop,
 };
 
 // Re-export bracket order enums
