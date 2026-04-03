@@ -2186,7 +2186,10 @@ mod tests {
         );
         let request: RequestLinkOrders = decode_request(&buf);
 
-        assert_eq!(request.fcm_id, vec!["FCM_B".to_string(), "FCM_B".to_string()]);
+        assert_eq!(
+            request.fcm_id,
+            vec!["FCM_B".to_string(), "FCM_B".to_string()]
+        );
         assert_eq!(request.ib_id, vec!["IB_B".to_string(), "IB_B".to_string()]);
         assert_eq!(
             request.account_id,

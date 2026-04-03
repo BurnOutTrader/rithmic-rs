@@ -790,7 +790,9 @@ impl PlantActor for OrderPlant {
                     Some(account) => self
                         .rithmic_sender_api
                         .request_subscribe_to_bracket_updates_for_account(account),
-                    None => self.rithmic_sender_api.request_subscribe_to_bracket_updates(),
+                    None => self
+                        .rithmic_sender_api
+                        .request_subscribe_to_bracket_updates(),
                 };
 
                 let request_id = id.clone();
@@ -916,9 +918,7 @@ impl PlantActor for OrderPlant {
                 let (req_buf, id) = match account.as_ref() {
                     Some(account) => self
                         .rithmic_sender_api
-                        .request_update_target_bracket_level_for_account(
-                            &order_id, ticks, account,
-                        ),
+                        .request_update_target_bracket_level_for_account(&order_id, ticks, account),
                     None => self
                         .rithmic_sender_api
                         .request_update_target_bracket_level(&order_id, ticks),
@@ -1185,7 +1185,9 @@ impl PlantActor for OrderPlant {
                     Some(account) => self
                         .rithmic_sender_api
                         .request_exit_position_for_account(&symbol, &exchange, account),
-                    None => self.rithmic_sender_api.request_exit_position(&symbol, &exchange),
+                    None => self
+                        .rithmic_sender_api
+                        .request_exit_position(&symbol, &exchange),
                 };
 
                 let request_id = id.clone();
@@ -1321,7 +1323,9 @@ impl PlantActor for OrderPlant {
                     Some(account) => self
                         .rithmic_sender_api
                         .request_account_rms_updates_for_account(subscribe, account),
-                    None => self.rithmic_sender_api.request_account_rms_updates(subscribe),
+                    None => self
+                        .rithmic_sender_api
+                        .request_account_rms_updates(subscribe),
                 };
 
                 let request_id = id.clone();
@@ -1647,7 +1651,8 @@ impl RithmicOrderPlantHandle {
     /// # Returns
     /// The subscription response or an error message
     pub async fn subscribe_bracket_updates(&self) -> Result<RithmicResponse, RithmicError> {
-        self.subscribe_bracket_updates_for_account_internal(None).await
+        self.subscribe_bracket_updates_for_account_internal(None)
+            .await
     }
 
     /// Subscribe to bracket order status updates for a specific account identity.
@@ -1819,7 +1824,8 @@ impl RithmicOrderPlantHandle {
         id: &str,
         ticks: i32,
     ) -> Result<RithmicResponse, RithmicError> {
-        self.adjust_profit_for_account_internal(id, ticks, None).await
+        self.adjust_profit_for_account_internal(id, ticks, None)
+            .await
     }
 
     /// Adjust the profit target level for a specific account identity.
@@ -2375,7 +2381,8 @@ impl RithmicOrderPlantHandle {
         &self,
         basket_ids: Vec<String>,
     ) -> Result<RithmicResponse, RithmicError> {
-        self.link_orders_for_account_internal(basket_ids, None).await
+        self.link_orders_for_account_internal(basket_ids, None)
+            .await
     }
 
     /// Link multiple orders together for a specific account identity.
