@@ -24,16 +24,22 @@ Set your environment variables:
 RITHMIC_APP_NAME=your_app_name
 RITHMIC_APP_VERSION=1
 
-RITHMIC_DEMO_ACCOUNT_ID=your_account_id
-RITHMIC_DEMO_FCM_ID=your_fcm_id
-RITHMIC_DEMO_IB_ID=your_ib_id
 RITHMIC_DEMO_USER=your_username
 RITHMIC_DEMO_PW=your_password
 RITHMIC_DEMO_URL=<provided_by_rithmic>
 RITHMIC_DEMO_ALT_URL=<provided_by_rithmic>
 
+# Required for order and PnL requests
+RITHMIC_DEMO_ACCOUNT_ID=your_account_id
+RITHMIC_DEMO_FCM_ID=your_fcm_id
+RITHMIC_DEMO_IB_ID=your_ib_id
+
 # See examples/.env.blank for Live
 ```
+
+`RithmicConfig` contains connection and login details. `RithmicAccount` is separate and
+identifies which trading account to use for order and PnL requests. Login is user-scoped;
+account fields are sent with account-scoped requests, not during the initial sign-in.
 
 Stream live market data:
 
@@ -85,7 +91,16 @@ let front_month = handle.get_front_month_contract("ES", "CME", false).await?;
 ### Order Plant
 
 ```rust
-use rithmic_rs::{RithmicOrder, NewOrderTransactionType, NewOrderPriceType};
+use rithmic_rs::{
+    ConnectStrategy, NewOrderPriceType, NewOrderTransactionType, RithmicAccount,
+    RithmicConfig, RithmicEnv, RithmicOrder, RithmicOrderPlant,
+};
+
+let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+let account = RithmicAccount::from_env(RithmicEnv::Demo)?;
+let plant = RithmicOrderPlant::connect(&config, ConnectStrategy::Retry).await?;
+let mut handle = plant.get_handle(&account);
+handle.login().await?;
 
 // Place orders using the RithmicOrder API
 let order = RithmicOrder {
@@ -108,6 +123,9 @@ handle.cancel_order(order_id).await?;
 handle.exit_position("ESM6", "CME").await?;
 ```
 
+For multi-account workflows, create one [`RithmicAccount`] per account and call
+`get_handle(&account)` for each handle you need.
+
 ### History Plant
 
 ```rust
@@ -119,6 +137,16 @@ let ticks = handle.load_ticks("ESM6", "CME", start, end).await?;
 ### PnL Plant
 
 ```rust
+use rithmic_rs::{
+    ConnectStrategy, RithmicAccount, RithmicConfig, RithmicEnv, RithmicPnlPlant,
+};
+
+let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+let account = RithmicAccount::from_env(RithmicEnv::Demo)?;
+let plant = RithmicPnlPlant::connect(&config, ConnectStrategy::Retry).await?;
+let mut handle = plant.get_handle(&account);
+handle.login().await?;
+
 // Monitor P&L
 handle.subscribe_pnl_updates().await?;
 let snapshot = handle.pnl_position_snapshots().await?;
