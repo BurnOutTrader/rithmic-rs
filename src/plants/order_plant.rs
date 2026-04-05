@@ -12,8 +12,8 @@ use crate::{
     api::{
         receiver_api::{RithmicReceiverApi, RithmicResponse},
         rithmic_command_types::{
-            LoginConfig, RithmicBracketOrder, RithmicCancelOrder, RithmicModifyOrder,
-            RithmicOcoOrderLeg, RithmicOrder,
+            LoginConfig, RithmicAdvancedBracketOrder, RithmicBracketOrder, RithmicCancelOrder,
+            RithmicModifyOrder, RithmicOcoOrderLeg, RithmicOrder,
         },
         sender_api::RithmicSenderApi,
     },
@@ -72,6 +72,11 @@ pub(crate) enum OrderPlantCommand {
     },
     PlaceBracketOrder {
         bracket_order: RithmicBracketOrder,
+        account: Arc<RithmicAccount>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
+    },
+    PlaceAdvancedBracketOrder {
+        bracket_order: RithmicAdvancedBracketOrder,
         account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
@@ -818,6 +823,25 @@ impl PlantActor for OrderPlant {
                 let (req_buf, id) = self
                     .rithmic_sender_api
                     .request_bracket_order(bracket_order, &account);
+
+                let request_id = id.clone();
+
+                self.request_handler.register_request(RithmicRequest {
+                    request_id: id,
+                    responder: response_sender,
+                });
+
+                self.send_or_fail(Message::Binary(req_buf.into()), &request_id)
+                    .await;
+            }
+            OrderPlantCommand::PlaceAdvancedBracketOrder {
+                bracket_order,
+                account,
+                response_sender,
+            } => {
+                let (req_buf, id) = self
+                    .rithmic_sender_api
+                    .request_advanced_bracket_order(bracket_order, &account);
 
                 let request_id = id.clone();
 
@@ -1599,6 +1623,31 @@ impl RithmicOrderPlantHandle {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::PlaceBracketOrder {
+            bracket_order,
+            account: self.account.clone(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        rx.await.map_err(|_| RithmicError::ConnectionClosed)?
+    }
+
+    /// Place an advanced bracket order using the full raw `RequestBracketOrder`
+    /// request surface currently modeled by this crate.
+    ///
+    /// # Arguments
+    /// * `bracket_order` - The advanced bracket order parameters
+    ///
+    /// # Returns
+    /// The order placement responses or an error message
+    pub async fn place_advanced_bracket_order(
+        &self,
+        bracket_order: RithmicAdvancedBracketOrder,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+
+        let command = OrderPlantCommand::PlaceAdvancedBracketOrder {
             bracket_order,
             account: self.account.clone(),
             response_sender: tx,

@@ -1,5 +1,5 @@
 use super::rithmic_command_types::{
-    LoginConfig, RithmicBracketOrder, RithmicOcoOrderLeg, RithmicOrder,
+    LoginConfig, RithmicAdvancedBracketOrder, RithmicBracketOrder, RithmicOcoOrderLeg, RithmicOrder,
 };
 use prost::Message;
 
@@ -487,6 +487,14 @@ impl RithmicSenderApi {
         bracket_order: RithmicBracketOrder,
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
+        self.request_advanced_bracket_order(bracket_order.into(), account)
+    }
+
+    pub fn request_advanced_bracket_order(
+        &mut self,
+        bracket_order: RithmicAdvancedBracketOrder,
+        account: &RithmicAccount,
+    ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
 
         let trade_route = match self.env {
@@ -508,20 +516,49 @@ impl RithmicSenderApi {
             price_type: Some(bracket_order.price_type.into()),
             manual_or_auto: Some(2),
             duration: Some(bracket_order.duration.into()),
-            bracket_type: Some(
-                crate::rti::request_bracket_order::BracketType::TargetAndStopStatic.into(),
-            ),
-            target_quantity: vec![bracket_order.quantity],
-            stop_quantity: vec![bracket_order.quantity],
-            target_ticks: vec![bracket_order.profit_ticks],
-            stop_ticks: vec![bracket_order.stop_ticks],
-            price: if bracket_order.price_type
-                != crate::rti::request_bracket_order::PriceType::Market
-            {
-                bracket_order.price
-            } else {
-                None
-            },
+            bracket_type: Some(bracket_order.bracket_type.into()),
+            break_even_ticks: bracket_order.break_even_ticks,
+            break_even_trigger_ticks: bracket_order.break_even_trigger_ticks,
+            target_quantity: bracket_order.target_quantity,
+            target_ticks: bracket_order.target_ticks,
+            stop_quantity: bracket_order.stop_quantity,
+            stop_ticks: bracket_order.stop_ticks,
+            trailing_stop_trigger_ticks: bracket_order.trailing_stop_trigger_ticks,
+            trailing_stop_by_last_trade_price: bracket_order.trailing_stop_by_last_trade_price,
+            target_market_order_if_touched: bracket_order.target_market_order_if_touched,
+            stop_market_on_reject: bracket_order.stop_market_on_reject,
+            target_market_at_ssboe: bracket_order.target_market_at_ssboe,
+            target_market_at_usecs: bracket_order.target_market_at_usecs,
+            stop_market_at_ssboe: bracket_order.stop_market_at_ssboe,
+            stop_market_at_usecs: bracket_order.stop_market_at_usecs,
+            target_market_order_after_secs: bracket_order.target_market_order_after_secs,
+            release_at_ssboe: bracket_order.release_at_ssboe,
+            release_at_usecs: bracket_order.release_at_usecs,
+            cancel_at_ssboe: bracket_order.cancel_at_ssboe,
+            cancel_at_usecs: bracket_order.cancel_at_usecs,
+            cancel_after_secs: bracket_order.cancel_after_secs,
+            if_touched_symbol: bracket_order
+                .if_touched
+                .as_ref()
+                .map(|trigger| trigger.symbol.clone()),
+            if_touched_exchange: bracket_order
+                .if_touched
+                .as_ref()
+                .map(|trigger| trigger.exchange.clone()),
+            if_touched_condition: bracket_order
+                .if_touched
+                .as_ref()
+                .map(|trigger| trigger.condition.into()),
+            if_touched_price_field: bracket_order
+                .if_touched
+                .as_ref()
+                .map(|trigger| trigger.price_field.into()),
+            if_touched_price: bracket_order
+                .if_touched
+                .as_ref()
+                .map(|trigger| trigger.price),
+            price: bracket_order.price,
+            trigger_price: bracket_order.trigger_price,
             user_msg: vec![id.clone()],
             user_tag: Some(bracket_order.localid),
             ..RequestBracketOrder::default()
@@ -1709,6 +1746,50 @@ mod tests {
         T::decode(&buf[4..]).expect("decode request")
     }
 
+    fn advanced_bracket() -> RithmicAdvancedBracketOrder {
+        let mut order = RithmicAdvancedBracketOrder {
+            action: crate::rti::request_bracket_order::TransactionType::Buy,
+            duration: crate::rti::request_bracket_order::Duration::Gtc,
+            exchange: "CME".to_string(),
+            localid: "advanced-bracket-1".to_string(),
+            price_type: crate::rti::request_bracket_order::PriceType::StopLimit,
+            price: Some(5000.25),
+            trigger_price: Some(4999.75),
+            quantity: 3,
+            symbol: "ESM6".to_string(),
+            bracket_type: crate::rti::request_bracket_order::BracketType::TargetAndStop,
+            target_quantity: vec![2, 1],
+            target_ticks: vec![16, 24],
+            stop_quantity: vec![3],
+            stop_ticks: vec![8],
+            if_touched: Some(crate::api::RithmicIfTouchedTrigger {
+                symbol: "NQM6".to_string(),
+                exchange: "CME".to_string(),
+                condition: crate::rti::request_bracket_order::Condition::GreaterThanEqualTo,
+                price_field: crate::rti::request_bracket_order::PriceField::TradePrice,
+                price: 18250.5,
+            }),
+            break_even_ticks: Some(2),
+            break_even_trigger_ticks: Some(10),
+            trailing_stop_trigger_ticks: Some(12),
+            target_market_order_if_touched: Some(true),
+            stop_market_on_reject: Some(true),
+            release_at_ssboe: Some(35900),
+            cancel_after_secs: Some(120),
+            ..Default::default()
+        };
+        order.trailing_stop_by_last_trade_price = Some(true);
+        order.target_market_at_ssboe = Some(36000);
+        order.target_market_at_usecs = Some(250000);
+        order.stop_market_at_ssboe = Some(36100);
+        order.stop_market_at_usecs = Some(500000);
+        order.target_market_order_after_secs = Some(30);
+        order.release_at_usecs = Some(125000);
+        order.cancel_at_ssboe = Some(37000);
+        order.cancel_at_usecs = Some(750000);
+        order
+    }
+
     #[test]
     fn order_request_override_uses_supplied_account() {
         let mut api = RithmicSenderApi::new(&test_config());
@@ -1758,7 +1839,7 @@ mod tests {
     }
 
     #[test]
-    fn bracket_request_override_uses_supplied_account() {
+    fn bracket_request_retains_static_shape_for_simple_helper() {
         let mut api = RithmicSenderApi::new(&test_config());
         let bracket = RithmicBracketOrder {
             action: crate::rti::request_bracket_order::TransactionType::Buy,
@@ -1790,6 +1871,79 @@ mod tests {
         assert_eq!(request.price, Some(5000.0));
         assert_eq!(request.trigger_price, None);
         assert_eq!(request.user_tag.as_deref(), Some("bracket-1"));
+    }
+
+    #[test]
+    fn advanced_bracket_request_uses_supplied_account_and_trade_route() {
+        let mut api = RithmicSenderApi::new(&test_config());
+
+        let (buf, _) = api.request_advanced_bracket_order(advanced_bracket(), &override_account());
+        let request: RequestBracketOrder = decode_request(&buf);
+
+        assert_eq!(request.fcm_id.as_deref(), Some("FCM_B"));
+        assert_eq!(request.ib_id.as_deref(), Some("IB_B"));
+        assert_eq!(request.account_id.as_deref(), Some("ACCOUNT_B"));
+        assert_eq!(request.trade_route.as_deref(), Some(TRADE_ROUTE_DEMO));
+        assert_eq!(request.user_tag.as_deref(), Some("advanced-bracket-1"));
+    }
+
+    #[test]
+    fn advanced_bracket_request_encodes_trigger_and_if_touched_fields() {
+        let mut api = RithmicSenderApi::new(&test_config());
+
+        let (buf, _) = api.request_advanced_bracket_order(advanced_bracket(), &default_account());
+        let request: RequestBracketOrder = decode_request(&buf);
+
+        assert_eq!(request.price, Some(5000.25));
+        assert_eq!(request.trigger_price, Some(4999.75));
+        assert_eq!(
+            request.price_type,
+            Some(crate::rti::request_bracket_order::PriceType::StopLimit as i32)
+        );
+        assert_eq!(
+            request.bracket_type,
+            Some(crate::rti::request_bracket_order::BracketType::TargetAndStop as i32)
+        );
+        assert_eq!(request.target_quantity, vec![2, 1]);
+        assert_eq!(request.target_ticks, vec![16, 24]);
+        assert_eq!(request.stop_quantity, vec![3]);
+        assert_eq!(request.stop_ticks, vec![8]);
+        assert_eq!(request.if_touched_symbol.as_deref(), Some("NQM6"));
+        assert_eq!(request.if_touched_exchange.as_deref(), Some("CME"));
+        assert_eq!(
+            request.if_touched_condition,
+            Some(crate::rti::request_bracket_order::Condition::GreaterThanEqualTo as i32)
+        );
+        assert_eq!(
+            request.if_touched_price_field,
+            Some(crate::rti::request_bracket_order::PriceField::TradePrice as i32)
+        );
+        assert_eq!(request.if_touched_price, Some(18250.5));
+    }
+
+    #[test]
+    fn advanced_bracket_request_encodes_management_and_timing_fields() {
+        let mut api = RithmicSenderApi::new(&test_config());
+
+        let (buf, _) = api.request_advanced_bracket_order(advanced_bracket(), &default_account());
+        let request: RequestBracketOrder = decode_request(&buf);
+
+        assert_eq!(request.break_even_ticks, Some(2));
+        assert_eq!(request.break_even_trigger_ticks, Some(10));
+        assert_eq!(request.trailing_stop_trigger_ticks, Some(12));
+        assert_eq!(request.trailing_stop_by_last_trade_price, Some(true));
+        assert_eq!(request.target_market_order_if_touched, Some(true));
+        assert_eq!(request.stop_market_on_reject, Some(true));
+        assert_eq!(request.target_market_at_ssboe, Some(36000));
+        assert_eq!(request.target_market_at_usecs, Some(250000));
+        assert_eq!(request.stop_market_at_ssboe, Some(36100));
+        assert_eq!(request.stop_market_at_usecs, Some(500000));
+        assert_eq!(request.target_market_order_after_secs, Some(30));
+        assert_eq!(request.release_at_ssboe, Some(35900));
+        assert_eq!(request.release_at_usecs, Some(125000));
+        assert_eq!(request.cancel_at_ssboe, Some(37000));
+        assert_eq!(request.cancel_at_usecs, Some(750000));
+        assert_eq!(request.cancel_after_secs, Some(120));
     }
 
     #[test]
