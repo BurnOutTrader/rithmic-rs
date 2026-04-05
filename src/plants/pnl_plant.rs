@@ -7,9 +7,10 @@ use crate::{
         rithmic_command_types::LoginConfig,
         sender_api::RithmicSenderApi,
     },
-    config::RithmicConfig,
+    config::{RithmicAccount, RithmicConfig},
     error::RithmicError,
     ping_manager::PingManager,
+    plants::subscription::AccountSubscriptionReceiver,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType, request_pn_l_position_updates},
     ws::{
@@ -49,6 +50,7 @@ pub(crate) enum PnlPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     PnlPositionSnapshots {
+        account: RithmicAccount,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SendHeartbeat,
@@ -56,9 +58,11 @@ pub(crate) enum PnlPlantCommand {
         seconds: u64,
     },
     SubscribePnlUpdates {
+        account: RithmicAccount,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     UnsubscribePnlUpdates {
+        account: RithmicAccount,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
 }
@@ -74,7 +78,7 @@ pub(crate) enum PnlPlantCommand {
 ///
 /// ```no_run
 /// use rithmic_rs::{
-///     RithmicConfig, RithmicEnv, ConnectStrategy, RithmicPnlPlant,
+///     RithmicAccount, RithmicConfig, RithmicEnv, ConnectStrategy, RithmicPnlPlant,
 ///     rti::messages::RithmicMessage,
 /// };
 /// use tokio::time::{sleep, Duration};
@@ -83,12 +87,13 @@ pub(crate) enum PnlPlantCommand {
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     // Step 1: Create connection configuration
 ///     let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+///     let account = RithmicAccount::from_env(RithmicEnv::Demo)?;
 ///
 ///     // Step 2: Connect to the PnL plant
 ///     let pnl_plant = RithmicPnlPlant::connect(&config, ConnectStrategy::Retry).await?;
 ///
 ///     // Step 3: Get a handle to interact with the plant
-///     let mut handle = pnl_plant.get_handle();
+///     let mut handle = pnl_plant.get_handle(&account);
 ///
 ///     // Step 4: Login to the PnL plant
 ///     handle.login().await?;
@@ -169,11 +174,15 @@ impl RithmicPnlPlant {
     /// Get a handle to interact with the PnL plant.
     ///
     /// The handle provides methods to subscribe to PnL updates and retrieve position snapshots.
-    /// Multiple handles can be created from the same plant.
-    pub fn get_handle(&self) -> RithmicPnlPlantHandle {
+    /// Multiple handles can be created from the same plant for different accounts.
+    pub fn get_handle(&self, account: &RithmicAccount) -> RithmicPnlPlantHandle {
         RithmicPnlPlantHandle {
+            account: account.clone(),
             sender: self.sender.clone(),
-            subscription_receiver: self.subscription_sender.subscribe(),
+            subscription_receiver: AccountSubscriptionReceiver::new(
+                account.clone(),
+                self.subscription_sender.subscribe(),
+            ),
         }
     }
 }
@@ -552,9 +561,13 @@ impl PlantActor for PnlPlant {
             PnlPlantCommand::UpdateHeartbeat { seconds } => {
                 self.interval = get_heartbeat_interval(Some(seconds));
             }
-            PnlPlantCommand::SubscribePnlUpdates { response_sender } => {
+            PnlPlantCommand::SubscribePnlUpdates {
+                account,
+                response_sender,
+            } => {
                 let (subscribe_buf, id) = self.rithmic_sender_api.request_pnl_position_updates(
                     request_pn_l_position_updates::Request::Subscribe,
+                    &account,
                 );
 
                 let request_id = id.clone();
@@ -567,8 +580,13 @@ impl PlantActor for PnlPlant {
                 self.send_or_fail(Message::Binary(subscribe_buf.into()), &request_id)
                     .await;
             }
-            PnlPlantCommand::PnlPositionSnapshots { response_sender } => {
-                let (snapshot_buf, id) = self.rithmic_sender_api.request_pnl_position_snapshot();
+            PnlPlantCommand::PnlPositionSnapshots {
+                account,
+                response_sender,
+            } => {
+                let (snapshot_buf, id) = self
+                    .rithmic_sender_api
+                    .request_pnl_position_snapshot(&account);
 
                 let request_id = id.clone();
 
@@ -580,9 +598,13 @@ impl PlantActor for PnlPlant {
                 self.send_or_fail(Message::Binary(snapshot_buf.into()), &request_id)
                     .await;
             }
-            PnlPlantCommand::UnsubscribePnlUpdates { response_sender } => {
+            PnlPlantCommand::UnsubscribePnlUpdates {
+                account,
+                response_sender,
+            } => {
                 let (unsubscribe_buf, id) = self.rithmic_sender_api.request_pnl_position_updates(
                     request_pn_l_position_updates::Request::Unsubscribe,
+                    &account,
                 );
 
                 let request_id = id.clone();
@@ -608,14 +630,16 @@ impl PlantActor for PnlPlant {
 /// log in and subscribe to real-time P&L and position updates. Updates arrive on
 /// [`subscription_receiver`](Self::subscription_receiver).
 pub struct RithmicPnlPlantHandle {
+    account: RithmicAccount,
     sender: mpsc::Sender<PnlPlantCommand>,
     /// Receiver for real-time P&L and position updates.
-    pub subscription_receiver: broadcast::Receiver<RithmicResponse>,
+    pub subscription_receiver: AccountSubscriptionReceiver,
 }
 
 impl std::fmt::Debug for RithmicPnlPlantHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RithmicPnlPlantHandle")
+            .field("account", &self.account)
             .field("sender", &self.sender)
             .finish_non_exhaustive()
     }
@@ -749,6 +773,7 @@ impl RithmicPnlPlantHandle {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::SubscribePnlUpdates {
+            account: self.account.clone(),
             response_sender: tx,
         };
 
@@ -769,6 +794,7 @@ impl RithmicPnlPlantHandle {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::PnlPositionSnapshots {
+            account: self.account.clone(),
             response_sender: tx,
         };
 
@@ -789,6 +815,7 @@ impl RithmicPnlPlantHandle {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = PnlPlantCommand::UnsubscribePnlUpdates {
+            account: self.account.clone(),
             response_sender: tx,
         };
 

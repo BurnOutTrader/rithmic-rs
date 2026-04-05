@@ -1,24 +1,29 @@
 //! Configuration for Rithmic connections.
 //!
 //! This module provides the primary interface for configuring Rithmic connections.
-//! The [`RithmicConfig`] type contains both account information and connection details.
+//! [`RithmicConfig`] contains connection and login details, while [`RithmicAccount`]
+//! models a concrete trading account identity for order and PnL requests.
 //!
 //! # Example
 //! ```no_run
 //! use rithmic_rs::config::{RithmicConfig, RithmicEnv};
+//! use rithmic_rs::RithmicAccount;
 //!
 //! // Simple one-line configuration from environment variables
 //! let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
 //!
 //! // Or build manually if needed
 //! let config = RithmicConfig::builder(RithmicEnv::Demo)
-//!     .account_id("my_account")
-//!     .fcm_id("my_fcm")
-//!     .ib_id("my_ib")
 //!     .user("my_user")
 //!     .password("my_password")
 //!     .app_name("my_app")
 //!     .app_version("1")
+//!     .build()?;
+//!
+//! let account = RithmicAccount::builder(RithmicEnv::Demo)
+//!     .account_id("my_account")
+//!     .fcm_id("my_fcm")
+//!     .ib_id("my_ib")
 //!     .build()?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -104,21 +109,147 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// Configuration for Rithmic connections.
+/// Trading account identity for order and PnL requests.
 ///
-/// This struct contains both account information and connection details.
+/// This type is separate from [`RithmicConfig`] because Rithmic authenticates
+/// per user session while order and PnL operations are account-scoped.
 ///
-/// # Fields
-/// - Account-related: `account_id`, `fcm_id`, `ib_id`
-/// - Connection-related: `url`, `beta_url`, `user`, `password`, `system_name`, `env`
-#[derive(Clone)]
-pub struct RithmicConfig {
+/// # Example
+///
+/// ```ignore
+/// use rithmic_rs::RithmicAccount;
+///
+/// let account = RithmicAccount::new("FCM_ID", "IB_ID", "ACCOUNT_ID");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RithmicAccount {
     /// Trading account identifier.
     pub account_id: String,
     /// Futures Commission Merchant identifier.
     pub fcm_id: String,
     /// Introducing Broker identifier.
     pub ib_id: String,
+}
+
+impl RithmicAccount {
+    /// Create a typed account identity directly.
+    pub fn new(
+        fcm_id: impl Into<String>,
+        ib_id: impl Into<String>,
+        account_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            fcm_id: fcm_id.into(),
+            ib_id: ib_id.into(),
+        }
+    }
+
+    /// Create an account identity by loading values from environment variables.
+    ///
+    /// See [`examples/.env.blank`](https://github.com/pbeets/rithmic-rs/blob/main/examples/.env.blank)
+    /// for a template of all required environment variables.
+    pub fn from_env(env: RithmicEnv) -> Result<Self, ConfigError> {
+        let (account_id, fcm_id, ib_id) = match &env {
+            RithmicEnv::Demo => (
+                env::var("RITHMIC_DEMO_ACCOUNT_ID").map_err(|_| {
+                    ConfigError::MissingEnvVar("RITHMIC_DEMO_ACCOUNT_ID".to_string())
+                })?,
+                env::var("RITHMIC_DEMO_FCM_ID")
+                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_DEMO_FCM_ID".to_string()))?,
+                env::var("RITHMIC_DEMO_IB_ID")
+                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_DEMO_IB_ID".to_string()))?,
+            ),
+            RithmicEnv::Live => (
+                env::var("RITHMIC_LIVE_ACCOUNT_ID").map_err(|_| {
+                    ConfigError::MissingEnvVar("RITHMIC_LIVE_ACCOUNT_ID".to_string())
+                })?,
+                env::var("RITHMIC_LIVE_FCM_ID")
+                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_LIVE_FCM_ID".to_string()))?,
+                env::var("RITHMIC_LIVE_IB_ID")
+                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_LIVE_IB_ID".to_string()))?,
+            ),
+            RithmicEnv::Test => (
+                env::var("RITHMIC_TEST_ACCOUNT_ID").map_err(|_| {
+                    ConfigError::MissingEnvVar("RITHMIC_TEST_ACCOUNT_ID".to_string())
+                })?,
+                env::var("RITHMIC_TEST_FCM_ID")
+                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_TEST_FCM_ID".to_string()))?,
+                env::var("RITHMIC_TEST_IB_ID")
+                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_TEST_IB_ID".to_string()))?,
+            ),
+        };
+
+        Ok(Self {
+            account_id,
+            fcm_id,
+            ib_id,
+        })
+    }
+
+    /// Create a builder for programmatic account construction.
+    pub fn builder(env: RithmicEnv) -> RithmicAccountBuilder {
+        RithmicAccountBuilder::new(env)
+    }
+}
+
+/// Builder for constructing a [`RithmicAccount`] with custom values.
+#[derive(Default)]
+pub struct RithmicAccountBuilder {
+    account_id: Option<String>,
+    fcm_id: Option<String>,
+    ib_id: Option<String>,
+}
+
+impl RithmicAccountBuilder {
+    /// Create a new builder for the specified environment.
+    ///
+    /// The environment parameter mirrors [`RithmicConfigBuilder::new`] so
+    /// callers can construct config and account values consistently.
+    pub fn new(_env: RithmicEnv) -> Self {
+        Self::default()
+    }
+
+    /// Set the account ID.
+    pub fn account_id(mut self, account_id: impl Into<String>) -> Self {
+        self.account_id = Some(account_id.into());
+        self
+    }
+
+    /// Set the FCM ID.
+    pub fn fcm_id(mut self, fcm_id: impl Into<String>) -> Self {
+        self.fcm_id = Some(fcm_id.into());
+        self
+    }
+
+    /// Set the IB ID.
+    pub fn ib_id(mut self, ib_id: impl Into<String>) -> Self {
+        self.ib_id = Some(ib_id.into());
+        self
+    }
+
+    /// Build the account identity.
+    pub fn build(self) -> Result<RithmicAccount, ConfigError> {
+        Ok(RithmicAccount {
+            account_id: self
+                .account_id
+                .ok_or_else(|| ConfigError::MissingField("account_id".to_string()))?,
+            fcm_id: self
+                .fcm_id
+                .ok_or_else(|| ConfigError::MissingField("fcm_id".to_string()))?,
+            ib_id: self
+                .ib_id
+                .ok_or_else(|| ConfigError::MissingField("ib_id".to_string()))?,
+        })
+    }
+}
+
+/// Configuration for Rithmic connections.
+///
+/// This struct contains session-level connection and login details.
+#[derive(Clone)]
+pub struct RithmicConfig {
     /// Primary WebSocket URL.
     pub url: String,
     /// Alternative/beta WebSocket URL used by [`ConnectStrategy::AlternateWithRetry`](crate::ConnectStrategy::AlternateWithRetry).
@@ -140,9 +271,6 @@ pub struct RithmicConfig {
 impl fmt::Debug for RithmicConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RithmicConfig")
-            .field("account_id", &self.account_id)
-            .field("fcm_id", &self.fcm_id)
-            .field("ib_id", &self.ib_id)
             .field("url", &self.url)
             .field("beta_url", &self.beta_url)
             .field("user", &self.user)
@@ -164,27 +292,18 @@ impl RithmicConfig {
     /// # Required environment variables
     ///
     /// For Demo environment:
-    /// - `RITHMIC_DEMO_ACCOUNT_ID`: Demo account ID
-    /// - `RITHMIC_DEMO_FCM_ID`: Demo FCM (Futures Commission Merchant) ID
-    /// - `RITHMIC_DEMO_IB_ID`: Demo IB (Introducing Broker) ID
     /// - `RITHMIC_DEMO_USER`: Demo username
     /// - `RITHMIC_DEMO_PW`: Demo password
     /// - `RITHMIC_DEMO_URL`: Demo WebSocket URL
     /// - `RITHMIC_DEMO_ALT_URL`: Demo alternative/beta WebSocket URL
     ///
     /// For Live environment:
-    /// - `RITHMIC_LIVE_ACCOUNT_ID`: Live account ID
-    /// - `RITHMIC_LIVE_FCM_ID`: Live FCM (Futures Commission Merchant) ID
-    /// - `RITHMIC_LIVE_IB_ID`: Live IB (Introducing Broker) ID
     /// - `RITHMIC_LIVE_USER`: Live username
     /// - `RITHMIC_LIVE_PW`: Live password
     /// - `RITHMIC_LIVE_URL`: Live WebSocket URL
     /// - `RITHMIC_LIVE_ALT_URL`: Live alternative/beta WebSocket URL
     ///
     /// For Test environment:
-    /// - `RITHMIC_TEST_ACCOUNT_ID`: Test account ID
-    /// - `RITHMIC_TEST_FCM_ID`: Test FCM (Futures Commission Merchant) ID
-    /// - `RITHMIC_TEST_IB_ID`: Test IB (Introducing Broker) ID
     /// - `RITHMIC_TEST_USER`: Test username
     /// - `RITHMIC_TEST_PW`: Test password
     /// - `RITHMIC_TEST_URL`: Test WebSocket URL
@@ -197,21 +316,16 @@ impl RithmicConfig {
     /// # Example
     /// ```no_run
     /// use rithmic_rs::config::{RithmicConfig, RithmicEnv};
+    /// use rithmic_rs::RithmicAccount;
     ///
     /// // Load from environment variables
     /// let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+    /// let account = RithmicAccount::from_env(RithmicEnv::Demo)?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn from_env(env: RithmicEnv) -> Result<Self, ConfigError> {
-        let (account_id, fcm_id, ib_id, url, beta_url, user, password, system_name) = match &env {
+        let (url, beta_url, user, password, system_name) = match &env {
             RithmicEnv::Demo => (
-                env::var("RITHMIC_DEMO_ACCOUNT_ID").map_err(|_| {
-                    ConfigError::MissingEnvVar("RITHMIC_DEMO_ACCOUNT_ID".to_string())
-                })?,
-                env::var("RITHMIC_DEMO_FCM_ID")
-                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_DEMO_FCM_ID".to_string()))?,
-                env::var("RITHMIC_DEMO_IB_ID")
-                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_DEMO_IB_ID".to_string()))?,
                 env::var("RITHMIC_DEMO_URL")
                     .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_DEMO_URL".to_string()))?,
                 env::var("RITHMIC_DEMO_ALT_URL")
@@ -223,13 +337,6 @@ impl RithmicConfig {
                 "Rithmic Paper Trading".to_string(),
             ),
             RithmicEnv::Live => (
-                env::var("RITHMIC_LIVE_ACCOUNT_ID").map_err(|_| {
-                    ConfigError::MissingEnvVar("RITHMIC_LIVE_ACCOUNT_ID".to_string())
-                })?,
-                env::var("RITHMIC_LIVE_FCM_ID")
-                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_LIVE_FCM_ID".to_string()))?,
-                env::var("RITHMIC_LIVE_IB_ID")
-                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_LIVE_IB_ID".to_string()))?,
                 env::var("RITHMIC_LIVE_URL")
                     .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_LIVE_URL".to_string()))?,
                 env::var("RITHMIC_LIVE_ALT_URL")
@@ -241,13 +348,6 @@ impl RithmicConfig {
                 "Rithmic 01".to_string(),
             ),
             RithmicEnv::Test => (
-                env::var("RITHMIC_TEST_ACCOUNT_ID").map_err(|_| {
-                    ConfigError::MissingEnvVar("RITHMIC_TEST_ACCOUNT_ID".to_string())
-                })?,
-                env::var("RITHMIC_TEST_FCM_ID")
-                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_TEST_FCM_ID".to_string()))?,
-                env::var("RITHMIC_TEST_IB_ID")
-                    .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_TEST_IB_ID".to_string()))?,
                 env::var("RITHMIC_TEST_URL")
                     .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_TEST_URL".to_string()))?,
                 env::var("RITHMIC_TEST_ALT_URL")
@@ -267,9 +367,6 @@ impl RithmicConfig {
             .map_err(|_| ConfigError::MissingEnvVar("RITHMIC_APP_VERSION".to_string()))?;
 
         Ok(Self {
-            account_id,
-            fcm_id,
-            ib_id,
             url,
             beta_url,
             user,
@@ -290,9 +387,6 @@ impl RithmicConfig {
     /// use rithmic_rs::config::{RithmicConfig, RithmicEnv};
     ///
     /// let config = RithmicConfig::builder(RithmicEnv::Demo)
-    ///     .account_id("my_account")
-    ///     .fcm_id("my_fcm")
-    ///     .ib_id("my_ib")
     ///     .user("my_user")
     ///     .password("my_password")
     ///     .app_name("my_app")
@@ -309,9 +403,6 @@ impl RithmicConfig {
 #[derive(Default)]
 pub struct RithmicConfigBuilder {
     env: Option<RithmicEnv>,
-    account_id: Option<String>,
-    fcm_id: Option<String>,
-    ib_id: Option<String>,
     url: Option<String>,
     beta_url: Option<String>,
     user: Option<String>,
@@ -336,24 +427,6 @@ impl RithmicConfigBuilder {
             system_name: Some(system_name),
             ..Default::default()
         }
-    }
-
-    /// Set the account ID.
-    pub fn account_id(mut self, account_id: impl Into<String>) -> Self {
-        self.account_id = Some(account_id.into());
-        self
-    }
-
-    /// Set the FCM ID.
-    pub fn fcm_id(mut self, fcm_id: impl Into<String>) -> Self {
-        self.fcm_id = Some(fcm_id.into());
-        self
-    }
-
-    /// Set the IB ID.
-    pub fn ib_id(mut self, ib_id: impl Into<String>) -> Self {
-        self.ib_id = Some(ib_id.into());
-        self
     }
 
     /// Set the WebSocket URL.
@@ -406,15 +479,6 @@ impl RithmicConfigBuilder {
             env: self
                 .env
                 .ok_or_else(|| ConfigError::MissingField("env".to_string()))?,
-            account_id: self
-                .account_id
-                .ok_or_else(|| ConfigError::MissingField("account_id".to_string()))?,
-            fcm_id: self
-                .fcm_id
-                .ok_or_else(|| ConfigError::MissingField("fcm_id".to_string()))?,
-            ib_id: self
-                .ib_id
-                .ok_or_else(|| ConfigError::MissingField("ib_id".to_string()))?,
             url: self
                 .url
                 .ok_or_else(|| ConfigError::MissingField("url".to_string()))?,
@@ -523,8 +587,19 @@ mod tests {
         };
         assert_eq!(err.to_string(), "Invalid value for TEST: too short");
 
-        let err = ConfigError::MissingField("account_id".to_string());
-        assert_eq!(err.to_string(), "Missing required field: account_id");
+        let err = ConfigError::MissingField("field".to_string());
+        assert_eq!(err.to_string(), "Missing required field: field");
+    }
+
+    #[test]
+    fn test_account_from_env_demo_success() {
+        temp_env::with_vars(demo_env_vars(), || {
+            let account = RithmicAccount::from_env(RithmicEnv::Demo).unwrap();
+
+            assert_eq!(account.account_id, "test_account");
+            assert_eq!(account.fcm_id, "test_fcm");
+            assert_eq!(account.ib_id, "test_ib");
+        });
     }
 
     #[test]
@@ -532,9 +607,6 @@ mod tests {
         temp_env::with_vars(demo_env_vars(), || {
             let config = RithmicConfig::from_env(RithmicEnv::Demo).unwrap();
 
-            assert_eq!(config.account_id, "test_account");
-            assert_eq!(config.fcm_id, "test_fcm");
-            assert_eq!(config.ib_id, "test_ib");
             assert_eq!(config.user, "demo_user");
             assert_eq!(config.password, "demo_password");
             assert_eq!(config.url, "wss://test-demo.example.com:443");
@@ -549,7 +621,6 @@ mod tests {
         temp_env::with_vars(live_env_vars(), || {
             let config = RithmicConfig::from_env(RithmicEnv::Live).unwrap();
 
-            assert_eq!(config.account_id, "test_account");
             assert_eq!(config.user, "live_user");
             assert_eq!(config.password, "live_password");
             assert_eq!(config.system_name, "Rithmic 01");
@@ -558,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_env_missing_account_id() {
+    fn test_account_from_env_missing_account_id() {
         temp_env::with_vars(
             vec![
                 ("RITHMIC_DEMO_ACCOUNT_ID", None::<&str>),
@@ -573,7 +644,7 @@ mod tests {
                 ),
             ],
             || {
-                let result = RithmicConfig::from_env(RithmicEnv::Demo);
+                let result = RithmicAccount::from_env(RithmicEnv::Demo);
                 assert!(result.is_err());
 
                 if let Err(ConfigError::MissingEnvVar(var)) = result {
@@ -589,9 +660,6 @@ mod tests {
     fn test_from_env_missing_credentials() {
         temp_env::with_vars(
             vec![
-                ("RITHMIC_DEMO_ACCOUNT_ID", Some("test_account")),
-                ("RITHMIC_DEMO_FCM_ID", Some("test_fcm")),
-                ("RITHMIC_DEMO_IB_ID", Some("test_ib")),
                 ("RITHMIC_DEMO_USER", None::<&str>),
                 ("RITHMIC_DEMO_PW", None),
                 ("RITHMIC_DEMO_URL", Some("wss://test-demo.example.com:443")),
@@ -617,9 +685,6 @@ mod tests {
     fn test_from_env_missing_url() {
         temp_env::with_vars(
             vec![
-                ("RITHMIC_DEMO_ACCOUNT_ID", Some("test_account")),
-                ("RITHMIC_DEMO_FCM_ID", Some("test_fcm")),
-                ("RITHMIC_DEMO_IB_ID", Some("test_ib")),
                 ("RITHMIC_DEMO_USER", Some("demo_user")),
                 ("RITHMIC_DEMO_PW", Some("demo_password")),
                 ("RITHMIC_DEMO_URL", None::<&str>),
@@ -639,11 +704,22 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_complete() {
-        let config = RithmicConfig::builder(RithmicEnv::Demo)
+    fn test_account_builder_complete() {
+        let account = RithmicAccount::builder(RithmicEnv::Demo)
             .account_id("my_account")
             .fcm_id("my_fcm")
             .ib_id("my_ib")
+            .build()
+            .unwrap();
+
+        assert_eq!(account.account_id, "my_account");
+        assert_eq!(account.fcm_id, "my_fcm");
+        assert_eq!(account.ib_id, "my_ib");
+    }
+
+    #[test]
+    fn test_builder_complete() {
+        let config = RithmicConfig::builder(RithmicEnv::Demo)
             .user("my_user")
             .password("my_password")
             .url("wss://test.example.com:443")
@@ -653,9 +729,6 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.account_id, "my_account");
-        assert_eq!(config.fcm_id, "my_fcm");
-        assert_eq!(config.ib_id, "my_ib");
         assert_eq!(config.user, "my_user");
         assert_eq!(config.password, "my_password");
         assert_eq!(config.env, RithmicEnv::Demo);
@@ -668,9 +741,6 @@ mod tests {
     #[test]
     fn test_builder_custom_urls() {
         let config = RithmicConfig::builder(RithmicEnv::Demo)
-            .account_id("my_account")
-            .fcm_id("my_fcm")
-            .ib_id("my_ib")
             .user("my_user")
             .password("my_password")
             .url("wss://custom.example.com:443")
@@ -687,12 +757,10 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_missing_account_id() {
-        let result = RithmicConfig::builder(RithmicEnv::Demo)
+    fn test_account_builder_missing_account_id() {
+        let result = RithmicAccount::builder(RithmicEnv::Demo)
             .fcm_id("my_fcm")
             .ib_id("my_ib")
-            .user("my_user")
-            .password("my_password")
             .build();
 
         assert!(result.is_err());
@@ -706,9 +774,6 @@ mod tests {
     #[test]
     fn test_builder_missing_user() {
         let result = RithmicConfig::builder(RithmicEnv::Demo)
-            .account_id("my_account")
-            .fcm_id("my_fcm")
-            .ib_id("my_ib")
             .password("my_password")
             .url("wss://test.example.com:443")
             .beta_url("wss://test-alt.example.com:443")
@@ -726,9 +791,6 @@ mod tests {
     fn test_builder_demo_defaults() {
         let builder = RithmicConfigBuilder::new(RithmicEnv::Demo);
         let config = builder
-            .account_id("test")
-            .fcm_id("test")
-            .ib_id("test")
             .user("test")
             .password("test")
             .url("wss://test.example.com:443")
@@ -746,9 +808,6 @@ mod tests {
     fn test_builder_live_defaults() {
         let builder = RithmicConfigBuilder::new(RithmicEnv::Live);
         let config = builder
-            .account_id("test")
-            .fcm_id("test")
-            .ib_id("test")
             .user("test")
             .password("test")
             .url("wss://test.example.com:443")
@@ -766,9 +825,6 @@ mod tests {
     fn test_builder_test_defaults() {
         let builder = RithmicConfigBuilder::new(RithmicEnv::Test);
         let config = builder
-            .account_id("test")
-            .fcm_id("test")
-            .ib_id("test")
             .user("test")
             .password("test")
             .url("wss://test.example.com:443")
@@ -786,9 +842,6 @@ mod tests {
     fn test_builder_into_string_conversions() {
         // Test that Into<String> works for builder methods
         let config = RithmicConfig::builder(RithmicEnv::Demo)
-            .account_id(String::from("my_account"))
-            .fcm_id(String::from("my_fcm"))
-            .ib_id(String::from("my_ib"))
             .user(String::from("my_user"))
             .password(String::from("my_password"))
             .url(String::from("wss://test.example.com:443"))
@@ -798,15 +851,12 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.account_id, "my_account");
+        assert_eq!(config.user, "my_user");
     }
 
     #[test]
     fn test_debug_redacts_password() {
         let config = RithmicConfig::builder(RithmicEnv::Demo)
-            .account_id("my_account")
-            .fcm_id("my_fcm")
-            .ib_id("my_ib")
             .user("my_user")
             .password("super_secret_password")
             .url("wss://test.example.com:443")
@@ -826,7 +876,6 @@ mod tests {
             "Debug output should contain [REDACTED] for the password"
         );
         // Other fields should still be visible
-        assert!(debug_output.contains("my_account"));
         assert!(debug_output.contains("my_user"));
     }
 }

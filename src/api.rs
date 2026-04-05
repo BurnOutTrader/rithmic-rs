@@ -20,6 +20,7 @@ pub(crate) mod rithmic_command_types;
 pub(crate) mod sender_api;
 
 // Re-export commonly used types
+pub use crate::config::RithmicAccount;
 pub use receiver_api::RithmicResponse;
 
 pub use rithmic_command_types::{

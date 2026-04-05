@@ -10,17 +10,17 @@
 //!
 //! Run with: cargo run --example bracket_order
 
-use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::RecvError;
 use tracing::info;
 
 use rithmic_rs::{
-    BracketDuration, BracketPriceType, BracketTransactionType, ConnectStrategy,
-    RithmicBracketOrder, RithmicConfig, RithmicEnv, RithmicOrderPlant, RithmicResponse,
-    rti::messages::RithmicMessage,
+    BracketDuration, BracketPriceType, BracketTransactionType, ConnectStrategy, RithmicAccount,
+    RithmicBracketOrder, RithmicConfig, RithmicEnv, RithmicOrderPlant,
+    plants::subscription::AccountSubscriptionReceiver, rti::messages::RithmicMessage,
 };
 
 /// Spawns a task to listen for order notifications
-fn spawn_order_listener(mut receiver: broadcast::Receiver<RithmicResponse>) {
+fn spawn_order_listener(mut receiver: AccountSubscriptionReceiver) {
     tokio::spawn(async move {
         loop {
             match receiver.recv().await {
@@ -67,11 +67,11 @@ fn spawn_order_listener(mut receiver: broadcast::Receiver<RithmicResponse>) {
                         _ => {}
                     }
                 }
-                Err(broadcast::error::RecvError::Closed) => {
+                Err(RecvError::Closed) => {
                     info!("Subscription channel closed");
                     break;
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
+                Err(RecvError::Lagged(n)) => {
                     info!("Listener lagged, missed {} messages", n);
                 }
             }
@@ -86,8 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Connect to the order plant (use Demo for paper trading)
     let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+    let account = RithmicAccount::from_env(RithmicEnv::Demo)?;
     let order_plant = RithmicOrderPlant::connect(&config, ConnectStrategy::Retry).await?;
-    let handle = order_plant.get_handle();
+    let handle = order_plant.get_handle(&account);
 
     // Login to the order plant
     handle.login().await?;

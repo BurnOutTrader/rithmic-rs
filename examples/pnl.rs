@@ -5,7 +5,8 @@
 use tracing::info;
 
 use rithmic_rs::{
-    ConnectStrategy, RithmicConfig, RithmicEnv, RithmicPnlPlant, rti::messages::RithmicMessage,
+    ConnectStrategy, RithmicAccount, RithmicConfig, RithmicEnv, RithmicPnlPlant,
+    rti::messages::RithmicMessage,
 };
 
 #[tokio::main]
@@ -14,8 +15,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt().init();
 
     let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
+    let account = RithmicAccount::from_env(RithmicEnv::Demo)?;
     let pnl_plant = RithmicPnlPlant::connect(&config, ConnectStrategy::Retry).await?;
-    let mut handle = pnl_plant.get_handle();
+    let mut handle = pnl_plant.get_handle(&account);
     handle.login().await?;
 
     // Get initial snapshot

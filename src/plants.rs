@@ -16,5 +16,7 @@ pub mod history_plant;
 pub mod order_plant;
 /// Position and P&L tracking
 pub mod pnl_plant;
+/// Account-scoped subscription helpers for shared order/PnL plants
+pub mod subscription;
 /// Real-time market data subscription
 pub mod ticker_plant;
