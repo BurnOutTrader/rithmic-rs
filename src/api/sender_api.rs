@@ -1874,7 +1874,7 @@ mod tests {
     }
 
     #[test]
-    fn advanced_bracket_request_uses_supplied_account_and_trade_route() {
+    fn advanced_bracket_request_sets_account_and_trade_route_fields() {
         let mut api = RithmicSenderApi::new(&test_config());
 
         let (buf, _) = api.request_advanced_bracket_order(advanced_bracket(), &override_account());
@@ -1893,7 +1893,6 @@ mod tests {
 
         let (buf, _) = api.request_advanced_bracket_order(advanced_bracket(), &default_account());
         let request: RequestBracketOrder = decode_request(&buf);
-
         assert_eq!(request.price, Some(5000.25));
         assert_eq!(request.trigger_price, Some(4999.75));
         assert_eq!(
