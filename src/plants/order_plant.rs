@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tracing::{error, info, warn};
 
 use tokio_tungstenite::{
@@ -18,7 +20,7 @@ use crate::{
     config::{RithmicAccount, RithmicConfig},
     error::RithmicError,
     ping_manager::PingManager,
-    plants::subscription::AccountSubscriptionReceiver,
+    plants::subscription::SubscriptionFilter,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_easy_to_borrow_list, request_login::SysInfraType},
     ws::{
@@ -61,54 +63,54 @@ pub(crate) enum OrderPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SubscribeOrderUpdates {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SubscribeBracketUpdates {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     PlaceBracketOrder {
         bracket_order: RithmicBracketOrder,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ModifyOrder {
         order: RithmicModifyOrder,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ModifyStop {
         order_id: String,
         ticks: i32,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ModifyProfit {
         order_id: String,
         ticks: i32,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     CancelOrder {
         order_id: String,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ShowOrders {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     CancelAllOrders {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetAccountRmsInfo {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetProductRmsInfo {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetTradeRoutes {
@@ -120,48 +122,48 @@ pub(crate) enum OrderPlantCommand {
     },
     ShowOrderHistorySummary {
         date: String,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ShowOrderHistoryDetail {
         basket_id: String,
         date: String,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ShowOrderHistory {
         basket_id: Option<String>,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     PlaceOrder {
         order: RithmicOrder,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     PlaceOcoOrder {
         order1: RithmicOcoOrderLeg,
         order2: RithmicOcoOrderLeg,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ShowBrackets {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ShowBracketStops {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ExitPosition {
         symbol: String,
         exchange: String,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     LinkOrders {
         basket_ids: Vec<String>,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetEasyToBorrowList {
@@ -171,7 +173,7 @@ pub(crate) enum OrderPlantCommand {
     ModifyOrderReferenceData {
         basket_id: String,
         user_tag: String,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetOrderSessionConfig {
@@ -181,12 +183,12 @@ pub(crate) enum OrderPlantCommand {
     ReplayExecutions {
         start_index_sec: i32,
         finish_index_sec: i32,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SubscribeAccountRmsUpdates {
         subscribe: bool,
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetLoginInfo {
@@ -372,11 +374,13 @@ impl RithmicOrderPlant {
     /// The handle provides methods to place orders, subscribe to updates, and manage positions.
     /// Multiple handles can be created from the same plant for different accounts.
     pub fn get_handle(&self, account: &RithmicAccount) -> RithmicOrderPlantHandle {
+        let account = Arc::new(account.clone());
+
         RithmicOrderPlantHandle {
-            account: account.clone(),
+            account: Arc::clone(&account),
             sender: self.sender.clone(),
-            subscription_receiver: AccountSubscriptionReceiver::new(
-                account.clone(),
+            subscription_receiver: SubscriptionFilter::new(
+                Arc::clone(&account),
                 self.subscription_sender.subscribe(),
             ),
         }
@@ -1394,10 +1398,10 @@ impl PlantActor for OrderPlant {
 /// log in, place/modify/cancel orders, and query account information. Real-time order
 /// updates arrive on [`subscription_receiver`](Self::subscription_receiver).
 pub struct RithmicOrderPlantHandle {
-    account: RithmicAccount,
+    account: Arc<RithmicAccount>,
     sender: mpsc::Sender<OrderPlantCommand>,
     /// Receiver for real-time order updates and responses.
-    pub subscription_receiver: AccountSubscriptionReceiver,
+    pub subscription_receiver: SubscriptionFilter,
 }
 
 impl std::fmt::Debug for RithmicOrderPlantHandle {

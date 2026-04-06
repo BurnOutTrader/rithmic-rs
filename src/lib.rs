@@ -94,11 +94,7 @@
 //!         .app_version("1".to_string())
 //!         .build()?;
 //!
-//!     let account = RithmicAccount::builder(RithmicEnv::Demo)
-//!         .account_id("your_account".to_string())
-//!         .fcm_id("your_fcm".to_string())
-//!         .ib_id("your_ib".to_string())
-//!         .build()?;
+//!     let account = RithmicAccount::new("your_fcm", "your_ib", "your_account");
 //!     let _ = (config, account);
 //!     Ok(())
 //! }
@@ -203,10 +199,7 @@ pub use plants::pnl_plant::{RithmicPnlPlant, RithmicPnlPlantHandle};
 pub use plants::ticker_plant::{RithmicTickerPlant, RithmicTickerPlantHandle};
 
 // Re-export modern configuration types for convenience
-pub use config::{
-    ConfigError, RithmicAccount, RithmicAccountBuilder, RithmicConfig, RithmicConfigBuilder,
-    RithmicEnv,
-};
+pub use config::{ConfigError, RithmicAccount, RithmicConfig, RithmicConfigBuilder, RithmicEnv};
 
 // Re-export error types
 pub use error::RithmicError;

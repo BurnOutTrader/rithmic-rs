@@ -20,11 +20,7 @@
 //!     .app_version("1")
 //!     .build()?;
 //!
-//! let account = RithmicAccount::builder(RithmicEnv::Demo)
-//!     .account_id("my_account")
-//!     .fcm_id("my_fcm")
-//!     .ib_id("my_ib")
-//!     .build()?;
+//! let account = RithmicAccount::new("my_fcm", "my_ib", "my_account");
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
@@ -185,62 +181,6 @@ impl RithmicAccount {
             account_id,
             fcm_id,
             ib_id,
-        })
-    }
-
-    /// Create a builder for programmatic account construction.
-    pub fn builder(env: RithmicEnv) -> RithmicAccountBuilder {
-        RithmicAccountBuilder::new(env)
-    }
-}
-
-/// Builder for constructing a [`RithmicAccount`] with custom values.
-#[derive(Default)]
-pub struct RithmicAccountBuilder {
-    account_id: Option<String>,
-    fcm_id: Option<String>,
-    ib_id: Option<String>,
-}
-
-impl RithmicAccountBuilder {
-    /// Create a new builder for the specified environment.
-    ///
-    /// The environment parameter mirrors [`RithmicConfigBuilder::new`] so
-    /// callers can construct config and account values consistently.
-    pub fn new(_env: RithmicEnv) -> Self {
-        Self::default()
-    }
-
-    /// Set the account ID.
-    pub fn account_id(mut self, account_id: impl Into<String>) -> Self {
-        self.account_id = Some(account_id.into());
-        self
-    }
-
-    /// Set the FCM ID.
-    pub fn fcm_id(mut self, fcm_id: impl Into<String>) -> Self {
-        self.fcm_id = Some(fcm_id.into());
-        self
-    }
-
-    /// Set the IB ID.
-    pub fn ib_id(mut self, ib_id: impl Into<String>) -> Self {
-        self.ib_id = Some(ib_id.into());
-        self
-    }
-
-    /// Build the account identity.
-    pub fn build(self) -> Result<RithmicAccount, ConfigError> {
-        Ok(RithmicAccount {
-            account_id: self
-                .account_id
-                .ok_or_else(|| ConfigError::MissingField("account_id".to_string()))?,
-            fcm_id: self
-                .fcm_id
-                .ok_or_else(|| ConfigError::MissingField("fcm_id".to_string()))?,
-            ib_id: self
-                .ib_id
-                .ok_or_else(|| ConfigError::MissingField("ib_id".to_string()))?,
         })
     }
 }
@@ -704,13 +644,8 @@ mod tests {
     }
 
     #[test]
-    fn test_account_builder_complete() {
-        let account = RithmicAccount::builder(RithmicEnv::Demo)
-            .account_id("my_account")
-            .fcm_id("my_fcm")
-            .ib_id("my_ib")
-            .build()
-            .unwrap();
+    fn test_account_new_complete() {
+        let account = RithmicAccount::new("my_fcm", "my_ib", "my_account");
 
         assert_eq!(account.account_id, "my_account");
         assert_eq!(account.fcm_id, "my_fcm");
@@ -754,21 +689,6 @@ mod tests {
         assert_eq!(config.url, "wss://custom.example.com:443");
         assert_eq!(config.beta_url, "wss://custom-beta.example.com:443");
         assert_eq!(config.system_name, "Custom System");
-    }
-
-    #[test]
-    fn test_account_builder_missing_account_id() {
-        let result = RithmicAccount::builder(RithmicEnv::Demo)
-            .fcm_id("my_fcm")
-            .ib_id("my_ib")
-            .build();
-
-        assert!(result.is_err());
-        if let Err(ConfigError::MissingField(field)) = result {
-            assert_eq!(field, "account_id");
-        } else {
-            panic!("Expected MissingField error");
-        }
     }
 
     #[test]

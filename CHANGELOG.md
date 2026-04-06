@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `RithmicConfig` no longer includes `account_id`, `fcm_id`, or `ib_id`
+- `RithmicOrderPlant::get_handle()` and `RithmicPnlPlant::get_handle()` now require `&RithmicAccount`
+- `subscription_receiver` on order and PnL handles is now `SubscriptionFilter`
+
 ### Added
 
 - **`load_tick_bars(symbol, exchange, bar_length, start_time_sec, end_time_sec)`** on `RithmicHistoryPlantHandle`
@@ -14,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bar_length` controls the number of ticks aggregated into each bar
   - Returns `InvalidArgument` error when `bar_length` is 0
 - **`RithmicError::InvalidArgument`** variant for rejecting invalid caller-supplied arguments before a request is sent
+- `RithmicAccount` for account-scoped order and PnL operations
 
 ### Changed
 

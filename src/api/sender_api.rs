@@ -42,15 +42,6 @@ pub(crate) const TRADE_ROUTE_LIVE: &str = "globex";
 pub(crate) const TRADE_ROUTE_DEMO: &str = "simulator";
 pub(crate) const USER_TYPE: i32 = 3;
 
-struct ModifyOrderRequest<'a> {
-    basket_id: &'a str,
-    exchange: &'a str,
-    symbol: &'a str,
-    qty: i32,
-    price: f64,
-    price_type: request_modify_order::PriceType,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct RithmicSenderApi {
     app_name: String,
@@ -87,14 +78,6 @@ impl RithmicSenderApi {
         buf.splice(0..0, header.iter().cloned());
 
         (buf, id)
-    }
-
-    fn account_fields(account: &RithmicAccount) -> (String, String, String) {
-        (
-            account.fcm_id.clone(),
-            account.ib_id.clone(),
-            account.account_id.clone(),
-        )
     }
 
     pub fn request_rithmic_system_info(&mut self) -> (Vec<u8>, String) {
@@ -423,13 +406,12 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestSubscribeForOrderUpdates {
             template_id: 308,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             user_msg: vec![id.clone()],
         };
 
@@ -441,13 +423,12 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestSubscribeToBracketUpdates {
             template_id: 336,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             user_msg: vec![id.clone()],
         };
 
@@ -470,7 +451,6 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let trade_route = match self.env {
             RithmicEnv::Live => TRADE_ROUTE_LIVE,
@@ -479,9 +459,9 @@ impl RithmicSenderApi {
 
         let req = RequestNewOrder {
             template_id: 312,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             trade_route: Some(trade_route.into()),
             exchange: Some(order.exchange.clone()),
             symbol: Some(order.symbol.clone()),
@@ -508,7 +488,6 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let trade_route = match self.env {
             RithmicEnv::Live => TRADE_ROUTE_LIVE,
@@ -517,9 +496,9 @@ impl RithmicSenderApi {
 
         let req = RequestBracketOrder {
             template_id: 330,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             trade_route: Some(trade_route.into()),
             exchange: Some(bracket_order.exchange),
             symbol: Some(bracket_order.symbol),
@@ -562,33 +541,24 @@ impl RithmicSenderApi {
         price_type: request_modify_order::PriceType,
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
-        let request = ModifyOrderRequest {
-            basket_id,
-            exchange,
-            symbol,
-            qty,
-            price,
-            price_type,
-        };
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestModifyOrder {
             template_id: 314,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
-            basket_id: Some(request.basket_id.into()),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
+            basket_id: Some(basket_id.into()),
             manual_or_auto: Some(2),
-            exchange: Some(request.exchange.into()),
-            symbol: Some(request.symbol.into()),
-            price_type: Some(request.price_type.into()),
-            quantity: Some(request.qty),
-            price: Some(request.price),
+            exchange: Some(exchange.into()),
+            symbol: Some(symbol.into()),
+            price_type: Some(price_type.into()),
+            quantity: Some(qty),
+            price: Some(price),
             user_msg: vec![id.clone()],
-            trigger_price: match request.price_type {
+            trigger_price: match price_type {
                 request_modify_order::PriceType::StopLimit
-                | request_modify_order::PriceType::StopMarket => Some(request.price),
+                | request_modify_order::PriceType::StopMarket => Some(price),
                 _ => None,
             },
             ..RequestModifyOrder::default()
@@ -603,13 +573,12 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestCancelOrder {
             template_id: 316,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             basket_id: Some(basket_id.into()),
             manual_or_auto: Some(2),
             user_msg: vec![id.clone()],
@@ -637,13 +606,12 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestExitPosition {
             template_id: 3504,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             symbol: Some(symbol.into()),
             exchange: Some(exchange.into()),
             manual_or_auto: Some(2),
@@ -661,13 +629,12 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestUpdateTargetBracketLevel {
             template_id: 332,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             basket_id: Some(basket_id.into()),
             target_ticks: Some(profit_ticks),
             user_msg: vec![id.clone()],
@@ -684,13 +651,12 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestUpdateStopBracketLevel {
             template_id: 334,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             basket_id: Some(basket_id.into()),
             stop_ticks: Some(stop_ticks),
             user_msg: vec![id.clone()],
@@ -709,13 +675,12 @@ impl RithmicSenderApi {
     /// A tuple of (serialized request buffer, request ID)
     pub fn request_show_brackets(&mut self, account: &RithmicAccount) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestShowBrackets {
             template_id: 338,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             user_msg: vec![id.clone()],
         };
 
@@ -731,13 +696,12 @@ impl RithmicSenderApi {
     /// A tuple of (serialized request buffer, request ID)
     pub fn request_show_bracket_stops(&mut self, account: &RithmicAccount) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestShowBracketStops {
             template_id: 340,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             user_msg: vec![id.clone()],
         };
 
@@ -746,13 +710,12 @@ impl RithmicSenderApi {
 
     pub fn request_show_orders(&mut self, account: &RithmicAccount) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestShowOrders {
             template_id: 320,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             user_msg: vec![id.clone()],
         };
 
@@ -765,13 +728,12 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestPnLPositionUpdates {
             template_id: 400,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             request: Some(action.into()),
             user_msg: vec![id.clone()],
         };
@@ -781,13 +743,12 @@ impl RithmicSenderApi {
 
     pub fn request_pnl_position_snapshot(&mut self, account: &RithmicAccount) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestPnLPositionSnapshot {
             template_id: 402,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             user_msg: vec![id.clone()],
         };
 
@@ -1010,13 +971,12 @@ impl RithmicSenderApi {
     /// A tuple of (serialized request buffer, request ID)
     pub fn request_cancel_all_orders(&mut self, account: &RithmicAccount) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestCancelAllOrders {
             template_id: 346,
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             user_type: Some(USER_TYPE),
             manual_or_auto: Some(request_cancel_all_orders::OrderPlacement::Manual.into()),
             user_msg: vec![id.clone()],
@@ -1033,13 +993,12 @@ impl RithmicSenderApi {
     /// A tuple of (serialized request buffer, request ID)
     pub fn request_account_rms_info(&mut self, account: &RithmicAccount) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, _) = Self::account_fields(account);
 
         let req = RequestAccountRmsInfo {
             template_id: 304,
             user_msg: vec![id.clone()],
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
             user_type: Some(USER_TYPE),
         };
 
@@ -1054,14 +1013,13 @@ impl RithmicSenderApi {
     /// A tuple of (serialized request buffer, request ID)
     pub fn request_product_rms_info(&mut self, account: &RithmicAccount) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestProductRmsInfo {
             template_id: 306,
             user_msg: vec![id.clone()],
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
         };
 
         self.request_to_buf(req, id)
@@ -1173,14 +1131,13 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestShowOrderHistorySummary {
             template_id: 324,
             user_msg: vec![id.clone()],
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             date: Some(date.to_string()),
         };
 
@@ -1202,14 +1159,13 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestShowOrderHistoryDetail {
             template_id: 326,
             user_msg: vec![id.clone()],
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             basket_id: Some(basket_id.to_string()),
             date: Some(date.to_string()),
         };
@@ -1230,14 +1186,13 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestShowOrderHistory {
             template_id: 322,
             user_msg: vec![id.clone()],
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             basket_id: basket_id.map(|b| b.to_string()),
         };
 
@@ -1390,14 +1345,13 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestAccountRmsUpdates {
             template_id: 3508,
             user_msg: vec![id.clone()],
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             request: Some(
                 if subscribe {
                     "subscribe"
@@ -1430,7 +1384,6 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let trade_route = match self.env {
             RithmicEnv::Live => TRADE_ROUTE_LIVE,
@@ -1442,9 +1395,9 @@ impl RithmicSenderApi {
             user_msg: vec![id.clone()],
             user_tag: vec![order1.user_tag, order2.user_tag],
             window_name: vec![],
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             symbol: vec![order1.symbol, order2.symbol],
             exchange: vec![order1.exchange, order2.exchange],
             quantity: vec![order1.quantity, order2.quantity],
@@ -1492,14 +1445,13 @@ impl RithmicSenderApi {
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
         let count = basket_ids.len();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestLinkOrders {
             template_id: 344,
             user_msg: vec![id.clone()],
-            fcm_id: vec![fcm_id; count],
-            ib_id: vec![ib_id; count],
-            account_id: vec![account_id; count],
+            fcm_id: vec![account.fcm_id.clone(); count],
+            ib_id: vec![account.ib_id.clone(); count],
+            account_id: vec![account.account_id.clone(); count],
             basket_id: basket_ids,
         };
 
@@ -1547,15 +1499,14 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestModifyOrderReferenceData {
             template_id: 3500,
             user_msg: vec![id.clone()],
             user_tag: Some(user_tag.to_string()),
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             basket_id: Some(basket_id.to_string()),
         };
 
@@ -1603,14 +1554,13 @@ impl RithmicSenderApi {
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
-        let (fcm_id, ib_id, account_id) = Self::account_fields(account);
 
         let req = RequestReplayExecutions {
             template_id: 3506,
             user_msg: vec![id.clone()],
-            fcm_id: Some(fcm_id),
-            ib_id: Some(ib_id),
-            account_id: Some(account_id),
+            fcm_id: Some(account.fcm_id.clone()),
+            ib_id: Some(account.ib_id.clone()),
+            account_id: Some(account.account_id.clone()),
             start_index: Some(start_index_sec),
             finish_index: Some(finish_index_sec),
         };

@@ -16,11 +16,11 @@ use tracing::info;
 use rithmic_rs::{
     BracketDuration, BracketPriceType, BracketTransactionType, ConnectStrategy, RithmicAccount,
     RithmicBracketOrder, RithmicConfig, RithmicEnv, RithmicOrderPlant,
-    plants::subscription::AccountSubscriptionReceiver, rti::messages::RithmicMessage,
+    plants::subscription::SubscriptionFilter, rti::messages::RithmicMessage,
 };
 
 /// Spawns a task to listen for order notifications
-fn spawn_order_listener(mut receiver: AccountSubscriptionReceiver) {
+fn spawn_order_listener(mut receiver: SubscriptionFilter) {
     tokio::spawn(async move {
         loop {
             match receiver.recv().await {

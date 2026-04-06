@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tracing::{error, info, warn};
 
 use crate::{
@@ -10,7 +12,7 @@ use crate::{
     config::{RithmicAccount, RithmicConfig},
     error::RithmicError,
     ping_manager::PingManager,
-    plants::subscription::AccountSubscriptionReceiver,
+    plants::subscription::SubscriptionFilter,
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType, request_pn_l_position_updates},
     ws::{
@@ -50,7 +52,7 @@ pub(crate) enum PnlPlantCommand {
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     PnlPositionSnapshots {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     SendHeartbeat,
@@ -58,11 +60,11 @@ pub(crate) enum PnlPlantCommand {
         seconds: u64,
     },
     SubscribePnlUpdates {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     UnsubscribePnlUpdates {
-        account: RithmicAccount,
+        account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
 }
@@ -176,11 +178,13 @@ impl RithmicPnlPlant {
     /// The handle provides methods to subscribe to PnL updates and retrieve position snapshots.
     /// Multiple handles can be created from the same plant for different accounts.
     pub fn get_handle(&self, account: &RithmicAccount) -> RithmicPnlPlantHandle {
+        let account = Arc::new(account.clone());
+
         RithmicPnlPlantHandle {
-            account: account.clone(),
+            account: Arc::clone(&account),
             sender: self.sender.clone(),
-            subscription_receiver: AccountSubscriptionReceiver::new(
-                account.clone(),
+            subscription_receiver: SubscriptionFilter::new(
+                Arc::clone(&account),
                 self.subscription_sender.subscribe(),
             ),
         }
@@ -630,10 +634,10 @@ impl PlantActor for PnlPlant {
 /// log in and subscribe to real-time P&L and position updates. Updates arrive on
 /// [`subscription_receiver`](Self::subscription_receiver).
 pub struct RithmicPnlPlantHandle {
-    account: RithmicAccount,
+    account: Arc<RithmicAccount>,
     sender: mpsc::Sender<PnlPlantCommand>,
     /// Receiver for real-time P&L and position updates.
-    pub subscription_receiver: AccountSubscriptionReceiver,
+    pub subscription_receiver: SubscriptionFilter,
 }
 
 impl std::fmt::Debug for RithmicPnlPlantHandle {
