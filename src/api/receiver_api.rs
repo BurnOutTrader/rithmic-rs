@@ -1695,6 +1695,24 @@ mod tests {
         }
     }
 
+    fn encode_with_header<T: Message>(message: &T) -> Bytes {
+        let mut payload = Vec::new();
+        message.encode(&mut payload).unwrap();
+
+        let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
+        framed.extend(payload);
+
+        Bytes::from(framed)
+    }
+
+    fn decode_with_api<T: Message>(message: &T) -> RithmicResponse {
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+
+        api.buf_to_message(encode_with_header(message)).unwrap()
+    }
+
     // =========================================================================
     // is_error() tests
     // =========================================================================
@@ -1746,6 +1764,42 @@ mod tests {
         // Reject is an error but NOT a connection issue
         let response = make_response(RithmicMessage::Reject(Reject::default()));
         assert!(!response.is_connection_issue());
+    }
+
+    #[test]
+    fn reject_decodes_as_non_update() {
+        let response = decode_with_api(&Reject {
+            template_id: 75,
+            ..Reject::default()
+        });
+
+        assert!(matches!(response.message, RithmicMessage::Reject(_)));
+        assert!(!response.is_update);
+    }
+
+    #[test]
+    fn trade_route_decodes_as_update() {
+        let response = decode_with_api(&TradeRoute {
+            template_id: 350,
+            ..TradeRoute::default()
+        });
+
+        assert!(matches!(response.message, RithmicMessage::TradeRoute(_)));
+        assert!(response.is_update);
+    }
+
+    #[test]
+    fn update_easy_to_borrow_list_decodes_as_update() {
+        let response = decode_with_api(&UpdateEasyToBorrowList {
+            template_id: 355,
+            ..UpdateEasyToBorrowList::default()
+        });
+
+        assert!(matches!(
+            response.message,
+            RithmicMessage::UpdateEasyToBorrowList(_)
+        ));
+        assert!(response.is_update);
     }
 
     // =========================================================================

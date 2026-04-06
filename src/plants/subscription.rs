@@ -84,7 +84,7 @@ mod tests {
         api::RithmicResponse,
         config::RithmicAccount,
         rti::{
-            AccountPnLPositionUpdate, ResponseAcceptAgreement, ResponseHeartbeat,
+            AccountPnLPositionUpdate, ResponseAcceptAgreement, TradeRoute, UpdateEasyToBorrowList,
             UserAccountUpdate, messages::RithmicMessage,
         },
     };
@@ -130,20 +130,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forwards_non_account_tagged_messages() {
+    async fn forwards_trade_route_updates_without_account_id() {
         let (sender, receiver) = broadcast::channel(16);
         let mut filter = SubscriptionFilter::new(account("ACCOUNT_A"), receiver);
 
         sender
-            .send(response(RithmicMessage::ResponseHeartbeat(
-                ResponseHeartbeat::default(),
+            .send(response(RithmicMessage::TradeRoute(TradeRoute {
+                template_id: 350,
+                ..TradeRoute::default()
+            })))
+            .unwrap();
+
+        let response = filter.recv().await.unwrap();
+        assert!(matches!(response.message, RithmicMessage::TradeRoute(_)));
+    }
+
+    #[tokio::test]
+    async fn forwards_update_easy_to_borrow_messages_without_account_id() {
+        let (sender, receiver) = broadcast::channel(16);
+        let mut filter = SubscriptionFilter::new(account("ACCOUNT_A"), receiver);
+
+        sender
+            .send(response(RithmicMessage::UpdateEasyToBorrowList(
+                UpdateEasyToBorrowList {
+                    template_id: 355,
+                    ..UpdateEasyToBorrowList::default()
+                },
             )))
             .unwrap();
 
         let response = filter.recv().await.unwrap();
         assert!(matches!(
             response.message,
-            RithmicMessage::ResponseHeartbeat(_)
+            RithmicMessage::UpdateEasyToBorrowList(_)
         ));
     }
 
