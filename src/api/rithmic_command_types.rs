@@ -217,6 +217,7 @@ pub struct RithmicIfTouchedTrigger {
 ///     ..Default::default()
 /// };
 /// ```
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct RithmicAdvancedBracketOrder {
     /// Buy or Sell.
@@ -233,13 +234,17 @@ pub struct RithmicAdvancedBracketOrder {
     pub price: Option<f64>,
     /// Trigger price for stop and if-touched entry types.
     pub trigger_price: Option<f64>,
-    /// Number of contracts.
+    /// Entry order size (number of contracts).
+    ///
+    /// For a coherent bracket, this should equal the sum of
+    /// `target_quantity` across all target legs. The crate does not validate
+    /// this invariant; Rithmic rejects inconsistent combinations.
     pub quantity: i32,
     /// Trading symbol (e.g., "ESH6").
     pub symbol: String,
     /// Rithmic bracket shape.
     pub bracket_type: request_bracket_order::BracketType,
-    /// Exit target quantities.
+    /// Exit target quantities, one value per target leg.
     pub target_quantity: Vec<i32>,
     /// Exit target distances in ticks.
     pub target_ticks: Vec<i32>,
