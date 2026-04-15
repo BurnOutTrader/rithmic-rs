@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Create a `RithmicAccount` with `RithmicAccount::from_env(env)` or build one directly
   - For multi-account workflows, create one `RithmicAccount` per account and call `get_handle(&account)` for each
 - **`subscription_receiver` on order and PnL handles is now `SubscriptionFilter`** instead of `broadcast::Receiver<RithmicResponse>`
+- **Request-path `rp_code` failures now surface as `RithmicError::RequestRejected(RithmicRequestError)`**
+  instead of `RithmicError::ServerError(String)`, preserving the raw server code
+  plus message
 
 ### Added
 
@@ -25,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fetches historical N-tick bars (e.g., 5-tick, 10-tick) for a symbol
   - `bar_length` controls the number of ticks aggregated into each bar
   - Returns `RithmicError::InvalidArgument` when `bar_length` is 0
+- **`RithmicRequestError`** — structured non-transport request rejection carrying
+  the full raw `rp_code` payload plus derived first/second elements
+- **`RithmicResponse` helpers** for protocol-aware request handling:
+  - `rp_code()`, `rp_code_text()`, `rp_code_raw()`
+  - `request_rejection()` / `request_error()`
+- **`RithmicError::ProtocolError(String)`** — non-transport response failure without an `rp_code` rejection
 - **`RithmicError::InvalidArgument(String)`** variant for rejecting invalid caller-supplied arguments before a request is sent
 - **`RithmicAdvancedBracketOrder`** — full raw bracket order request exposing all venue-native fields
   - Supports triggered entry, break-even, trailing-stop, timed release/cancel, and if-touched entry conditions
@@ -48,6 +57,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`RithmicError::SendFailed`** now also covers send timeouts — all plant WebSocket sends are bounded to 10 seconds; a hung sink surfaces as `SendFailed` rather than blocking the actor indefinitely
 - **`load_ticks`** now delegates to `load_tick_bars` with `bar_length = 1` — no behavioral change for existing callers
 - **`request_tick_bar_replay`** on `RithmicSenderApi` now accepts a `bar_type_specifier` parameter instead of hard-coding `"1"`
+- **Request-level non-zero `rp_code` responses** now stay on the normal response
+  path with `response.error` populated instead of being treated as receiver
+  decode failures
+- **Non-zero request-level `rp_code` failures** now surface uniformly as
+  `RithmicError::RequestRejected(RithmicRequestError)` without implying a
+  disconnect
+- **Generic non-transport response failures without `rp_code`** now surface as
+  `RithmicError::ProtocolError(String)` instead of being conflated with request rejections
+- **Heartbeat response `rp_code` failures** now stay on the connection-health
+  path and surface as `HeartbeatTimeout`
 
 ### Fixed
 

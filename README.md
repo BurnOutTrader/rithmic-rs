@@ -175,11 +175,37 @@ match handle.subscribe("ESM6", "CME").await {
         handle.abort();
         // reconnect — see examples/reconnect.rs
     }
-    Err(RithmicError::InvalidArgument(msg)) => eprintln!("Bad argument: {}", msg),
-    Err(RithmicError::ServerError(msg)) => eprintln!("Server rejected: {}", msg),
+    Err(RithmicError::RequestRejected(err)) => {
+        eprintln!(
+            "Request rejected {}: {}",
+            err.code.as_deref().unwrap_or("?"),
+            err.message
+        );
+    }
+    Err(RithmicError::ProtocolError(msg)) => eprintln!("Protocol error: {}", msg),
+    Err(RithmicError::InvalidArgument(msg)) => eprintln!("Bad local input: {}", msg),
     Err(e) => eprintln!("{}", e),
 }
 ```
+
+`RithmicError::RequestRejected` is the generic non-transport rejection returned
+for explicit non-zero `rp_code` responses and preserves the full raw `rp_code`
+payload plus derived first/second elements. `RithmicError::ProtocolError`
+covers non-transport response failures that were not carried in `rp_code`.
+`RithmicError::InvalidArgument` is reserved for local validation before a
+request is sent. The one proven benign non-zero case is
+`rp_code = ["7", "no data"]`, which is treated as an empty successful result.
+Reconnect only for transport failures or subscription updates where
+[`RithmicResponse::is_connection_issue()`](src/api/receiver_api.rs) returns `true`.
+
+For methods that return [`RithmicResponse`](src/api/receiver_api.rs) directly, inspect
+the raw server outcome with:
+
+- `response.rp_code()`
+- `response.rp_code_text()`
+- `response.rp_code_raw()`
+- `response.request_rejection()`
+- `response.request_error()`
 
 `RithmicError` implements `std::error::Error`, so `?` works in functions returning `Box<dyn Error>`.
 

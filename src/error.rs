@@ -1,5 +1,26 @@
 use std::fmt;
 
+/// A non-transport request rejection reported by Rithmic via `rp_code`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RithmicRequestError {
+    /// The raw `rp_code` payload exactly as received from Rithmic.
+    pub rp_code: Vec<String>,
+    /// The first `rp_code` element, when present.
+    pub code: Option<String>,
+    /// The second `rp_code` element when present, otherwise the first element.
+    pub message: String,
+}
+
+impl fmt::Display for RithmicRequestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.code.as_deref() {
+            Some(code) if !code.is_empty() => write!(f, "[{code}] {}", self.message),
+            _ => write!(f, "{}", self.message),
+        }
+    }
+}
+
 /// Typed errors returned by all plant handle methods.
 ///
 /// ```ignore
@@ -9,8 +30,11 @@ use std::fmt;
 ///         handle.abort();
 ///         // reconnect — see examples/reconnect.rs
 ///     }
-///     Err(RithmicError::InvalidArgument(msg)) => eprintln!("bad input: {msg}"),
-///     Err(RithmicError::ServerError(msg)) => eprintln!("rejected: {msg}"),
+///     Err(RithmicError::RequestRejected(err)) => {
+///         eprintln!("request rejected {}: {}", err.code.as_deref().unwrap_or("?"), err.message);
+///     }
+///     Err(RithmicError::ProtocolError(msg)) => eprintln!("protocol error: {msg}"),
+///     Err(RithmicError::InvalidArgument(msg)) => eprintln!("bad local input: {msg}"),
 ///     Err(e) => eprintln!("{e}"),
 /// }
 /// ```
@@ -34,10 +58,21 @@ pub enum RithmicError {
     SendFailed,
     /// Server returned an empty response where at least one was expected.
     EmptyResponse,
-    /// Protocol-level rejection from Rithmic (the `rp_code` text).
-    ServerError(String),
-    /// A caller-supplied argument is invalid (the message describes which argument
-    /// and why).
+    /// Non-transport request rejection from Rithmic.
+    ///
+    /// This preserves the server rejection text and the raw `rp_code` when one
+    /// is supplied. It is a request/business outcome, not a transport failure.
+    /// Do not treat this alone as evidence that the plant disconnected or
+    /// should be reconnected.
+    RequestRejected(RithmicRequestError),
+    /// Non-transport protocol/receiver failure without an `rp_code` rejection.
+    ///
+    /// This covers malformed or unexpected responses that should fail the
+    /// current request path but do not indicate a dead connection.
+    ProtocolError(String),
+    /// Invalid request input.
+    ///
+    /// This is reserved for local argument validation before a request is sent.
     InvalidArgument(String),
 }
 
@@ -48,7 +83,8 @@ impl fmt::Display for RithmicError {
             RithmicError::ConnectionClosed => write!(f, "connection closed"),
             RithmicError::SendFailed => write!(f, "WebSocket send failed or timed out"),
             RithmicError::EmptyResponse => write!(f, "empty response"),
-            RithmicError::ServerError(msg) => write!(f, "server error: {msg}"),
+            RithmicError::RequestRejected(err) => write!(f, "request rejected: {err}"),
+            RithmicError::ProtocolError(msg) => write!(f, "protocol error: {msg}"),
             RithmicError::InvalidArgument(msg) => write!(f, "invalid argument: {msg}"),
         }
     }

@@ -119,10 +119,35 @@
 //!         handle.abort();
 //!         // reconnect — see examples/reconnect.rs
 //!     }
-//!     Err(RithmicError::ServerError(msg)) => eprintln!("Server rejected: {msg}"),
+//!     Err(RithmicError::RequestRejected(err)) => {
+//!         eprintln!(
+//!             "Request rejected {}: {}",
+//!             err.code.as_deref().unwrap_or("?"),
+//!             err.message
+//!         );
+//!     }
+//!     Err(RithmicError::ProtocolError(msg)) => eprintln!("Protocol error: {msg}"),
+//!     Err(RithmicError::InvalidArgument(msg)) => eprintln!("Bad local input: {msg}"),
 //!     Err(e) => eprintln!("{e}"),
 //! }
 //! ```
+//!
+//! `RithmicError::RequestRejected` reflects explicit non-zero `rp_code`
+//! outcomes and preserves the full raw `rp_code` payload plus derived
+//! first/second elements. `RithmicError::ProtocolError` covers non-transport
+//! response failures that were not carried in `rp_code`. `RithmicError::InvalidArgument`
+//! is reserved for local validation before a request is sent. The one proven benign non-zero case is
+//! `rp_code = ["7", "no data"]`, which is treated as an empty success.
+//! Reconnect only for
+//! connection-health errors or subscription updates where
+//! [`api::receiver_api::RithmicResponse::is_connection_issue`] is true.
+//!
+//! For methods that return [`api::receiver_api::RithmicResponse`] directly, use
+//! [`api::receiver_api::RithmicResponse::rp_code`],
+//! [`api::receiver_api::RithmicResponse::rp_code_text`],
+//! [`api::receiver_api::RithmicResponse::request_rejection`] /
+//! [`api::receiver_api::RithmicResponse::request_error`] to inspect the full
+//! server outcome without pattern-matching individual response templates.
 //!
 //! A graceful `disconnect().await` is separate from that reconnect path: it
 //! shuts the plant down without sending synthetic `HeartbeatTimeout` or
@@ -211,7 +236,7 @@ pub use plants::ticker_plant::{RithmicTickerPlant, RithmicTickerPlantHandle};
 pub use config::{ConfigError, RithmicAccount, RithmicConfig, RithmicConfigBuilder, RithmicEnv};
 
 // Re-export error types
-pub use error::RithmicError;
+pub use error::{RithmicError, RithmicRequestError};
 
 // Re-export connection strategy
 pub use ws::ConnectStrategy;

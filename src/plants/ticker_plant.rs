@@ -792,9 +792,9 @@ impl RithmicTickerPlantHandle {
             .next()
             .ok_or(RithmicError::EmptyResponse)?;
 
-        if let Some(err) = response.error {
+        if let Some(err) = response.request_error() {
             error!("ticker_plant: login failed {:?}", err);
-            Err(RithmicError::ServerError(err))
+            Err(err)
         } else {
             let _ = self.sender.send(TickerPlantCommand::SetLogin).await;
 

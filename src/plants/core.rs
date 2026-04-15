@@ -291,6 +291,44 @@ where
         }
     }
 
+    fn heartbeat_timeout_response(&self, response: RithmicResponse) -> Option<RithmicResponse> {
+        if !matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
+            return None;
+        }
+
+        response.error.map(|error| RithmicResponse {
+            request_id: response.request_id,
+            message: RithmicMessage::HeartbeatTimeout,
+            is_update: true,
+            has_more: false,
+            multi_response: false,
+            error: Some(error),
+            source: self.rithmic_receiver_api.source.clone(),
+        })
+    }
+
+    fn forward_response(&mut self, source: &str, response: RithmicResponse) {
+        if let Some(heartbeat_timeout) = self.heartbeat_timeout_response(response.clone()) {
+            let _ = self.subscription_sender.send(heartbeat_timeout);
+            return;
+        }
+
+        if matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
+            return;
+        }
+
+        if response.is_update {
+            match self.subscription_sender.send(response) {
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("{}: no active subscribers: {:?}", source, e);
+                }
+            }
+        } else {
+            self.request_handler.handle_response(response);
+        }
+    }
+
     /// Handle a raw WebSocket message. Returns `true` if the actor should stop.
     pub(crate) async fn handle_rithmic_message(&mut self, message: Result<Message, Error>) -> bool {
         let mut stop = false;
@@ -316,46 +354,10 @@ where
             Ok(Message::Binary(data)) => {
                 let source = self.rithmic_receiver_api.source.clone();
                 match self.rithmic_receiver_api.buf_to_message(data) {
-                    Ok(response) => {
-                        // Handle heartbeat responses: only forward if they contain an error
-                        if matches!(response.message, RithmicMessage::ResponseHeartbeat(_)) {
-                            if let Some(error) = response.error {
-                                let error_response = RithmicResponse {
-                                    request_id: response.request_id,
-                                    message: RithmicMessage::HeartbeatTimeout,
-                                    is_update: true,
-                                    has_more: false,
-                                    multi_response: false,
-                                    error: Some(error),
-                                    source: self.rithmic_receiver_api.source.clone(),
-                                };
-
-                                let _ = self.subscription_sender.send(error_response);
-                            }
-
-                            // Always drop heartbeat responses (successful or error)
-                            return false;
-                        }
-
-                        if response.is_update {
-                            match self.subscription_sender.send(response) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    warn!("{}: no active subscribers: {:?}", source, e);
-                                }
-                            }
-                        } else {
-                            self.request_handler.handle_response(response);
-                        }
-                    }
+                    Ok(response) => self.forward_response(&source, response),
                     Err(err_response) => {
                         error!("{}: error response from server: {:?}", source, err_response);
-
-                        if err_response.is_update {
-                            let _ = self.subscription_sender.send(err_response);
-                        } else {
-                            self.request_handler.handle_response(err_response);
-                        }
+                        self.forward_response(&source, err_response);
                     }
                 }
             }
@@ -568,6 +570,7 @@ mod tests {
     };
 
     use futures_util::StreamExt;
+    use prost::{Message as ProstMessage, bytes::Bytes};
     use tokio::sync::{broadcast, oneshot};
     use tokio_tungstenite::tungstenite::{Error, Message, error::ProtocolError};
 
@@ -704,6 +707,16 @@ mod tests {
         drop(client_tcp);
         let (_, reader) = server_ws.split();
         reader
+    }
+
+    fn encode_with_header<T: ProstMessage>(message: &T) -> Bytes {
+        let mut payload = Vec::new();
+        message.encode(&mut payload).unwrap();
+
+        let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
+        framed.extend(payload);
+
+        Bytes::from(framed)
     }
 
     fn make_test_core(
@@ -1053,6 +1066,141 @@ mod tests {
             broadcast_msg.message,
             RithmicMessage::ConnectionError
         ));
+    }
+
+    #[tokio::test]
+    async fn handle_rithmic_message_request_rp_code_error_does_not_emit_connection_issue() {
+        use crate::rti::Reject;
+
+        let reader = make_dormant_ws_reader().await;
+        let (mut core, mut sub_rx) = make_test_core(MockMessageSink::ready(), reader);
+        let mut rx = register_request(&mut core, "req-1");
+
+        let message = encode_with_header(&Reject {
+            template_id: 75,
+            user_msg: vec!["req-1".to_string()],
+            rp_code: vec!["5".to_string(), "permission denied".to_string()],
+        });
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Binary(message)))
+            .await;
+
+        assert!(!stop, "protocol request errors must not stop the actor");
+        assert!(
+            sub_rx.try_recv().is_err(),
+            "generic rp_code errors must not emit connection-health updates"
+        );
+
+        let result = rx.try_recv().unwrap().unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0].message, RithmicMessage::Reject(_)));
+        assert_eq!(result[0].error.as_deref(), Some("permission denied"));
+    }
+
+    #[tokio::test]
+    async fn handle_rithmic_message_heartbeat_rp_code_error_maps_to_heartbeat_timeout() {
+        use crate::rti::ResponseHeartbeat;
+
+        let reader = make_dormant_ws_reader().await;
+        let (mut core, mut sub_rx) = make_test_core(MockMessageSink::ready(), reader);
+
+        let message = encode_with_header(&ResponseHeartbeat {
+            template_id: 19,
+            user_msg: vec!["hb-1".to_string()],
+            rp_code: vec!["5".to_string(), "heartbeat rejected".to_string()],
+            ..ResponseHeartbeat::default()
+        });
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Binary(message)))
+            .await;
+
+        assert!(!stop, "heartbeat rp_code errors should not stop the actor");
+        let update = sub_rx.try_recv().unwrap();
+        assert!(matches!(update.message, RithmicMessage::HeartbeatTimeout));
+        assert_eq!(update.request_id, "hb-1");
+        assert_eq!(update.error.as_deref(), Some("heartbeat rejected"));
+    }
+
+    #[tokio::test]
+    async fn handle_rithmic_message_successful_heartbeat_is_silent() {
+        use crate::rti::ResponseHeartbeat;
+
+        let reader = make_dormant_ws_reader().await;
+        let (mut core, mut sub_rx) = make_test_core(MockMessageSink::ready(), reader);
+
+        let message = encode_with_header(&ResponseHeartbeat {
+            template_id: 19,
+            user_msg: vec!["hb-ok".to_string()],
+            rp_code: vec!["0".to_string()],
+            ..ResponseHeartbeat::default()
+        });
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Binary(message)))
+            .await;
+
+        assert!(!stop, "successful heartbeat should not stop the actor");
+        assert!(
+            sub_rx.try_recv().is_err(),
+            "successful heartbeat should not emit a synthetic update"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_rithmic_message_multi_response_uses_rq_handler_rp_code_presence() {
+        use crate::rti::ResponseSearchSymbols;
+
+        let reader = make_dormant_ws_reader().await;
+        let (mut core, mut sub_rx) = make_test_core(MockMessageSink::ready(), reader);
+        let mut rx = register_request(&mut core, "req-multi");
+
+        let intermediate = encode_with_header(&ResponseSearchSymbols {
+            template_id: 110,
+            user_msg: vec!["req-multi".to_string()],
+            rq_handler_rp_code: vec!["7".to_string()],
+            ..ResponseSearchSymbols::default()
+        });
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Binary(intermediate)))
+            .await;
+
+        assert!(
+            !stop,
+            "intermediate multi-response frame should not stop the actor"
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+            "intermediate frame should remain buffered until terminal rp_code arrives"
+        );
+        assert!(
+            sub_rx.try_recv().is_err(),
+            "request multipart frames must not emit subscription updates"
+        );
+
+        let terminal = encode_with_header(&ResponseSearchSymbols {
+            template_id: 110,
+            user_msg: vec!["req-multi".to_string()],
+            rp_code: vec!["0".to_string()],
+            ..ResponseSearchSymbols::default()
+        });
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Binary(terminal)))
+            .await;
+
+        assert!(
+            !stop,
+            "terminal multi-response frame should not stop the actor"
+        );
+        let result = rx.try_recv().unwrap().unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result[0].multi_response);
+        assert!(result[0].has_more);
+        assert!(result[1].multi_response);
+        assert!(!result[1].has_more);
     }
 
     #[tokio::test]

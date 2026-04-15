@@ -46,8 +46,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 RithmicError::ConnectionClosed | RithmicError::SendFailed => {
                     error!("Login failed (connection issue): {}", e);
                 }
-                RithmicError::ServerError(msg) => {
-                    error!("Login rejected by server: {}", msg);
+                RithmicError::RequestRejected(err) => {
+                    error!(
+                        "Login rejected by server [{}]: {}",
+                        err.code.as_deref().unwrap_or("?"),
+                        err.message
+                    );
                 }
                 _ => {
                     error!("Login failed: {}", e);

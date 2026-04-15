@@ -30,6 +30,7 @@ use crate::rti::{
     TradeRoute, TradeStatistics, UpdateEasyToBorrowList, UserAccountUpdate,
     messages::RithmicMessage,
 };
+use crate::{RithmicError, RithmicRequestError};
 
 /// Response from a Rithmic plant, either from a request or a subscription update.
 ///
@@ -54,6 +55,12 @@ use crate::rti::{
 /// When Rithmic rejects a request or encounters an error, the response will have:
 /// - `error: Some("error description from Rithmic")`
 /// - `message`: Usually [`RithmicMessage::Reject`]
+///
+/// These are request/response outcomes, not transport failures. A populated
+/// `error` field by itself does not mean the plant disconnected or needs to
+/// reconnect. Use [`RithmicResponse::request_rejection`] together with
+/// [`RithmicResponse::rp_code`] / [`RithmicResponse::rp_code_text`] to inspect
+/// the raw upstream outcome without treating it as a transport failure.
 ///
 /// ### 2. Connection Errors
 /// When a plant's WebSocket connection fails, you'll receive:
@@ -113,7 +120,7 @@ impl RithmicResponse {
     /// Returns true if this response represents an error condition.
     ///
     /// This checks both:
-    /// - The `error` field being set (Rithmic protocol errors)
+    /// - The `error` field being set (Rithmic protocol or business-level errors)
     /// - Connection issues (WebSocket errors, heartbeat timeouts, forced logout)
     ///
     /// # Example
@@ -126,6 +133,61 @@ impl RithmicResponse {
         self.error.is_some() || self.is_connection_issue()
     }
 
+    /// Returns the raw `rp_code` payload for responses that carry it.
+    ///
+    /// Most request/response templates expose `rp_code`; update-only messages do not.
+    pub fn rp_code_raw(&self) -> Option<&[String]> {
+        response_rp_code_info(&self.message).map(|(_, rp_code)| rp_code)
+    }
+
+    /// Returns the first `rp_code` element, if present.
+    pub fn rp_code(&self) -> Option<&str> {
+        self.rp_code_raw()
+            .and_then(|rp_code| rp_code.first().map(String::as_str))
+    }
+
+    /// Returns the second `rp_code` element, if present.
+    pub fn rp_code_text(&self) -> Option<&str> {
+        self.rp_code_raw()
+            .and_then(|rp_code| rp_code.get(1).map(String::as_str))
+    }
+
+    /// Returns the typed non-transport `rp_code` rejection attached to this response.
+    ///
+    /// This only reflects rejections carried explicitly by `rp_code` and
+    /// preserves the full raw payload for downstream handling. It does not treat
+    /// transport-health events or generic non-`rp_code` errors as request
+    /// rejections.
+    pub fn request_rejection(&self) -> Option<RithmicRequestError> {
+        if self.is_connection_issue() {
+            return None;
+        }
+
+        match self.rp_code_raw().map(classify_rp_code) {
+            Some(RpCodeClassification::Success | RpCodeClassification::KnownBenignEmpty) => None,
+            Some(RpCodeClassification::RequestRejected(err)) => Some(err),
+            None => None,
+        }
+    }
+
+    /// Maps non-transport response failures into typed [`RithmicError`] values.
+    ///
+    /// `rp_code` rejections surface as [`RithmicError::RequestRejected`].
+    /// Generic non-transport response failures without `rp_code` surface as
+    /// [`RithmicError::ProtocolError`]. This does not treat transport-health
+    /// events as request errors.
+    pub fn request_error(&self) -> Option<RithmicError> {
+        if let Some(err) = self.request_rejection() {
+            return Some(RithmicError::RequestRejected(err));
+        }
+
+        if self.is_connection_issue() {
+            return None;
+        }
+
+        self.error.clone().map(RithmicError::ProtocolError)
+    }
+
     /// Returns true if this response indicates a connection health issue.
     ///
     /// Connection issues include:
@@ -133,7 +195,8 @@ impl RithmicResponse {
     /// - `HeartbeatTimeout`: Connection appears dead
     /// - `ForcedLogout`: Server forcibly logged out the client
     ///
-    /// These conditions typically require reconnection logic.
+    /// These conditions typically require reconnection logic. Generic request
+    /// failures encoded in `rp_code` do not.
     ///
     /// # Example
     /// ```ignore
@@ -1623,44 +1686,149 @@ impl RithmicReceiverApi {
             }
         };
 
-        // Handle errors
-        if let Some(error) = check_message_error(&response) {
-            error!("receiver_api: error {:#?} {:?}", response, error);
-
-            return Err(response);
-        }
-
         Ok(response)
     }
 }
 
 fn has_multiple(rq_handler_rp_code: &[String]) -> bool {
-    !rq_handler_rp_code.is_empty() && rq_handler_rp_code[0] == "0"
+    // Per the Rithmic guide, the presence of `rq_handler_rp_code` means more
+    // response messages follow. `rp_code` marks the terminal frame.
+    !rq_handler_rp_code.is_empty()
 }
 
-fn get_error(rp_code: &[String]) -> Option<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RpCodeClassification {
+    Success,
+    KnownBenignEmpty,
+    RequestRejected(RithmicRequestError),
+}
+
+impl RpCodeClassification {
+    fn error_message(&self) -> Option<String> {
+        match self {
+            Self::Success | Self::KnownBenignEmpty => None,
+            Self::RequestRejected(err) => Some(err.message.clone()),
+        }
+    }
+}
+
+macro_rules! rp_code_response_variants {
+    ($macro:ident) => {
+        $macro! {
+            Reject,
+            ResponseAcceptAgreement,
+            ResponseAccountList,
+            ResponseAccountRmsInfo,
+            ResponseAccountRmsUpdates,
+            ResponseAuxilliaryReferenceData,
+            ResponseBracketOrder,
+            ResponseCancelAllOrders,
+            ResponseCancelOrder,
+            ResponseDepthByOrderSnapshot,
+            ResponseDepthByOrderUpdates,
+            ResponseEasyToBorrowList,
+            ResponseExitPosition,
+            ResponseFrontMonthContract,
+            ResponseGetInstrumentByUnderlying,
+            ResponseGetInstrumentByUnderlyingKeys,
+            ResponseGetVolumeAtPrice,
+            ResponseGiveTickSizeTypeTable,
+            ResponseHeartbeat,
+            ResponseLinkOrders,
+            ResponseListAcceptedAgreements,
+            ResponseListExchangePermissions,
+            ResponseListUnacceptedAgreements,
+            ResponseLogin,
+            ResponseLoginInfo,
+            ResponseLogout,
+            ResponseMarketDataUpdate,
+            ResponseMarketDataUpdateByUnderlying,
+            ResponseModifyOrder,
+            ResponseModifyOrderReferenceData,
+            ResponseNewOrder,
+            ResponseOcoOrder,
+            ResponseOrderSessionConfig,
+            ResponsePnLPositionSnapshot,
+            ResponsePnLPositionUpdates,
+            ResponseProductCodes,
+            ResponseProductRmsInfo,
+            ResponseReferenceData,
+            ResponseReplayExecutions,
+            ResponseResumeBars,
+            ResponseRithmicSystemGatewayInfo,
+            ResponseRithmicSystemInfo,
+            ResponseSearchSymbols,
+            ResponseSetRithmicMrktDataSelfCertStatus,
+            ResponseShowAgreement,
+            ResponseShowBracketStops,
+            ResponseShowBrackets,
+            ResponseShowOrderHistory,
+            ResponseShowOrderHistoryDates,
+            ResponseShowOrderHistoryDetail,
+            ResponseShowOrderHistorySummary,
+            ResponseShowOrders,
+            ResponseSubscribeForOrderUpdates,
+            ResponseSubscribeToBracketUpdates,
+            ResponseTickBarReplay,
+            ResponseTickBarUpdate,
+            ResponseTimeBarReplay,
+            ResponseTimeBarUpdate,
+            ResponseTradeRoutes,
+            ResponseUpdateStopBracketLevel,
+            ResponseUpdateTargetBracketLevel,
+            ResponseVolumeProfileMinuteBars,
+        }
+    };
+}
+
+macro_rules! define_response_rp_code_info {
+    ($($variant:ident),* $(,)?) => {
+        fn response_rp_code_info(message: &RithmicMessage) -> Option<(&'static str, &[String])> {
+            match message {
+                $(RithmicMessage::$variant(resp) => Some((stringify!($variant), resp.rp_code.as_slice())),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+rp_code_response_variants!(define_response_rp_code_info);
+
+fn classify_rp_code(rp_code: &[String]) -> RpCodeClassification {
     if (rp_code.len() == 1 && rp_code[0] == "0") || rp_code.is_empty() {
-        return None;
+        return RpCodeClassification::Success;
     }
 
-    // Rithmic uses rp_code = ["7", "no data"] to signal "successful query, zero results"
-    // across all list/replay/search responses. Treat it as a normal empty outcome, not an error.
-    if let (Some(code), Some(msg)) = (rp_code.first(), rp_code.get(1)) {
-        if code == "7" && msg.eq_ignore_ascii_case("no data") {
-            return None;
+    if let Some(code) = rp_code.first() {
+        if let Some(message) = rp_code.get(1) {
+            // Rithmic uses `["7", "no data"]` across query/list/search-style
+            // responses to mean "successful request, zero rows returned".
+            if code == "7" && message.eq_ignore_ascii_case("no data") {
+                return RpCodeClassification::KnownBenignEmpty;
+            }
         }
     }
 
-    let msg = rp_code
+    let code = rp_code.first().cloned();
+    let message = rp_code
         .get(1)
         .cloned()
-        .unwrap_or_else(|| rp_code[0].clone());
+        .or_else(|| code.clone())
+        .unwrap_or_default();
 
-    Some(msg)
+    RpCodeClassification::RequestRejected(RithmicRequestError {
+        rp_code: rp_code.to_vec(),
+        code,
+        message,
+    })
 }
 
-fn check_message_error(message: &RithmicResponse) -> Option<String> {
-    message.error.as_ref().map(|e| e.to_string())
+fn rp_code_error(rp_code: &[String]) -> Option<String> {
+    classify_rp_code(rp_code).error_message()
+}
+
+fn get_error(rp_code: &[String]) -> Option<String> {
+    rp_code_error(rp_code)
 }
 
 fn decode_error(source: &str, e: prost::DecodeError, is_update: bool) -> RithmicResponse {
@@ -1891,59 +2059,158 @@ mod tests {
     }
 
     // =========================================================================
-    // get_error() / has_multiple() unit tests
+    // rp_code classification / has_multiple() unit tests
     // =========================================================================
 
     #[test]
+    fn response_rp_code_info_returns_variant_name_and_payload() {
+        let message = RithmicMessage::ResponseSearchSymbols(ResponseSearchSymbols {
+            rp_code: vec!["5".to_string(), "permission denied".to_string()],
+            ..ResponseSearchSymbols::default()
+        });
+
+        let (template_name, rp_code) =
+            super::response_rp_code_info(&message).expect("response should expose rp_code");
+
+        assert_eq!(template_name, "ResponseSearchSymbols");
+        assert_eq!(rp_code, &["5".to_string(), "permission denied".to_string()]);
+    }
+
+    #[test]
     fn get_error_returns_none_for_empty_rp_code() {
-        assert_eq!(super::get_error(&[]), None);
+        assert_eq!(super::classify_rp_code(&[]), RpCodeClassification::Success);
     }
 
     #[test]
-    fn get_error_returns_none_for_zero_rp_code() {
-        assert_eq!(super::get_error(&["0".to_string()]), None);
-    }
-
-    #[test]
-    fn get_error_returns_none_for_no_data_rp_code() {
-        // rp_code = ["7", "no data"] means "successful query, zero results" across all
-        // Rithmic list/replay/search responses — must not be treated as an error.
-        let rp_code = vec!["7".to_string(), "no data".to_string()];
-        assert_eq!(get_error(&rp_code), None);
-    }
-
-    #[test]
-    fn get_error_returns_none_for_no_data_case_insensitive() {
-        let rp_code = vec!["7".to_string(), "No Data".to_string()];
-        assert_eq!(get_error(&rp_code), None);
-    }
-
-    #[test]
-    fn get_error_returns_some_for_other_code_7_messages() {
-        // code "7" with a different message is still an error
-        let rp_code = vec!["7".to_string(), "permission denied".to_string()];
-        assert!(get_error(&rp_code).is_some());
-    }
-
-    #[test]
-    fn get_error_returns_some_for_code_7_with_error() {
+    fn classify_rp_code_returns_success_for_zero_rp_code() {
         assert_eq!(
-            super::get_error(&["7".to_string(), "permission denied".to_string()]),
-            Some("permission denied".to_string())
+            super::classify_rp_code(&["0".to_string()]),
+            RpCodeClassification::Success
         );
     }
 
     #[test]
-    fn get_error_returns_second_element_for_non_zero_non_7_code() {
+    fn classify_rp_code_returns_benign_empty_for_code_7() {
+        let rp_code = vec!["7".to_string(), "no data".to_string()];
         assert_eq!(
-            super::get_error(&["3".to_string(), "bad request".to_string()]),
+            classify_rp_code(&rp_code),
+            RpCodeClassification::KnownBenignEmpty
+        );
+    }
+
+    #[test]
+    fn classify_rp_code_returns_benign_empty_for_code_7_case_insensitive_text() {
+        let rp_code = vec!["7".to_string(), "No Data".to_string()];
+        assert_eq!(
+            classify_rp_code(&rp_code),
+            RpCodeClassification::KnownBenignEmpty
+        );
+    }
+
+    #[test]
+    fn classify_rp_code_returns_request_rejected_for_other_code_7_text() {
+        let rp_code = vec!["7".to_string(), "permission denied".to_string()];
+        assert_eq!(
+            classify_rp_code(&rp_code),
+            RpCodeClassification::RequestRejected(RithmicRequestError {
+                rp_code: rp_code.clone(),
+                code: Some("7".to_string()),
+                message: "permission denied".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn classify_rp_code_returns_request_rejected_for_code_6() {
+        let rp_code = vec!["6".to_string(), "missing symbol".to_string()];
+        assert_eq!(
+            classify_rp_code(&rp_code),
+            RpCodeClassification::RequestRejected(RithmicRequestError {
+                rp_code: rp_code.clone(),
+                code: Some("6".to_string()),
+                message: "missing symbol".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn classify_rp_code_returns_request_rejected_for_missing_field_text() {
+        let rp_code = vec![
+            "1039".to_string(),
+            "FCM Id field is not received.".to_string(),
+        ];
+        assert_eq!(
+            classify_rp_code(&rp_code),
+            RpCodeClassification::RequestRejected(RithmicRequestError {
+                rp_code: rp_code.clone(),
+                code: Some("1039".to_string()),
+                message: "FCM Id field is not received.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn classify_rp_code_returns_request_rejected_for_search_pattern_text() {
+        let rp_code = vec![
+            "1062".to_string(),
+            "Search pattern field is not received.".to_string(),
+        ];
+        assert_eq!(
+            classify_rp_code(&rp_code),
+            RpCodeClassification::RequestRejected(RithmicRequestError {
+                rp_code: rp_code.clone(),
+                code: Some("1062".to_string()),
+                message: "Search pattern field is not received.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn classify_rp_code_keeps_parse_failure_as_request_rejected() {
+        let rp_code = vec![
+            "13".to_string(),
+            "an error occurred while parsing data.".to_string(),
+        ];
+        assert_eq!(
+            classify_rp_code(&rp_code),
+            RpCodeClassification::RequestRejected(RithmicRequestError {
+                rp_code: rp_code.clone(),
+                code: Some("13".to_string()),
+                message: "an error occurred while parsing data.".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn rp_code_error_returns_none_for_code_7_no_data() {
+        assert_eq!(
+            super::rp_code_error(&["7".to_string(), "no data".to_string()]),
+            None
+        );
+    }
+
+    #[test]
+    fn rp_code_error_returns_some_for_other_code_7_text() {
+        assert_eq!(
+            super::rp_code_error(&["7".to_string(), "parse failure".to_string()]),
+            Some("parse failure".to_string())
+        );
+    }
+
+    #[test]
+    fn rp_code_error_returns_second_element_for_non_zero_code() {
+        assert_eq!(
+            super::rp_code_error(&["3".to_string(), "bad request".to_string()]),
             Some("bad request".to_string())
         );
     }
 
     #[test]
-    fn get_error_returns_first_element_when_no_second() {
-        assert_eq!(super::get_error(&["5".to_string()]), Some("5".to_string()));
+    fn rp_code_error_returns_first_element_when_no_second() {
+        assert_eq!(
+            super::rp_code_error(&["5".to_string()]),
+            Some("5".to_string())
+        );
     }
 
     #[test]
@@ -1957,13 +2224,13 @@ mod tests {
     }
 
     #[test]
-    fn has_multiple_returns_false_for_non_zero_code() {
-        assert!(!super::has_multiple(&["7".to_string()]));
+    fn has_multiple_returns_true_for_non_zero_code_when_field_present() {
+        assert!(super::has_multiple(&["7".to_string()]));
     }
 
     #[test]
-    fn has_multiple_returns_false_for_zero_as_second_element() {
-        assert!(!super::has_multiple(&["1".to_string(), "0".to_string()]));
+    fn has_multiple_returns_true_for_any_present_payload() {
+        assert!(super::has_multiple(&["1".to_string(), "0".to_string()]));
     }
 
     #[test]
@@ -1985,6 +2252,235 @@ mod tests {
             result.err()
         );
         assert_eq!(result.unwrap().error, None);
+    }
+
+    #[test]
+    fn replay_no_data_decodes_as_ok_case_insensitive() {
+        use crate::rti::ResponseReplayExecutions;
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+        let result = api.buf_to_message(encode_with_header(&ResponseReplayExecutions {
+            template_id: 3507,
+            user_msg: vec!["req-1b".to_string()],
+            rp_code: vec!["7".to_string(), "NO DATA".to_string()],
+        }));
+        let response = result.expect("case-insensitive no-data should decode as success");
+        assert_eq!(response.error, None);
+        assert!(response.request_error().is_none());
+    }
+
+    #[test]
+    fn search_symbols_decode_sets_multi_response_flags_from_field_presence() {
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+
+        let partial = api
+            .buf_to_message(encode_with_header(&ResponseSearchSymbols {
+                template_id: 110,
+                user_msg: vec!["req-multi".to_string()],
+                rq_handler_rp_code: vec!["7".to_string()],
+                ..ResponseSearchSymbols::default()
+            }))
+            .expect("intermediate multi-response frame should decode");
+
+        assert!(matches!(
+            partial.message,
+            RithmicMessage::ResponseSearchSymbols(_)
+        ));
+        assert!(partial.multi_response);
+        assert!(partial.has_more);
+        assert!(partial.error.is_none());
+
+        let terminal = api
+            .buf_to_message(encode_with_header(&ResponseSearchSymbols {
+                template_id: 110,
+                user_msg: vec!["req-multi".to_string()],
+                rp_code: vec!["0".to_string()],
+                ..ResponseSearchSymbols::default()
+            }))
+            .expect("terminal multi-response frame should decode");
+
+        assert!(terminal.multi_response);
+        assert!(!terminal.has_more);
+        assert!(terminal.error.is_none());
+    }
+
+    #[test]
+    fn reject_with_non_zero_rp_code_decodes_as_ok_with_error() {
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+        let result = api.buf_to_message(encode_with_header(&Reject {
+            template_id: 75,
+            user_msg: vec!["req-2".to_string()],
+            rp_code: vec!["5".to_string(), "permission denied".to_string()],
+        }));
+
+        let response = result.expect("reject with rp_code error should still decode");
+        assert!(matches!(response.message, RithmicMessage::Reject(_)));
+        assert_eq!(response.error.as_deref(), Some("permission denied"));
+        assert!(!response.is_connection_issue());
+    }
+
+    #[test]
+    fn accepted_agreements_bad_input_decodes_as_ok_with_error() {
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+        let result = api.buf_to_message(encode_with_header(&ResponseListAcceptedAgreements {
+            template_id: 503,
+            user_msg: vec!["req-3".to_string()],
+            rp_code: vec!["6".to_string(), "bad input".to_string()],
+            ..ResponseListAcceptedAgreements::default()
+        }));
+
+        let response = result.expect("known request/business errors should stay on response path");
+        assert!(matches!(
+            response.message,
+            RithmicMessage::ResponseListAcceptedAgreements(_)
+        ));
+        assert_eq!(response.error.as_deref(), Some("bad input"));
+        assert!(!response.is_connection_issue());
+    }
+
+    #[test]
+    fn response_request_error_maps_code_6_to_request_rejected_with_full_text() {
+        let response = decode_with_api(&ResponseListAcceptedAgreements {
+            template_id: 503,
+            user_msg: vec!["req-4".to_string()],
+            rp_code: vec!["6".to_string(), "agreement already signed".to_string()],
+            ..ResponseListAcceptedAgreements::default()
+        });
+
+        assert_eq!(response.rp_code(), Some("6"));
+        assert_eq!(response.rp_code_text(), Some("agreement already signed"));
+        assert!(matches!(
+            response.request_error(),
+            Some(RithmicError::RequestRejected(RithmicRequestError { rp_code, code, message }))
+                if rp_code == vec!["6".to_string(), "agreement already signed".to_string()]
+                    && code.as_deref() == Some("6")
+                    && message == "agreement already signed"
+        ));
+    }
+
+    #[test]
+    fn response_request_error_maps_missing_field_server_text_to_request_rejected() {
+        let response = decode_with_api(&ResponseShowOrders {
+            template_id: 321,
+            user_msg: vec!["req-4b".to_string()],
+            rp_code: vec![
+                "1039".to_string(),
+                "FCM Id field is not received.".to_string(),
+            ],
+        });
+
+        assert_eq!(response.rp_code(), Some("1039"));
+        assert_eq!(
+            response.rp_code_text(),
+            Some("FCM Id field is not received.")
+        );
+        assert!(matches!(
+            response.request_error(),
+            Some(RithmicError::RequestRejected(RithmicRequestError { rp_code, code, message }))
+                if rp_code
+                    == vec![
+                        "1039".to_string(),
+                        "FCM Id field is not received.".to_string()
+                    ]
+                    && code.as_deref() == Some("1039")
+                    && message == "FCM Id field is not received."
+        ));
+    }
+
+    #[test]
+    fn response_request_error_maps_search_pattern_server_text_to_request_rejected() {
+        let response = decode_with_api(&ResponseSearchSymbols {
+            template_id: 110,
+            user_msg: vec!["req-4c".to_string()],
+            rp_code: vec![
+                "1062".to_string(),
+                "Search pattern field is not received.".to_string(),
+            ],
+            ..ResponseSearchSymbols::default()
+        });
+
+        assert_eq!(response.rp_code(), Some("1062"));
+        assert_eq!(
+            response.rp_code_text(),
+            Some("Search pattern field is not received.")
+        );
+        assert!(matches!(
+            response.request_error(),
+            Some(RithmicError::RequestRejected(RithmicRequestError { rp_code, code, message }))
+                if rp_code
+                    == vec![
+                        "1062".to_string(),
+                        "Search pattern field is not received.".to_string()
+                    ]
+                    && code.as_deref() == Some("1062")
+                    && message == "Search pattern field is not received."
+        ));
+    }
+
+    #[test]
+    fn response_request_error_preserves_raw_text_for_code_7_no_data() {
+        let response = decode_with_api(&ResponseReplayExecutions {
+            template_id: 3507,
+            user_msg: vec!["req-5".to_string()],
+            rp_code: vec!["7".to_string(), "no data".to_string()],
+        });
+
+        assert_eq!(response.rp_code(), Some("7"));
+        assert_eq!(response.rp_code_text(), Some("no data"));
+        assert!(response.request_error().is_none());
+        assert!(response.request_rejection().is_none());
+    }
+
+    #[test]
+    fn response_request_error_keeps_non_no_data_code_7_as_request_rejected() {
+        use crate::rti::ResponseOrderSessionConfig;
+
+        let response = decode_with_api(&ResponseOrderSessionConfig {
+            template_id: 3503,
+            user_msg: vec!["req-6".to_string()],
+            rp_code: vec![
+                "7".to_string(),
+                "an error occurred while parsing data.".to_string(),
+            ],
+        });
+
+        assert_eq!(
+            response.rp_code_text(),
+            Some("an error occurred while parsing data.")
+        );
+        assert!(matches!(
+            response.request_error(),
+            Some(RithmicError::RequestRejected(RithmicRequestError { rp_code, code, message }))
+                if rp_code
+                    == vec![
+                        "7".to_string(),
+                        "an error occurred while parsing data.".to_string()
+                    ]
+                    && code.as_deref() == Some("7")
+                    && message == "an error occurred while parsing data."
+        ));
+
+        assert_eq!(
+            make_response_with_error(RithmicMessage::Unknown, "decode failed").request_rejection(),
+            None
+        );
+    }
+
+    #[test]
+    fn response_request_error_maps_non_rp_error_to_protocol_error() {
+        let response = make_response_with_error(RithmicMessage::Unknown, "decode failed");
+
+        assert!(matches!(
+            response.request_error(),
+            Some(RithmicError::ProtocolError(message)) if message == "decode failed"
+        ));
     }
 
     // =========================================================================
