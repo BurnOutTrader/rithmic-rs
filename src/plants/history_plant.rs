@@ -1,3 +1,5 @@
+use futures_util::StreamExt;
+use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -14,15 +16,11 @@ use crate::{
     ws::{HEARTBEAT_SECS, PlantActor},
 };
 
-use futures_util::StreamExt;
-
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
     time::sleep_until,
 };
-
-use tokio_tungstenite::tungstenite::Message;
 
 pub(crate) enum HistoryPlantCommand {
     Close,
@@ -90,6 +88,46 @@ pub(crate) enum HistoryPlantCommand {
         request: request_tick_bar_update::Request,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
+}
+
+impl HistoryPlantCommand {
+    /// If the command carries a response sender, extract it; otherwise return
+    /// the command back to the caller unchanged.
+    ///
+    /// Used by the `close_requested` guard in `handle_command` to fail queued
+    /// requests fast once a disconnect is in flight.
+    fn into_response_sender_or_command(
+        self,
+    ) -> Result<oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>, Self> {
+        match self {
+            Self::ListSystemInfo { response_sender }
+            | Self::Login {
+                response_sender, ..
+            }
+            | Self::Logout { response_sender }
+            | Self::LoadTicks {
+                response_sender, ..
+            }
+            | Self::LoadTimeBars {
+                response_sender, ..
+            }
+            | Self::LoadVolumeProfileMinuteBars {
+                response_sender, ..
+            }
+            | Self::ResumeBars {
+                response_sender, ..
+            }
+            | Self::SubscribeTimeBarUpdates {
+                response_sender, ..
+            }
+            | Self::SubscribeTickBarUpdates {
+                response_sender, ..
+            } => Ok(response_sender),
+            other @ (Self::Close | Self::SetLogin | Self::UpdateHeartbeat { .. } | Self::Abort) => {
+                Err(other)
+            }
+        }
+    }
 }
 
 /// The RithmicHistoryPlant provides access to historical market data through the Rithmic API.
@@ -168,7 +206,6 @@ impl RithmicHistoryPlant {
     ) -> Result<RithmicHistoryPlant, RithmicError> {
         let (req_tx, req_rx) = mpsc::channel::<HistoryPlantCommand>(32);
         let (sub_tx, _sub_rx) = broadcast::channel::<RithmicResponse>(20_000);
-
         let mut history_plant = HistoryPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
@@ -216,6 +253,7 @@ impl HistoryPlant {
         strategy: ConnectStrategy,
     ) -> Result<HistoryPlant, RithmicError> {
         let core = PlantCore::new(subscription_sender, config, strategy, "history_plant").await?;
+
         Ok(HistoryPlant {
             core,
             request_receiver,
@@ -262,12 +300,12 @@ impl PlantActor for HistoryPlant {
                             warn!(
                                 "history_plant: ping timed out while waiting for server close echo — terminating"
                             );
+
                             self.core.request_handler.drain_and_drop();
                         } else {
                             self.core.fail_connection_and_drain(
                                 "websocket_ping_timeout",
-                                RithmicMessage::HeartbeatTimeout,
-                                "WebSocket ping timeout - connection dead",
+                                RithmicError::HeartbeatTimeout,
                             );
                         }
                         true
@@ -279,11 +317,8 @@ impl PlantActor for HistoryPlant {
                     if matches!(cmd, HistoryPlantCommand::Abort) {
                         info!("history_plant: abort requested, shutting down immediately");
 
-                        self.core.fail_connection_and_drain(
-                            "",
-                            RithmicMessage::ConnectionError,
-                            "Plant aborted",
-                        );
+                        self.core
+                            .fail_connection_and_drain("", RithmicError::ConnectionClosed);
 
                         true
                     } else {
@@ -303,6 +338,20 @@ impl PlantActor for HistoryPlant {
     }
 
     async fn handle_command(&mut self, command: HistoryPlantCommand) {
+        // Disconnect race guard — see `TickerPlant::handle_command` for the
+        // rationale.
+        let command = if self.core.close_requested {
+            match command.into_response_sender_or_command() {
+                Ok(tx) => {
+                    let _ = tx.send(Err(RithmicError::ConnectionClosed));
+
+                    return;
+                }
+                Err(cmd) => cmd,
+            }
+        } else {
+            command
+        };
         match command {
             HistoryPlantCommand::Close => {
                 self.core.handle_close().await;
@@ -559,8 +608,8 @@ impl RithmicHistoryPlantHandle {
         info!("history_plant: logging in ");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
-
         let mut config = config;
+
         config.aggregated_quotes = None;
 
         let command = HistoryPlantCommand::Login {
@@ -576,27 +625,28 @@ impl RithmicHistoryPlantHandle {
             .next()
             .ok_or(RithmicError::EmptyResponse)?;
 
-        if let Some(err) = response.error {
+        if let Some(err) = response.error.clone() {
             error!("history_plant: login failed {:?}", err);
-            Err(RithmicError::ServerError(err))
-        } else {
-            let _ = self.sender.send(HistoryPlantCommand::SetLogin).await;
 
-            if let RithmicMessage::ResponseLogin(resp) = &response.message {
-                if let Some(hb) = resp.heartbeat_interval {
-                    let secs = hb.max(HEARTBEAT_SECS as f64) as u64;
-                    self.update_heartbeat(secs).await;
-                }
+            return Err(err);
+        }
 
-                if let Some(session_id) = &resp.unique_user_id {
-                    info!("history_plant: session id: {}", session_id);
-                }
+        let _ = self.sender.send(HistoryPlantCommand::SetLogin).await;
+
+        if let RithmicMessage::ResponseLogin(resp) = &response.message {
+            if let Some(hb) = resp.heartbeat_interval {
+                let secs = hb.max(HEARTBEAT_SECS as f64) as u64;
+                self.update_heartbeat(secs).await;
             }
 
-            info!("history_plant: logged in");
-
-            Ok(response)
+            if let Some(session_id) = &resp.unique_user_id {
+                info!("history_plant: session id: {}", session_id);
+            }
         }
+
+        info!("history_plant: logged in");
+
+        Ok(response)
     }
 
     async fn update_heartbeat(&self, seconds: u64) {
@@ -917,5 +967,63 @@ impl Clone for RithmicHistoryPlantHandle {
             subscription_receiver: self.subscription_sender.subscribe(),
             subscription_sender: self.subscription_sender.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HistoryPlantCommand, *};
+    use crate::error::RithmicError;
+
+    /// See the analogous ticker_plant test: the disconnect race guard in
+    /// `handle_command` depends on this contract.
+    #[test]
+    fn responder_bearing_variants_surface_sender() {
+        let (tx, _rx) = oneshot::channel();
+        let cmd = HistoryPlantCommand::LoadTicks {
+            bar_type_specifier: "1".to_string(),
+            end_time_sec: 1000,
+            exchange: "CME".to_string(),
+            response_sender: tx,
+            start_time_sec: 0,
+            symbol: "ESH6".to_string(),
+        };
+        assert!(cmd.into_response_sender_or_command().is_ok());
+    }
+
+    #[test]
+    fn fire_and_forget_variants_are_preserved() {
+        assert!(matches!(
+            HistoryPlantCommand::Close.into_response_sender_or_command(),
+            Err(HistoryPlantCommand::Close)
+        ));
+        assert!(matches!(
+            HistoryPlantCommand::Abort.into_response_sender_or_command(),
+            Err(HistoryPlantCommand::Abort)
+        ));
+    }
+
+    #[tokio::test]
+    async fn responder_drained_with_connection_closed() {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+        let cmd = HistoryPlantCommand::LoadTicks {
+            bar_type_specifier: "1".to_string(),
+            end_time_sec: 1000,
+            exchange: "CME".to_string(),
+            response_sender: tx,
+            start_time_sec: 0,
+            symbol: "ESH6".to_string(),
+        };
+
+        if let Ok(sender) = cmd.into_response_sender_or_command() {
+            let _ = sender.send(Err(RithmicError::ConnectionClosed));
+        } else {
+            panic!("LoadTicks must carry a responder");
+        }
+
+        assert!(matches!(
+            rx.await.unwrap(),
+            Err(RithmicError::ConnectionClosed)
+        ));
     }
 }

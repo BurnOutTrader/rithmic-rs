@@ -1,3 +1,5 @@
+use futures_util::StreamExt;
+use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -16,10 +18,6 @@ use crate::{
     },
     ws::{HEARTBEAT_SECS, PlantActor},
 };
-
-use tokio_tungstenite::tungstenite::Message;
-
-use futures_util::StreamExt;
 
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
@@ -123,6 +121,74 @@ pub(crate) enum TickerPlantCommand {
     },
 }
 
+impl TickerPlantCommand {
+    /// If the command carries a response sender, extract it; otherwise return
+    /// the command back to the caller unchanged.
+    ///
+    /// Used by the `close_requested` guard in `handle_command` to fail queued
+    /// requests fast once a disconnect is in flight, rather than sending them
+    /// to a server we're about to leave. Non-responder commands (`Close`,
+    /// `SetLogin`, `UpdateHeartbeat`, `Abort`) are returned so the actor can
+    /// still process them — `Close` in particular must still reach
+    /// `handle_close()` to send the WS Close frame.
+    fn into_response_sender_or_command(
+        self,
+    ) -> Result<oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>, Self> {
+        match self {
+            Self::ListSystemInfo { response_sender }
+            | Self::Login {
+                response_sender, ..
+            }
+            | Self::Logout { response_sender }
+            | Self::Subscribe {
+                response_sender, ..
+            }
+            | Self::SubscribeOrderBook {
+                response_sender, ..
+            }
+            | Self::RequestDepthByOrderSnapshot {
+                response_sender, ..
+            }
+            | Self::SearchSymbols {
+                response_sender, ..
+            }
+            | Self::ListExchanges {
+                response_sender, ..
+            }
+            | Self::GetInstrumentByUnderlying {
+                response_sender, ..
+            }
+            | Self::SubscribeByUnderlying {
+                response_sender, ..
+            }
+            | Self::GetTickSizeTypeTable {
+                response_sender, ..
+            }
+            | Self::GetProductCodes {
+                response_sender, ..
+            }
+            | Self::GetVolumeAtPrice {
+                response_sender, ..
+            }
+            | Self::GetAuxilliaryReferenceData {
+                response_sender, ..
+            }
+            | Self::GetReferenceData {
+                response_sender, ..
+            }
+            | Self::GetFrontMonthContract {
+                response_sender, ..
+            }
+            | Self::GetSystemGatewayInfo {
+                response_sender, ..
+            } => Ok(response_sender),
+            other @ (Self::Close | Self::SetLogin | Self::UpdateHeartbeat { .. } | Self::Abort) => {
+                Err(other)
+            }
+        }
+    }
+}
+
 /// The RithmicTickerPlant provides access to real-time market data.
 ///
 /// Currently the following market data updates are supported:
@@ -171,11 +237,9 @@ pub(crate) enum TickerPlantCommand {
 ///         match handle.subscription_receiver.recv().await {
 ///             Ok(update) => {
 ///                 // Check for connection errors
-///                 if let Some(error) = &update.error {
-///                     eprintln!("Error from {}: {}", update.source, error);
-///
-///                     // Ping timeout or heartbeat error - connection may be dead
-///                     if matches!(update.message, RithmicMessage::HeartbeatTimeout) {
+///                 if let Some(err) = &update.error {
+///                     eprintln!("Error from {}: {}", update.source, err);
+///                     if err.is_connection_issue() {
 ///                         eprintln!("Connection health issue - reconnection needed");
 ///                         break;
 ///                     }
@@ -249,7 +313,6 @@ impl RithmicTickerPlant {
     ) -> Result<RithmicTickerPlant, RithmicError> {
         let (req_tx, req_rx) = mpsc::channel::<TickerPlantCommand>(64);
         let (sub_tx, _sub_rx) = broadcast::channel(10_000);
-
         let mut ticker_plant = TickerPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
@@ -297,6 +360,7 @@ impl TickerPlant {
         strategy: ConnectStrategy,
     ) -> Result<TickerPlant, RithmicError> {
         let core = PlantCore::new(subscription_sender, config, strategy, "ticker_plant").await?;
+
         Ok(TickerPlant {
             core,
             request_receiver,
@@ -342,12 +406,12 @@ impl PlantActor for TickerPlant {
                             warn!(
                                 "ticker_plant: ping timed out while waiting for server close echo — terminating"
                             );
+
                             self.core.request_handler.drain_and_drop();
                         } else {
                             self.core.fail_connection_and_drain(
                                 "websocket_ping_timeout",
-                                RithmicMessage::HeartbeatTimeout,
-                                "WebSocket ping timeout - connection dead",
+                                RithmicError::HeartbeatTimeout,
                             );
                         }
                         true
@@ -358,11 +422,9 @@ impl PlantActor for TickerPlant {
                 SelectResult::Command(cmd) => {
                     if matches!(cmd, TickerPlantCommand::Abort) {
                         info!("ticker_plant: abort requested, shutting down immediately");
-                        self.core.fail_connection_and_drain(
-                            "",
-                            RithmicMessage::ConnectionError,
-                            "Plant aborted",
-                        );
+
+                        self.core
+                            .fail_connection_and_drain("", RithmicError::ConnectionClosed);
                         true
                     } else {
                         self.handle_command(cmd).await;
@@ -372,6 +434,7 @@ impl PlantActor for TickerPlant {
                 SelectResult::RithmicMessage(msg) => self.core.handle_rithmic_message(msg).await,
                 SelectResult::StreamClosed => self.core.handle_stream_closed(),
             };
+
             if stop {
                 break;
             }
@@ -379,6 +442,25 @@ impl PlantActor for TickerPlant {
     }
 
     async fn handle_command(&mut self, command: TickerPlantCommand) {
+        // Disconnect race guard: once `close_requested` is set (by `handle_logout`
+        // or `handle_close`), any request-bearing command queued by a cloned
+        // handle is rejected fast instead of being sent to a server we're
+        // about to leave. `Close` / `SetLogin` / `UpdateHeartbeat` / `Abort`
+        // have no responder, so they fall through and execute normally — in
+        // particular, `Close` still reaches `handle_close()` to send the WS
+        // Close frame.
+        let command = if self.core.close_requested {
+            match command.into_response_sender_or_command() {
+                Ok(tx) => {
+                    let _ = tx.send(Err(RithmicError::ConnectionClosed));
+
+                    return;
+                }
+                Err(cmd) => cmd,
+            }
+        } else {
+            command
+        };
         match command {
             TickerPlantCommand::Close => {
                 self.core.handle_close().await;
@@ -775,6 +857,7 @@ impl RithmicTickerPlantHandle {
 
         // Default aggregated_quotes to false for ticker plant
         let mut config = config;
+
         if config.aggregated_quotes.is_none() {
             config.aggregated_quotes = Some(false);
         }
@@ -792,27 +875,28 @@ impl RithmicTickerPlantHandle {
             .next()
             .ok_or(RithmicError::EmptyResponse)?;
 
-        if let Some(err) = response.error {
+        if let Some(err) = response.error.clone() {
             error!("ticker_plant: login failed {:?}", err);
-            Err(RithmicError::ServerError(err))
-        } else {
-            let _ = self.sender.send(TickerPlantCommand::SetLogin).await;
 
-            if let RithmicMessage::ResponseLogin(resp) = &response.message {
-                if let Some(hb) = resp.heartbeat_interval {
-                    let secs = hb.max(HEARTBEAT_SECS as f64) as u64;
-                    self.update_heartbeat(secs).await;
-                }
+            return Err(err);
+        }
 
-                if let Some(session_id) = &resp.unique_user_id {
-                    info!("ticker_plant: session id: {}", session_id);
-                }
+        let _ = self.sender.send(TickerPlantCommand::SetLogin).await;
+
+        if let RithmicMessage::ResponseLogin(resp) = &response.message {
+            if let Some(hb) = resp.heartbeat_interval {
+                let secs = hb.max(HEARTBEAT_SECS as f64) as u64;
+                self.update_heartbeat(secs).await;
             }
 
-            info!("ticker_plant: logged in");
-
-            Ok(response)
+            if let Some(session_id) = &resp.unique_user_id {
+                info!("ticker_plant: session id: {}", session_id);
+            }
         }
+
+        info!("ticker_plant: logged in");
+
+        Ok(response)
     }
 
     /// Disconnect from the Rithmic ticker plant
@@ -830,7 +914,6 @@ impl RithmicTickerPlantHandle {
         let r = rx.await.map_err(|_| RithmicError::ConnectionClosed)??;
         let _ = self.sender.send(TickerPlantCommand::Close).await;
         let response = r.into_iter().next().ok_or(RithmicError::EmptyResponse)?;
-
         let _ = self.subscription_sender.send(response.clone());
 
         Ok(response)
@@ -1820,5 +1903,75 @@ impl Clone for RithmicTickerPlantHandle {
             subscription_receiver: self.subscription_sender.subscribe(),
             subscription_sender: self.subscription_sender.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TickerPlantCommand, *};
+    use crate::{
+        error::RithmicError,
+        rti::request_market_data_update::{Request, UpdateBits},
+    };
+
+    /// The disconnect race is closed by `handle_command` guarding on
+    /// `core.close_requested`. That guard uses `into_response_sender_or_command`
+    /// to pluck the responder out of request-bearing commands and drop them
+    /// with `ConnectionClosed` — so every request-bearing variant MUST return
+    /// `Ok(sender)`, and every fire-and-forget variant MUST return `Err(cmd)`
+    /// so that, e.g., `Close` still reaches `handle_close`.
+    #[test]
+    fn responder_bearing_variants_surface_sender() {
+        let (tx, _rx) = oneshot::channel();
+        let cmd = TickerPlantCommand::Subscribe {
+            symbol: "ESH6".to_string(),
+            exchange: "CME".to_string(),
+            fields: vec![UpdateBits::LastTrade],
+            request_type: Request::Subscribe,
+            response_sender: tx,
+        };
+        assert!(cmd.into_response_sender_or_command().is_ok());
+    }
+
+    #[test]
+    fn fire_and_forget_variants_are_preserved() {
+        assert!(matches!(
+            TickerPlantCommand::Close.into_response_sender_or_command(),
+            Err(TickerPlantCommand::Close)
+        ));
+        assert!(matches!(
+            TickerPlantCommand::Abort.into_response_sender_or_command(),
+            Err(TickerPlantCommand::Abort)
+        ));
+        assert!(matches!(
+            TickerPlantCommand::SetLogin.into_response_sender_or_command(),
+            Err(TickerPlantCommand::SetLogin)
+        ));
+    }
+
+    /// Reproduces the guard's outcome for a Subscribe queued after
+    /// `close_requested=true`: the responder resolves with
+    /// `RithmicError::ConnectionClosed` instead of hitting Rithmic.
+    #[tokio::test]
+    async fn responder_drained_with_connection_closed() {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+        let cmd = TickerPlantCommand::Subscribe {
+            symbol: "ESH6".to_string(),
+            exchange: "CME".to_string(),
+            fields: vec![UpdateBits::LastTrade],
+            request_type: Request::Subscribe,
+            response_sender: tx,
+        };
+
+        if let Ok(sender) = cmd.into_response_sender_or_command() {
+            let _ = sender.send(Err(RithmicError::ConnectionClosed));
+        } else {
+            panic!("Subscribe must carry a responder");
+        }
+
+        assert!(matches!(
+            rx.await.unwrap(),
+            Err(RithmicError::ConnectionClosed)
+        ));
     }
 }

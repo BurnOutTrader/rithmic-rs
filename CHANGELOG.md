@@ -7,6 +7,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes (Unreleased pre-2.0.0 API churn)
+- **`RithmicResponse::rp_code_error` field removed.** Use `response.error`
+  directly, or the new rp_code accessors
+  (`rp_code()`, `rp_code_num()`, `rp_code_text()`) for the raw payload.
+- **`RithmicRequestError` shape changed.** `code: String` → `code: Option<String>`;
+  `message: String` → `message: Option<String>` (symmetric with `code`;
+  single-element rp_codes like `["5"]` now produce `message = None`);
+  new `rp_code: Vec<String>` field preserves the full raw payload; struct is
+  now `#[non_exhaustive]`. Accesses via `err.code` / `err.message` must update
+  to `err.code.as_deref().unwrap_or("?")` and
+  `err.message.as_deref().unwrap_or("")`.
+- **`buf_to_message` no longer returns `Err(RithmicResponse)` for rp_code
+  rejections.** Protocol-level outcomes now always come out as `Ok(response)`
+  with `response.error` populated.
+  `Err(RithmicResponse)` now exclusively means decode failure.
+- **`RithmicError::ServerError(String)` removed.** Replaced by two variants
+  that preserve the server/transport distinction. `RithmicError` now derives
+  `PartialEq`, and `source()` returns the inner `RithmicRequestError` for
+  `RequestRejected`.
+
+#### Migrating from `RithmicError::ServerError`
+Before (≤ 1.x):
+```rust
+match handle.subscribe("ESH6", "CME").await {
+    Ok(_) => { /* ... */ }
+    Err(RithmicError::ServerError(msg)) => {
+        eprintln!("server error: {msg}");
+        // unclear whether this is a rejection or a decode failure —
+        // callers often used the message text to guess
+    }
+    Err(e) => eprintln!("{e}"),
+}
+```
+
+After:
+```rust
+match handle.subscribe("ESH6", "CME").await {
+    Ok(_) => { /* ... */ }
+    Err(RithmicError::RequestRejected(err)) => {
+        // Structured rp_code rejection — do NOT reconnect.
+        eprintln!(
+            "rejected code={} msg={}",
+            err.code.as_deref().unwrap_or("?"),
+            err.message.as_deref().unwrap_or(""),
+        );
+    }
+    Err(RithmicError::ProtocolError(msg)) => {
+        // Decode or non-rp_code protocol failure — do NOT reconnect.
+        eprintln!("protocol error: {msg}");
+    }
+    Err(RithmicError::ConnectionClosed | RithmicError::SendFailed) => {
+        // Transport failure — reconnect.
+    }
+    Err(e) => eprintln!("{e}"),
+}
+```
+
+### Added
+- **`RithmicError::ProtocolError(String)`** — non-transport failures that don't
+  carry `rp_code` (decode errors, missing response).
+- **`RithmicResponse::rp_code() -> Option<&[String]>`** — raw payload slice.
+- **`RithmicResponse::rp_code_num() -> Option<&str>`** — numeric code (first element).
+- **`RithmicResponse::rp_code_text() -> Option<&str>`** — human message (second element).
+- **Internal `rp_code_response_variants!` macro** enumerating every
+  `RithmicMessage` variant whose inner proto carries `rp_code`. Keep in sync
+  when new `Response*` templates are added.
+
+### Changed
+- **Plant login helpers simplified** — all four plants check `response.error` directly.
+- **Ping/heartbeat SEND transport failures** broadcast as
+  `RithmicMessage::HeartbeatTimeout` (same signal as a true heartbeat
+  timeout) instead of `ConnectionError`.
+- **`send_or_fail` timeout now drains all pending requests** and broadcasts
+  `ConnectionError` before the next ping/heartbeat stops the actor.
+  Previously only the single failing request was notified; remaining pending
+  oneshots could hang on a half-open TCP connection since the poisoned sink
+  is not guaranteed to surface through the reader.
+- **`classify_rp_code` accepts `["0", <trailing>]` as success.** Per §2.1.b
+  of the Rithmic R|Protocol Reference Guide, `rp_code[0] == "0"` is the
+  authoritative success signal regardless of whether the server appends a
+  trailing annotation. Previously `["0", "ok"]` was mis-classified as a
+  rejection.
+- **`has_multiple` (multipart framing) now keys on presence, not value.**
+  Per §3 of the Reference Guide, the presence of `rq_handler_rp_code`
+  signals "more frames follow"; the value inside is not the multipart
+  signal. Previously keying on `[0] == "0"` silently truncated multipart
+  responses whose intermediate frames carried a non-`"0"` value.
+- **`examples/reconnect.rs` handles broadcast `RecvError::Lagged`
+  explicitly** — a slow consumer that drops a connection-health frame
+  through buffer wrap now logs and reconnects instead of silently exiting
+  the read loop.
+- **Unknown `template_id` responses route as subscription updates**
+  (`is_update: true`) instead of going to the request handler. Previously
+  they surfaced as "no responder found" noise on the per-request path.
+  Subscribers now observe `RithmicMessage::Unknown` frames with a populated
+  `error` describing the unknown `template_id`.
+
+### Known behaviors
+- `RithmicMessage::ForcedLogout` surfaces via subscription updates and
+  `is_connection_issue()` returns `true` for it.
+- A protobuf decode failure on a `ResponseHeartbeat` frame is routed to the
+  subscription channel as a generic update (not a synthetic
+  `HeartbeatTimeout`). Unchanged from prior behavior.
+
 ## [2.0.0]
 
 ### Breaking Changes

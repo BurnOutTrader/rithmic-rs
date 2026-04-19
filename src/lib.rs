@@ -38,9 +38,10 @@
 //!         match handle.subscription_receiver.recv().await {
 //!             Ok(update) => {
 //!                 // Check for connection health issues
-//!                 if let Some(error) = &update.error {
-//!                     eprintln!("Error: {}", error);
-//!                     break;
+//!                 if let Some(err) = &update.error {
+//!                     eprintln!("Error: {}", err);
+//!                     if err.is_connection_issue() { break; }
+//!                     continue;
 //!                 }
 //!
 //!                 // Process market data
@@ -119,10 +120,26 @@
 //!         handle.abort();
 //!         // reconnect — see examples/reconnect.rs
 //!     }
-//!     Err(RithmicError::ServerError(msg)) => eprintln!("Server rejected: {msg}"),
+//!     Err(RithmicError::RequestRejected(err)) => {
+//!         eprintln!(
+//!             "Server rejected: code={} msg={}",
+//!             err.code.as_deref().unwrap_or("?"),
+//!             err.message.as_deref().unwrap_or(""),
+//!         );
+//!     }
+//!     Err(RithmicError::ProtocolError(msg)) => {
+//!         eprintln!("Protocol error: {msg}");
+//!     }
 //!     Err(e) => eprintln!("{e}"),
 //! }
 //! ```
+//!
+//! For inspecting a `RithmicResponse` directly, match on `response.error` — it
+//! is `Option<RithmicError>` with `RequestRejected` for rp_code rejections and
+//! `ProtocolError` for other non-transport failures. Use
+//! [`RithmicError::is_connection_issue`] to distinguish transport-level events
+//! that warrant reconnection. The raw rp_code payload is available via
+//! `response.rp_code()`, `response.rp_code_num()`, and `response.rp_code_text()`.
 //!
 //! A graceful `disconnect().await` is separate from that reconnect path: it
 //! shuts the plant down without sending synthetic `HeartbeatTimeout` or
@@ -211,7 +228,7 @@ pub use plants::ticker_plant::{RithmicTickerPlant, RithmicTickerPlantHandle};
 pub use config::{ConfigError, RithmicAccount, RithmicConfig, RithmicConfigBuilder, RithmicEnv};
 
 // Re-export error types
-pub use error::RithmicError;
+pub use error::{RithmicError, RithmicRequestError};
 
 // Re-export connection strategy
 pub use ws::ConnectStrategy;

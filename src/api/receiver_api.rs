@@ -31,193 +31,9 @@ use crate::rti::{
     messages::RithmicMessage,
 };
 
-/// Response from a Rithmic plant, either from a request or a subscription update.
-///
-/// This structure wraps all messages received from Rithmic plants, including both
-/// request-response messages and subscription updates (like market data, order updates, etc.).
-///
-/// ## Fields
-///
-/// - `request_id`: Unique identifier for matching responses to requests. Empty for updates.
-/// - `message`: The actual Rithmic message data (see [`RithmicMessage`])
-/// - `is_update`: `true` if this is a subscription update, `false` if it's a request response
-/// - `has_more`: `true` if more responses are coming for this request
-/// - `multi_response`: `true` if this request type can return multiple responses
-/// - `error`: Error message if the operation failed or a connection error occurred
-/// - `source`: Name of the plant that sent this response (e.g., "ticker_plant", "order_plant")
-///
-/// ## Error Handling
-///
-/// The `error` field is populated in two scenarios:
-///
-/// ### 1. Rithmic Protocol Errors
-/// When Rithmic rejects a request or encounters an error, the response will have:
-/// - `error: Some("error description from Rithmic")`
-/// - `message`: Usually [`RithmicMessage::Reject`]
-///
-/// ### 2. Connection Errors
-/// When a plant's WebSocket connection fails, you'll receive:
-/// - `message: RithmicMessage::ConnectionError`
-/// - `error: Some("WebSocket error description")`
-/// - `is_update: true` (routed to subscription channel)
-/// - The plant has stopped and the channel will close
-///
-/// See [`RithmicMessage::ConnectionError`] for detailed error handling guidance.
-///
-/// ## Example: Handling Errors
-///
-/// ```no_run
-/// # use rithmic_rs::RithmicResponse;
-/// # use rithmic_rs::rti::messages::RithmicMessage;
-/// # fn handle_response(response: RithmicResponse) {
-/// match response.message {
-///     RithmicMessage::ConnectionError => {
-///         // WebSocket connection failed
-///         eprintln!(
-///             "Connection error from {}: {}",
-///             response.source,
-///             response.error.as_ref().unwrap()
-///         );
-///         // Implement reconnection logic
-///     }
-///     RithmicMessage::Reject(reject) => {
-///         // Rithmic rejected a request
-///         eprintln!(
-///             "Request rejected: {}",
-///             response.error.as_ref().unwrap_or(&"Unknown".to_string())
-///         );
-///     }
-///     _ => {
-///         // Check error field even for successful-looking messages
-///         if let Some(err) = response.error {
-///             eprintln!("Error in {}: {}", response.source, err);
-///         }
-///     }
-/// }
-/// # }
-/// ```
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-#[allow(missing_docs)]
-pub struct RithmicResponse {
-    pub request_id: String,
-    pub message: RithmicMessage,
-    pub is_update: bool,
-    pub has_more: bool,
-    pub multi_response: bool,
-    pub error: Option<String>,
-    pub source: String,
-}
-
-impl RithmicResponse {
-    /// Returns true if this response represents an error condition.
-    ///
-    /// This checks both:
-    /// - The `error` field being set (Rithmic protocol errors)
-    /// - Connection issues (WebSocket errors, heartbeat timeouts, forced logout)
-    ///
-    /// # Example
-    /// ```ignore
-    /// if response.is_error() {
-    ///     eprintln!("Error: {:?}", response.error);
-    /// }
-    /// ```
-    pub fn is_error(&self) -> bool {
-        self.error.is_some() || self.is_connection_issue()
-    }
-
-    /// Returns true if this response indicates a connection health issue.
-    ///
-    /// Connection issues include:
-    /// - `ConnectionError`: WebSocket connection failed
-    /// - `HeartbeatTimeout`: Connection appears dead
-    /// - `ForcedLogout`: Server forcibly logged out the client
-    ///
-    /// These conditions typically require reconnection logic.
-    ///
-    /// # Example
-    /// ```ignore
-    /// if response.is_connection_issue() {
-    ///     // Trigger reconnection
-    /// }
-    /// ```
-    pub fn is_connection_issue(&self) -> bool {
-        matches!(
-            self.message,
-            RithmicMessage::ConnectionError
-                | RithmicMessage::HeartbeatTimeout
-                | RithmicMessage::ForcedLogout(_)
-        )
-    }
-
-    /// Returns true if this response contains market data.
-    ///
-    /// Market data messages include:
-    /// - `BestBidOffer`: Top-of-book quotes
-    /// - `LastTrade`: Trade executions
-    /// - `DepthByOrder`: Order book depth updates
-    /// - `DepthByOrderEndEvent`: End of depth snapshot marker
-    /// - `OrderBook`: Aggregated order book
-    ///
-    /// # Example
-    /// ```ignore
-    /// if response.is_market_data() {
-    ///     // Process market data update
-    /// }
-    /// ```
-    pub fn is_market_data(&self) -> bool {
-        matches!(
-            self.message,
-            RithmicMessage::BestBidOffer(_)
-                | RithmicMessage::LastTrade(_)
-                | RithmicMessage::DepthByOrder(_)
-                | RithmicMessage::DepthByOrderEndEvent(_)
-                | RithmicMessage::OrderBook(_)
-        )
-    }
-
-    /// Returns true if this response is an order update notification.
-    ///
-    /// Order update messages include:
-    /// - `RithmicOrderNotification`: Order status updates from Rithmic
-    /// - `ExchangeOrderNotification`: Order status updates from exchange
-    /// - `BracketUpdates`: Bracket order updates
-    ///
-    /// # Example
-    /// ```ignore
-    /// if response.is_order_update() {
-    ///     // Process order status change
-    /// }
-    /// ```
-    pub fn is_order_update(&self) -> bool {
-        matches!(
-            self.message,
-            RithmicMessage::RithmicOrderNotification(_)
-                | RithmicMessage::ExchangeOrderNotification(_)
-                | RithmicMessage::BracketUpdates(_)
-        )
-    }
-
-    /// Returns true if this response is a P&L or position update.
-    ///
-    /// P&L update messages include:
-    /// - `AccountPnLPositionUpdate`: Account-level P&L updates
-    /// - `InstrumentPnLPositionUpdate`: Per-instrument P&L updates
-    ///
-    /// # Example
-    /// ```ignore
-    /// if response.is_pnl_update() {
-    ///     // Update position tracking
-    /// }
-    /// ```
-    pub fn is_pnl_update(&self) -> bool {
-        matches!(
-            self.message,
-            RithmicMessage::AccountPnLPositionUpdate(_)
-                | RithmicMessage::InstrumentPnLPositionUpdate(_)
-        )
-    }
-}
+pub use super::response::RithmicResponse;
+use super::rp_code::classify_rp_code_error;
+use crate::error::RithmicError;
 
 #[derive(Debug)]
 pub(crate) struct RithmicReceiverApi {
@@ -238,7 +54,10 @@ impl RithmicReceiverApi {
                 is_update: false,
                 has_more: false,
                 multi_response: false,
-                error: Some(format!("Message too short: {} bytes", data.len())),
+                error: Some(RithmicError::ProtocolError(format!(
+                    "Message too short: {} bytes",
+                    data.len()
+                ))),
                 source: self.source.clone(),
             });
         }
@@ -253,13 +72,17 @@ impl RithmicReceiverApi {
                     e,
                     data.len()
                 );
+
                 return Err(RithmicResponse {
                     request_id: "".to_string(),
                     message: RithmicMessage::Unknown,
                     is_update: false,
                     has_more: false,
                     multi_response: false,
-                    error: Some(format!("Failed to decode message: {}", e)),
+                    error: Some(RithmicError::ProtocolError(format!(
+                        "Failed to decode message: {}",
+                        e
+                    ))),
                     source: self.source.clone(),
                 });
             }
@@ -269,7 +92,7 @@ impl RithmicReceiverApi {
             11 => {
                 let resp = ResponseLogin::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -284,7 +107,7 @@ impl RithmicReceiverApi {
             13 => {
                 let resp = ResponseLogout::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -299,7 +122,7 @@ impl RithmicReceiverApi {
             15 => {
                 let resp = ResponseReferenceData::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -314,7 +137,7 @@ impl RithmicReceiverApi {
             17 => {
                 let resp = ResponseRithmicSystemInfo::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -329,7 +152,7 @@ impl RithmicReceiverApi {
             19 => {
                 let resp = ResponseHeartbeat::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, true))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -344,7 +167,7 @@ impl RithmicReceiverApi {
             21 => {
                 let resp = ResponseRithmicSystemGatewayInfo::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -359,7 +182,7 @@ impl RithmicReceiverApi {
             75 => {
                 let resp =
                     Reject::decode(payload).map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -395,14 +218,16 @@ impl RithmicReceiverApi {
                     is_update: true, // Forced logout is a connection health event - route to subscription channel
                     has_more: false,
                     multi_response: false,
-                    error: Some("forced logout from server".to_string()),
+                    error: Some(RithmicError::ForcedLogout(
+                        "forced logout from server".to_string(),
+                    )),
                     source: self.source.clone(),
                 }
             }
             101 => {
                 let resp = ResponseMarketDataUpdate::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -418,7 +243,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseGetInstrumentByUnderlying::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -433,7 +258,7 @@ impl RithmicReceiverApi {
             104 => {
                 let resp = ResponseGetInstrumentByUnderlyingKeys::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -448,7 +273,7 @@ impl RithmicReceiverApi {
             106 => {
                 let resp = ResponseMarketDataUpdateByUnderlying::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -464,7 +289,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseGiveTickSizeTypeTable::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -480,7 +305,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseSearchSymbols::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -496,7 +321,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseProductCodes::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -511,7 +336,7 @@ impl RithmicReceiverApi {
             114 => {
                 let resp = ResponseFrontMonthContract::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -527,7 +352,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseDepthByOrderSnapshot::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -542,14 +367,14 @@ impl RithmicReceiverApi {
             118 => {
                 let resp = ResponseDepthByOrderUpdates::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
                     message: RithmicMessage::ResponseDepthByOrderUpdates(resp),
                     is_update: false,
                     has_more: false,
-                    multi_response: true,
+                    multi_response: false,
                     error,
                     source: self.source.clone(),
                 }
@@ -558,7 +383,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseGetVolumeAtPrice::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -573,7 +398,7 @@ impl RithmicReceiverApi {
             122 => {
                 let resp = ResponseAuxilliaryReferenceData::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -784,7 +609,7 @@ impl RithmicReceiverApi {
             201 => {
                 let resp = ResponseTimeBarUpdate::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -800,7 +625,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseTimeBarReplay::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -815,7 +640,7 @@ impl RithmicReceiverApi {
             205 => {
                 let resp = ResponseTickBarUpdate::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -831,7 +656,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseTickBarReplay::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -847,7 +672,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseVolumeProfileMinuteBars::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -862,7 +687,7 @@ impl RithmicReceiverApi {
             211 => {
                 let resp = ResponseResumeBars::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -905,7 +730,7 @@ impl RithmicReceiverApi {
             301 => {
                 let resp = ResponseLoginInfo::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -921,7 +746,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseAccountList::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -937,7 +762,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseAccountRmsInfo::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -953,7 +778,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseProductRmsInfo::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -968,7 +793,7 @@ impl RithmicReceiverApi {
             309 => {
                 let resp = ResponseSubscribeForOrderUpdates::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -984,7 +809,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseTradeRoutes::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1000,7 +825,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseNewOrder::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1016,7 +841,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseModifyOrder::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1032,7 +857,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseCancelOrder::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1048,7 +873,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseShowOrderHistoryDates::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1063,7 +888,7 @@ impl RithmicReceiverApi {
             321 => {
                 let resp = ResponseShowOrders::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1078,7 +903,7 @@ impl RithmicReceiverApi {
             323 => {
                 let resp = ResponseShowOrderHistory::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1093,7 +918,7 @@ impl RithmicReceiverApi {
             325 => {
                 let resp = ResponseShowOrderHistorySummary::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1108,7 +933,7 @@ impl RithmicReceiverApi {
             327 => {
                 let resp = ResponseShowOrderHistoryDetail::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1124,7 +949,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseOcoOrder::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1140,7 +965,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseBracketOrder::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1155,7 +980,7 @@ impl RithmicReceiverApi {
             333 => {
                 let resp = ResponseUpdateTargetBracketLevel::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1170,7 +995,7 @@ impl RithmicReceiverApi {
             335 => {
                 let resp = ResponseUpdateStopBracketLevel::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1185,7 +1010,7 @@ impl RithmicReceiverApi {
             337 => {
                 let resp = ResponseSubscribeToBracketUpdates::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1201,7 +1026,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseShowBrackets::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1217,7 +1042,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseShowBracketStops::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1233,7 +1058,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseListExchangePermissions::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1248,7 +1073,7 @@ impl RithmicReceiverApi {
             345 => {
                 let resp = ResponseLinkOrders::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1263,7 +1088,7 @@ impl RithmicReceiverApi {
             347 => {
                 let resp = ResponseCancelAllOrders::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1279,7 +1104,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseEasyToBorrowList::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1392,7 +1217,7 @@ impl RithmicReceiverApi {
             401 => {
                 let resp = ResponsePnLPositionUpdates::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1407,7 +1232,7 @@ impl RithmicReceiverApi {
             403 => {
                 let resp = ResponsePnLPositionSnapshot::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1451,7 +1276,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseListUnacceptedAgreements::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1467,7 +1292,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseListAcceptedAgreements::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1482,7 +1307,7 @@ impl RithmicReceiverApi {
             505 => {
                 let resp = ResponseAcceptAgreement::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1498,7 +1323,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseShowAgreement::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1513,7 +1338,7 @@ impl RithmicReceiverApi {
             509 => {
                 let resp = ResponseSetRithmicMrktDataSelfCertStatus::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1528,7 +1353,7 @@ impl RithmicReceiverApi {
             3501 => {
                 let resp = ResponseModifyOrderReferenceData::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1543,7 +1368,7 @@ impl RithmicReceiverApi {
             3503 => {
                 let resp = ResponseOrderSessionConfig::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1559,7 +1384,7 @@ impl RithmicReceiverApi {
                 let resp = ResponseExitPosition::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
                 let has_more = has_multiple(&resp.rq_handler_rp_code);
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1574,7 +1399,7 @@ impl RithmicReceiverApi {
             3507 => {
                 let resp = ResponseReplayExecutions::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1589,7 +1414,7 @@ impl RithmicReceiverApi {
             3509 => {
                 let resp = ResponseAccountRmsUpdates::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, false))?;
-                let error = get_error(&resp.rp_code);
+                let error = classify_rp_code_error(&resp.rp_code);
 
                 RithmicResponse {
                     request_id: resp.user_msg.first().cloned().unwrap_or_default(),
@@ -1608,59 +1433,39 @@ impl RithmicReceiverApi {
                     data.len()
                 );
 
+                // Unknown templates are unsolicited; route as an update so we
+                // don't spam "no responder found" via the request handler.
                 return Err(RithmicResponse {
                     request_id: "".to_string(),
                     message: RithmicMessage::Unknown,
-                    is_update: false,
+                    is_update: true,
                     has_more: false,
                     multi_response: false,
-                    error: Some(format!(
+                    error: Some(RithmicError::ProtocolError(format!(
                         "Unknown message type: template_id={}",
                         parsed_message.template_id
-                    )),
+                    ))),
                     source: self.source.clone(),
                 });
             }
         };
 
-        // Handle errors
-        if let Some(error) = check_message_error(&response) {
-            error!("receiver_api: error {:#?} {:?}", response, error);
-
-            return Err(response);
-        }
-
         Ok(response)
     }
 }
 
+// Per the Rithmic R|Protocol Reference Guide (§3 "Responses From Server"):
+// a response message carries either `rq_hndlr_rp_code` OR `rp_code`, never
+// both. The *presence* of `rq_hndlr_rp_code` means more frames follow;
+// `rp_code` marks the terminal frame. The value inside `rq_handler_rp_code`
+// is not the multipart signal — presence is. Keying on `[0] == "0"` silently
+// truncates multipart responses whose intermediate frames carry a non-"0"
+// status.
+//
+// proto3 `repeated string` has no "absent" vs "empty" distinction on the wire,
+// so "presence" is equivalent to "non-empty".
 fn has_multiple(rq_handler_rp_code: &[String]) -> bool {
-    !rq_handler_rp_code.is_empty() && rq_handler_rp_code[0] == "0"
-}
-
-fn get_error(rp_code: &[String]) -> Option<String> {
-    if (rp_code.len() == 1 && rp_code[0] == "0") || rp_code.is_empty() {
-        return None;
-    }
-
-    // Rithmic uses rp_code = ["7", "no data"] to signal "successful query, zero results"
-    // across all list/replay/search responses. Treat it as a normal empty outcome, not an error.
-    if let (Some(code), Some(msg)) = (rp_code.first(), rp_code.get(1)) {
-        if code == "7" && msg.eq_ignore_ascii_case("no data") {
-            return None;
-        }
-    }
-
-    let msg = rp_code
-        .get(1)
-        .cloned()
-        .unwrap_or_else(|| rp_code[0].clone());
-
-    Some(msg)
-}
-
-fn check_message_error(message: &RithmicResponse) -> Option<String> {
-    message.error.as_ref().map(|e| e.to_string())
+    !rq_handler_rp_code.is_empty()
 }
 
 fn decode_error(source: &str, e: prost::DecodeError, is_update: bool) -> RithmicResponse {
@@ -1672,7 +1477,10 @@ fn decode_error(source: &str, e: prost::DecodeError, is_update: bool) -> Rithmic
         is_update,
         has_more: false,
         multi_response: false,
-        error: Some(format!("Failed to decode message: {}", e)),
+        error: Some(RithmicError::ProtocolError(format!(
+            "Failed to decode message: {}",
+            e
+        ))),
         source: source.to_string(),
     }
 }
@@ -1680,32 +1488,22 @@ fn decode_error(source: &str, e: prost::DecodeError, is_update: bool) -> Rithmic
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Helper to create a test response with a specific message type
-    fn make_response(message: RithmicMessage) -> RithmicResponse {
-        RithmicResponse {
-            request_id: String::new(),
-            message,
-            is_update: false,
-            has_more: false,
-            multi_response: false,
-            error: None,
-            source: "test".to_string(),
-        }
-    }
-
-    fn make_response_with_error(message: RithmicMessage, error: &str) -> RithmicResponse {
-        RithmicResponse {
-            error: Some(error.to_string()),
-            ..make_response(message)
-        }
-    }
+    use crate::error::{RithmicError, RithmicRequestError};
+    use crate::rti::{
+        Reject, ResponseAccountList, ResponseListAcceptedAgreements, ResponseLogin,
+        ResponseOrderSessionConfig, ResponseReplayExecutions, ResponseSearchSymbols, TradeRoute,
+        UpdateEasyToBorrowList, messages::RithmicMessage,
+    };
+    use prost::Message;
+    use prost::bytes::Bytes;
 
     fn encode_with_header<T: Message>(message: &T) -> Bytes {
         let mut payload = Vec::new();
+
         message.encode(&mut payload).unwrap();
 
         let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
+
         framed.extend(payload);
 
         Bytes::from(framed)
@@ -1717,59 +1515,6 @@ mod tests {
         };
 
         api.buf_to_message(encode_with_header(message)).unwrap()
-    }
-
-    // =========================================================================
-    // is_error() tests
-    // =========================================================================
-
-    #[test]
-    fn is_error_true_when_error_field_set() {
-        // Even with a normal message, if error field is set, is_error should be true
-        let response = make_response_with_error(
-            RithmicMessage::ResponseHeartbeat(ResponseHeartbeat::default()),
-            "some error",
-        );
-        assert!(response.is_error());
-    }
-
-    #[test]
-    fn is_error_true_for_connection_issues_without_error_field() {
-        // Connection issues should be errors even without error field set
-        let response = make_response(RithmicMessage::ConnectionError);
-        assert!(response.is_error());
-        assert!(response.error.is_none()); // Verify error field is not set
-    }
-
-    #[test]
-    fn is_error_false_for_normal_response() {
-        let response = make_response(RithmicMessage::ResponseHeartbeat(
-            ResponseHeartbeat::default(),
-        ));
-        assert!(!response.is_error());
-    }
-
-    // =========================================================================
-    // is_connection_issue() tests
-    // =========================================================================
-
-    #[test]
-    fn is_connection_issue_detects_all_connection_error_types() {
-        // Test all three connection issue types
-        let connection_error = make_response(RithmicMessage::ConnectionError);
-        let heartbeat_timeout = make_response(RithmicMessage::HeartbeatTimeout);
-        let forced_logout = make_response(RithmicMessage::ForcedLogout(ForcedLogout::default()));
-
-        assert!(connection_error.is_connection_issue());
-        assert!(heartbeat_timeout.is_connection_issue());
-        assert!(forced_logout.is_connection_issue());
-    }
-
-    #[test]
-    fn is_connection_issue_false_for_reject() {
-        // Reject is an error but NOT a connection issue
-        let response = make_response(RithmicMessage::Reject(Reject::default()));
-        assert!(!response.is_connection_issue());
     }
 
     #[test]
@@ -1809,168 +1554,160 @@ mod tests {
     }
 
     // =========================================================================
-    // is_market_data() tests
+    // has_multiple() unit tests
     // =========================================================================
 
-    #[test]
-    fn is_market_data_true_for_market_data_types() {
-        let bbo = make_response(RithmicMessage::BestBidOffer(BestBidOffer::default()));
-        let trade = make_response(RithmicMessage::LastTrade(LastTrade::default()));
-        let depth = make_response(RithmicMessage::DepthByOrder(DepthByOrder::default()));
-        let depth_end = make_response(RithmicMessage::DepthByOrderEndEvent(
-            DepthByOrderEndEvent::default(),
-        ));
-        let orderbook = make_response(RithmicMessage::OrderBook(OrderBook::default()));
-
-        assert!(bbo.is_market_data());
-        assert!(trade.is_market_data());
-        assert!(depth.is_market_data());
-        assert!(depth_end.is_market_data());
-        assert!(orderbook.is_market_data());
-    }
+    // Per §3 of the Rithmic Reference Guide, presence of `rq_hndlr_rp_code`
+    // (not any particular value) signals "more frames follow". Our has_multiple
+    // mirrors that: any non-empty slice means more frames follow; an empty
+    // slice means the field wasn't populated (terminal frame, rp_code is what
+    // gets inspected instead).
 
     #[test]
-    fn is_market_data_false_for_order_notifications() {
-        // Order notifications are NOT market data
-        let response = make_response(RithmicMessage::RithmicOrderNotification(
-            RithmicOrderNotification::default(),
-        ));
-        assert!(!response.is_market_data());
-    }
-
-    // =========================================================================
-    // is_order_update() tests
-    // =========================================================================
-
-    #[test]
-    fn is_order_update_true_for_order_notification_types() {
-        let rithmic_notif = make_response(RithmicMessage::RithmicOrderNotification(
-            RithmicOrderNotification::default(),
-        ));
-        let exchange_notif = make_response(RithmicMessage::ExchangeOrderNotification(
-            ExchangeOrderNotification::default(),
-        ));
-        let bracket = make_response(RithmicMessage::BracketUpdates(BracketUpdates::default()));
-
-        assert!(rithmic_notif.is_order_update());
-        assert!(exchange_notif.is_order_update());
-        assert!(bracket.is_order_update());
-    }
-
-    #[test]
-    fn is_order_update_false_for_market_data() {
-        // Market data is NOT an order update
-        let response = make_response(RithmicMessage::BestBidOffer(BestBidOffer::default()));
-        assert!(!response.is_order_update());
-    }
-
-    // =========================================================================
-    // is_pnl_update() tests
-    // =========================================================================
-
-    #[test]
-    fn is_pnl_update_true_for_pnl_types() {
-        let account_pnl = make_response(RithmicMessage::AccountPnLPositionUpdate(
-            AccountPnLPositionUpdate::default(),
-        ));
-        let instrument_pnl = make_response(RithmicMessage::InstrumentPnLPositionUpdate(
-            InstrumentPnLPositionUpdate::default(),
-        ));
-
-        assert!(account_pnl.is_pnl_update());
-        assert!(instrument_pnl.is_pnl_update());
-    }
-
-    #[test]
-    fn is_pnl_update_false_for_order_updates() {
-        // Order updates are NOT P&L updates
-        let response = make_response(RithmicMessage::RithmicOrderNotification(
-            RithmicOrderNotification::default(),
-        ));
-        assert!(!response.is_pnl_update());
-    }
-
-    // =========================================================================
-    // get_error() / has_multiple() unit tests
-    // =========================================================================
-
-    #[test]
-    fn get_error_returns_none_for_empty_rp_code() {
-        assert_eq!(super::get_error(&[]), None);
-    }
-
-    #[test]
-    fn get_error_returns_none_for_zero_rp_code() {
-        assert_eq!(super::get_error(&["0".to_string()]), None);
-    }
-
-    #[test]
-    fn get_error_returns_none_for_no_data_rp_code() {
-        // rp_code = ["7", "no data"] means "successful query, zero results" across all
-        // Rithmic list/replay/search responses — must not be treated as an error.
-        let rp_code = vec!["7".to_string(), "no data".to_string()];
-        assert_eq!(get_error(&rp_code), None);
-    }
-
-    #[test]
-    fn get_error_returns_none_for_no_data_case_insensitive() {
-        let rp_code = vec!["7".to_string(), "No Data".to_string()];
-        assert_eq!(get_error(&rp_code), None);
-    }
-
-    #[test]
-    fn get_error_returns_some_for_other_code_7_messages() {
-        // code "7" with a different message is still an error
-        let rp_code = vec!["7".to_string(), "permission denied".to_string()];
-        assert!(get_error(&rp_code).is_some());
-    }
-
-    #[test]
-    fn get_error_returns_some_for_code_7_with_error() {
-        assert_eq!(
-            super::get_error(&["7".to_string(), "permission denied".to_string()]),
-            Some("permission denied".to_string())
-        );
-    }
-
-    #[test]
-    fn get_error_returns_second_element_for_non_zero_non_7_code() {
-        assert_eq!(
-            super::get_error(&["3".to_string(), "bad request".to_string()]),
-            Some("bad request".to_string())
-        );
-    }
-
-    #[test]
-    fn get_error_returns_first_element_when_no_second() {
-        assert_eq!(super::get_error(&["5".to_string()]), Some("5".to_string()));
-    }
-
-    #[test]
-    fn has_multiple_returns_true_for_zero_code() {
+    fn has_multiple_true_for_zero_only() {
         assert!(super::has_multiple(&["0".to_string()]));
     }
 
     #[test]
-    fn has_multiple_returns_false_for_empty() {
+    fn has_multiple_true_for_non_zero_code() {
+        // Intermediate frames may carry richer status values here; presence
+        // alone means "more frames follow".
+        assert!(super::has_multiple(&["7".to_string()]));
+    }
+
+    #[test]
+    fn has_multiple_true_for_any_present_payload() {
+        assert!(super::has_multiple(&["1".to_string(), "0".to_string()]));
+    }
+
+    #[test]
+    fn has_multiple_false_for_empty() {
         assert!(!super::has_multiple(&[]));
     }
 
     #[test]
-    fn has_multiple_returns_false_for_non_zero_code() {
-        assert!(!super::has_multiple(&["7".to_string()]));
+    fn list_accounts_no_data_decodes_as_ok() {
+        // rp_code = ["7", "no data"] on a ResponseAccountList (list-style response)
+        // should produce Ok with no error, confirming the allowlist normalization
+        // flows end-to-end for list responses as well as replay responses.
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+        let result = api.buf_to_message(encode_with_header(&ResponseAccountList {
+            template_id: 303,
+            user_msg: vec!["req-1".to_string()],
+            rq_handler_rp_code: vec![],
+            rp_code: vec!["7".to_string(), "no data".to_string()],
+            ..ResponseAccountList::default()
+        }));
+
+        assert!(
+            result.is_ok(),
+            "expected Ok but got Err: {:?}",
+            result.err()
+        );
+        let response = result.unwrap();
+
+        assert_eq!(response.error, None);
     }
 
     #[test]
-    fn has_multiple_returns_false_for_zero_as_second_element() {
-        assert!(!super::has_multiple(&["1".to_string(), "0".to_string()]));
+    fn response_login_rejection_decodes_with_structured_error() {
+        // Structured rejection must be exposed via `request_rejection()` alongside
+        // the legacy `error: Option<String>` for protocol-level rejections.
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+        let result = api.buf_to_message(encode_with_header(&ResponseLogin {
+            template_id: 11,
+            user_msg: vec!["req-1".to_string()],
+            rp_code: vec!["3".to_string(), "bad request".to_string()],
+            ..ResponseLogin::default()
+        }));
+        let response = match result {
+            Ok(r) => r,
+            Err(r) => r,
+        };
+
+        assert_eq!(
+            response.error,
+            Some(RithmicError::RequestRejected(RithmicRequestError {
+                rp_code: vec!["3".to_string(), "bad request".to_string()],
+                code: Some("3".to_string()),
+                message: Some("bad request".to_string()),
+            }))
+        );
+    }
+
+    #[test]
+    fn response_order_session_config_parse_error_decodes_with_structured_error() {
+        // Captured fixture: rp_code = ["7", "an error occurred while parsing data."]
+        // must decode as a RequestRejected with the full rp_code payload
+        // preserved. It MUST NOT be swallowed as KnownBenignEmpty.
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+        let result = api.buf_to_message(encode_with_header(&ResponseOrderSessionConfig {
+            template_id: 3503,
+            user_msg: vec!["req-1".to_string()],
+            rp_code: vec![
+                "7".to_string(),
+                "an error occurred while parsing data.".to_string(),
+            ],
+        }));
+        let response = match result {
+            Ok(r) => r,
+            Err(r) => r,
+        };
+
+        assert_eq!(
+            response.error,
+            Some(RithmicError::RequestRejected(RithmicRequestError {
+                rp_code: vec![
+                    "7".to_string(),
+                    "an error occurred while parsing data.".to_string(),
+                ],
+                code: Some("7".to_string()),
+                message: Some("an error occurred while parsing data.".to_string()),
+            }))
+        );
+    }
+
+    #[test]
+    fn response_login_rejection_decodes_with_error() {
+        // Protocol rejection populates `error` and `is_error()` but must NOT
+        // trip `is_connection_issue()` — that would mis-drive reconnection.
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+        let result = api.buf_to_message(encode_with_header(&ResponseLogin {
+            template_id: 11,
+            user_msg: vec!["req-1".to_string()],
+            rp_code: vec!["3".to_string(), "bad request".to_string()],
+            ..ResponseLogin::default()
+        }));
+        let response = match result {
+            Ok(r) => r,
+            Err(r) => r,
+        };
+
+        assert!(matches!(
+            &response.error,
+            Some(RithmicError::RequestRejected(e)) if e.message.as_deref() == Some("bad request")
+        ));
+        assert!(
+            !response
+                .error
+                .as_ref()
+                .expect("error should be set")
+                .is_connection_issue()
+        );
     }
 
     #[test]
     fn replay_no_data_decodes_as_ok() {
         // rp_code = ["7", "no data"] on a ResponseReplayExecutions should produce Ok,
         // confirming the fix flows end-to-end through buf_to_message.
-        use crate::rti::ResponseReplayExecutions;
         let api = RithmicReceiverApi {
             source: "test".to_string(),
         };
@@ -1979,6 +1716,7 @@ mod tests {
             user_msg: vec!["req-1".to_string()],
             rp_code: vec!["7".to_string(), "no data".to_string()],
         }));
+
         assert!(
             result.is_ok(),
             "expected Ok but got Err: {:?}",
@@ -1988,41 +1726,99 @@ mod tests {
     }
 
     // =========================================================================
-    // Mutual exclusivity tests - verify categories don't overlap unexpectedly
+    // Typed rejection surface and macro-driven rp_code info
     // =========================================================================
 
     #[test]
-    fn categories_are_mutually_exclusive() {
-        // Market data should not be flagged as order update or pnl
-        let market_data = make_response(RithmicMessage::BestBidOffer(BestBidOffer::default()));
-        assert!(market_data.is_market_data());
-        assert!(!market_data.is_order_update());
-        assert!(!market_data.is_pnl_update());
-        assert!(!market_data.is_connection_issue());
+    fn reject_with_non_zero_rp_code_decodes_as_ok_with_error() {
+        // rp_code-carrying responses must reach Ok(_) with `error` populated;
+        // `buf_to_message` no longer returns `Err(_)` for rp_code rejections.
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+        let result = api.buf_to_message(encode_with_header(&Reject {
+            template_id: 75,
+            user_msg: vec!["req-2".to_string()],
+            rp_code: vec!["5".to_string(), "permission denied".to_string()],
+        }));
 
-        // Order update should not be flagged as market data or pnl
-        let order = make_response(RithmicMessage::RithmicOrderNotification(
-            RithmicOrderNotification::default(),
+        let response = result.expect("reject with rp_code error should still decode");
+
+        assert!(matches!(response.message, RithmicMessage::Reject(_)));
+        assert!(matches!(
+            &response.error,
+            Some(RithmicError::RequestRejected(e)) if e.message.as_deref() == Some("permission denied")
         ));
-        assert!(order.is_order_update());
-        assert!(!order.is_market_data());
-        assert!(!order.is_pnl_update());
-        assert!(!order.is_connection_issue());
+        assert!(
+            !response
+                .error
+                .as_ref()
+                .expect("error should be set")
+                .is_connection_issue()
+        );
+    }
 
-        // PnL should not be flagged as market data or order update
-        let pnl = make_response(RithmicMessage::AccountPnLPositionUpdate(
-            AccountPnLPositionUpdate::default(),
+    #[test]
+    fn response_request_error_maps_code_6_to_request_rejected_with_full_text() {
+        let response = decode_with_api(&ResponseListAcceptedAgreements {
+            template_id: 503,
+            user_msg: vec!["req-4".to_string()],
+            rp_code: vec!["6".to_string(), "agreement already signed".to_string()],
+            ..ResponseListAcceptedAgreements::default()
+        });
+
+        assert_eq!(response.rp_code_num(), Some("6"));
+        assert_eq!(response.rp_code_text(), Some("agreement already signed"));
+        assert!(matches!(
+            &response.error,
+            Some(RithmicError::RequestRejected(RithmicRequestError { rp_code, code, message }))
+                if *rp_code == vec!["6".to_string(), "agreement already signed".to_string()]
+                    && code.as_deref() == Some("6")
+                    && message.as_deref() == Some("agreement already signed")
         ));
-        assert!(pnl.is_pnl_update());
-        assert!(!pnl.is_market_data());
-        assert!(!pnl.is_order_update());
-        assert!(!pnl.is_connection_issue());
+    }
 
-        // Connection issue should not be in any other category
-        let conn_err = make_response(RithmicMessage::ConnectionError);
-        assert!(conn_err.is_connection_issue());
-        assert!(!conn_err.is_market_data());
-        assert!(!conn_err.is_order_update());
-        assert!(!conn_err.is_pnl_update());
+    #[test]
+    fn search_symbols_multipart_uses_rq_handler_field_presence_not_value() {
+        // Per §3 of the Rithmic Reference Guide, presence of `rq_handler_rp_code`
+        // on an intermediate multipart frame means "more frames follow",
+        // regardless of the value inside. The terminal frame carries `rp_code`
+        // instead (the two fields are mutually exclusive on the wire).
+        let api = RithmicReceiverApi {
+            source: "test".to_string(),
+        };
+
+        // Intermediate frame with a non-"0" rq_handler_rp_code — previously
+        // dropped by has_multiple's `[0] == "0"` gate, which would truncate
+        // legitimate multipart responses.
+        let intermediate = api
+            .buf_to_message(encode_with_header(&ResponseSearchSymbols {
+                template_id: 110,
+                user_msg: vec!["multi-1".to_string()],
+                rq_handler_rp_code: vec!["7".to_string()],
+                ..ResponseSearchSymbols::default()
+            }))
+            .expect("intermediate multi-response frame should decode");
+
+        assert!(
+            intermediate.has_more,
+            "presence of rq_handler_rp_code must mark has_more=true regardless of value"
+        );
+        assert!(intermediate.multi_response);
+        assert!(intermediate.error.is_none());
+
+        // Terminal frame: no rq_handler_rp_code, rp_code set to success.
+        let terminal = api
+            .buf_to_message(encode_with_header(&ResponseSearchSymbols {
+                template_id: 110,
+                user_msg: vec!["multi-1".to_string()],
+                rp_code: vec!["0".to_string()],
+                ..ResponseSearchSymbols::default()
+            }))
+            .expect("terminal multi-response frame should decode");
+
+        assert!(!terminal.has_more);
+        assert!(terminal.multi_response);
+        assert!(terminal.error.is_none());
     }
 }

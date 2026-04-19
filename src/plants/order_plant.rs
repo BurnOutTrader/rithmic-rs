@@ -1,4 +1,7 @@
 use std::sync::Arc;
+
+use futures_util::StreamExt;
+use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -21,15 +24,11 @@ use crate::{
     ws::{HEARTBEAT_SECS, PlantActor},
 };
 
-use futures_util::StreamExt;
-
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
     task::JoinHandle,
     time::sleep_until,
 };
-
-use tokio_tungstenite::tungstenite::Message;
 
 pub(crate) enum OrderPlantCommand {
     Close,
@@ -277,35 +276,31 @@ pub(crate) enum OrderPlantCommand {
 ///         match handle.subscription_receiver.recv().await {
 ///             Ok(update) => {
 ///                 // Check for errors on all messages
-///                 if let Some(error) = &update.error {
-///                     eprintln!("Error from {}: {}", update.source, error);
+///                 if let Some(err) = &update.error {
+///                     eprintln!("Error from {}: {}", update.source, err);
+///                     if err.is_connection_issue() {
+///                         eprintln!("Connection health issue - reconnection needed");
+///                         break;
+///                     }
+///                     continue;
 ///                 }
 ///
-///                 // Handle connection health issues
 ///                 match update.message {
-///                     RithmicMessage::HeartbeatTimeout => {
-///                         eprintln!("Connection timeout - reconnection needed");
-///                         break;
-///                     }
-///                     RithmicMessage::ForcedLogout(_) => {
-///                         eprintln!("Forced logout - reconnection needed");
-///                         break;
-///                     }
-///                     RithmicMessage::ConnectionError => {
-///                         eprintln!("Connection error - reconnection needed");
-///                         break;
-///                     }
 ///                     RithmicMessage::RithmicOrderNotification(order) => {
 ///                         println!("Order notification: {:?}", order);
 ///                     }
+///
 ///                     RithmicMessage::ExchangeOrderNotification(order) => {
 ///                         println!("Exchange notification: {:?}", order);
 ///                     }
+///
 ///                     _ => {}
 ///                 }
 ///             }
+///
 ///             Err(e) => {
 ///                 eprintln!("Channel error: {}", e);
+///
 ///                 break;
 ///             }
 ///         }
@@ -342,7 +337,6 @@ impl RithmicOrderPlant {
     ) -> Result<RithmicOrderPlant, RithmicError> {
         let (req_tx, req_rx) = mpsc::channel::<OrderPlantCommand>(64);
         let (sub_tx, _sub_rx) = broadcast::channel(10_000);
-
         let mut order_plant = OrderPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
@@ -396,6 +390,7 @@ impl OrderPlant {
         strategy: ConnectStrategy,
     ) -> Result<OrderPlant, RithmicError> {
         let core = PlantCore::new(subscription_sender, config, strategy, "order_plant").await?;
+
         Ok(OrderPlant {
             core,
             request_receiver,
@@ -442,12 +437,12 @@ impl PlantActor for OrderPlant {
                             warn!(
                                 "order_plant: ping timed out while waiting for server close echo — terminating"
                             );
+
                             self.core.request_handler.drain_and_drop();
                         } else {
                             self.core.fail_connection_and_drain(
                                 "websocket_ping_timeout",
-                                RithmicMessage::HeartbeatTimeout,
-                                "WebSocket ping timeout - connection dead",
+                                RithmicError::HeartbeatTimeout,
                             );
                         }
                         true
@@ -458,11 +453,9 @@ impl PlantActor for OrderPlant {
                 SelectResult::Command(cmd) => {
                     if matches!(cmd, OrderPlantCommand::Abort) {
                         info!("order_plant: abort requested, shutting down immediately");
-                        self.core.fail_connection_and_drain(
-                            "",
-                            RithmicMessage::ConnectionError,
-                            "Plant aborted",
-                        );
+
+                        self.core
+                            .fail_connection_and_drain("", RithmicError::ConnectionClosed);
                         true
                     } else {
                         self.handle_command(cmd).await;
@@ -472,6 +465,7 @@ impl PlantActor for OrderPlant {
                 SelectResult::RithmicMessage(msg) => self.core.handle_rithmic_message(msg).await,
                 SelectResult::StreamClosed => self.core.handle_stream_closed(),
             };
+
             if stop {
                 break;
             }
@@ -1227,8 +1221,8 @@ impl RithmicOrderPlantHandle {
         info!("order_plant: logging in");
 
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
-
         let mut config = config;
+
         config.aggregated_quotes = None;
 
         let command = OrderPlantCommand::Login {
@@ -1244,27 +1238,28 @@ impl RithmicOrderPlantHandle {
             .next()
             .ok_or(RithmicError::EmptyResponse)?;
 
-        if let Some(err) = response.error {
+        if let Some(err) = response.error.clone() {
             error!("order_plant: login failed {:?}", err);
-            Err(RithmicError::ServerError(err))
-        } else {
-            let _ = self.sender.send(OrderPlantCommand::SetLogin).await;
 
-            if let RithmicMessage::ResponseLogin(resp) = &response.message {
-                if let Some(hb) = resp.heartbeat_interval {
-                    let secs = hb.max(HEARTBEAT_SECS as f64) as u64;
-                    self.update_heartbeat(secs).await;
-                }
+            return Err(err);
+        }
 
-                if let Some(session_id) = &resp.unique_user_id {
-                    info!("order_plant: session id: {}", session_id);
-                }
+        let _ = self.sender.send(OrderPlantCommand::SetLogin).await;
+
+        if let RithmicMessage::ResponseLogin(resp) = &response.message {
+            if let Some(hb) = resp.heartbeat_interval {
+                let secs = hb.max(HEARTBEAT_SECS as f64) as u64;
+                self.update_heartbeat(secs).await;
             }
 
-            info!("order_plant: logged in");
-
-            Ok(response)
+            if let Some(session_id) = &resp.unique_user_id {
+                info!("order_plant: session id: {}", session_id);
+            }
         }
+
+        info!("order_plant: logged in");
+
+        Ok(response)
     }
 
     /// Disconnect from the Rithmic Order plant
