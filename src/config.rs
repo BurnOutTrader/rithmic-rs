@@ -306,6 +306,10 @@ pub struct RithmicConfig {
     /// least 1s. The application-level Rithmic heartbeat (server-negotiated,
     /// ~60s) is separate and unaffected by this setting.
     pub ping_interval: Duration,
+    /// Whether answered pings report their round-trip time on the subscription
+    /// receiver as `RithmicMessage::PingLatency`. Off by default, so
+    /// upgrading changes nothing on the subscription stream until you opt in.
+    pub ping_latency_updates: bool,
 }
 
 impl fmt::Debug for RithmicConfig {
@@ -323,6 +327,7 @@ impl fmt::Debug for RithmicConfig {
             .field("request_timeout", &self.request_timeout)
             .field("ping_timeout", &self.ping_timeout)
             .field("ping_interval", &self.ping_interval)
+            .field("ping_latency_updates", &self.ping_latency_updates)
             .finish()
     }
 }
@@ -427,6 +432,7 @@ impl RithmicConfig {
             request_timeout,
             ping_timeout: DEFAULT_PING_TIMEOUT,
             ping_interval: DEFAULT_PING_INTERVAL,
+            ping_latency_updates: false,
         })
     }
 
@@ -465,6 +471,7 @@ pub struct RithmicConfigBuilder {
     request_timeout: Duration,
     ping_timeout: Duration,
     ping_interval: Duration,
+    ping_latency_updates: bool,
 }
 
 impl RithmicConfigBuilder {
@@ -496,6 +503,7 @@ impl RithmicConfigBuilder {
             request_timeout: config.request_timeout,
             ping_timeout: config.ping_timeout,
             ping_interval: config.ping_interval,
+            ping_latency_updates: config.ping_latency_updates,
         })
     }
 
@@ -516,6 +524,7 @@ impl RithmicConfigBuilder {
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             ping_timeout: DEFAULT_PING_TIMEOUT,
             ping_interval: DEFAULT_PING_INTERVAL,
+            ping_latency_updates: false,
         }
     }
 
@@ -604,6 +613,17 @@ impl RithmicConfigBuilder {
         self
     }
 
+    /// Set whether answered pings report their round-trip time on the
+    /// subscription receiver as
+    /// [`RithmicMessage::PingLatency`](crate::rti::messages::RithmicMessage::PingLatency).
+    ///
+    /// Off by default; enable it to track connection latency per plant.
+    /// Ping/pong timeout detection runs regardless of this setting.
+    pub fn ping_latency_updates(mut self, emit: bool) -> Self {
+        self.ping_latency_updates = emit;
+        self
+    }
+
     /// Build the configuration.
     ///
     /// Returns an error if any required fields are missing, or if the ping
@@ -657,6 +677,7 @@ impl RithmicConfigBuilder {
             request_timeout: self.request_timeout,
             ping_timeout: self.ping_timeout,
             ping_interval: self.ping_interval,
+            ping_latency_updates: self.ping_latency_updates,
         })
     }
 }
@@ -858,7 +879,22 @@ mod tests {
 
             assert_eq!(config.ping_timeout, DEFAULT_PING_TIMEOUT);
             assert_eq!(config.ping_interval, DEFAULT_PING_INTERVAL);
+            assert!(!config.ping_latency_updates);
         });
+    }
+
+    #[test]
+    fn ping_latency_updates_default_off() {
+        let config = valid_builder().build().unwrap();
+
+        assert!(!config.ping_latency_updates);
+    }
+
+    #[test]
+    fn the_builder_enables_ping_latency_updates() {
+        let config = valid_builder().ping_latency_updates(true).build().unwrap();
+
+        assert!(config.ping_latency_updates);
     }
 
     #[test]

@@ -9,11 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `RithmicMessage::PingLatency` — every WebSocket ping answered by a pong now
-  reports its round-trip time on the subscription receiver, so a downstream
-  system can track connection latency. The measurement is taken when the plant
-  processes the pong, so it includes client-side scheduling delay and is an
-  upper bound on network RTT; `response.source` identifies the plant.
+- `RithmicMessage::PingLatency`, opted in with
+  `RithmicConfigBuilder::ping_latency_updates(true)` — every WebSocket ping
+  answered by a pong then reports its round-trip time on the subscription
+  receiver, so a downstream system can track connection latency per plant.
+  Off by default: upgrading changes nothing on the subscription receiver
+  until you opt in. The measurement is taken when the plant processes the
+  pong, so it includes client-side scheduling delay and is an upper bound on
+  network RTT; `response.source` identifies the plant.
 - `RithmicConfigBuilder::ping_timeout` (and the `RithmicConfig::ping_timeout`
   field) — how long to wait for a pong before the connection is declared dead.
   Defaults to the previously fixed 50s.

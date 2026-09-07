@@ -53,6 +53,7 @@
 //!                         println!("BBO: {:?}", bbo);
 //!                     }
 //!                     RithmicMessage::PingLatency(rtt) => {
+//!                         // Only sent once ping_latency_updates(true) is set
 //!                         println!("Ping round-trip: {:?}", rtt);
 //!                     }
 //!                     _ => {}

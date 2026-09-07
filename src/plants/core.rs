@@ -411,10 +411,14 @@ where
                 stop = true;
             }
             Ok(Message::Pong(_)) => {
-                // A pong answering our latest ping reports its round-trip;
-                // an unsolicited pong matches no ping and reports nothing.
+                // A pong answering our latest ping reports its round-trip when
+                // latency updates are enabled. The pending ping is cleared
+                // either way — timeout detection does not depend on the
+                // setting — and an unsolicited pong matches no ping.
                 if let Some(rtt) = self.ping_manager.received() {
-                    self.emit_ping_latency(rtt);
+                    if self.config.ping_latency_updates {
+                        self.emit_ping_latency(rtt);
+                    }
                 }
             }
             Ok(Message::Binary(data)) => match self.rithmic_receiver_api.buf_to_message(data) {
@@ -1248,7 +1252,10 @@ mod tests {
     #[tokio::test]
     async fn handle_rithmic_message_pong_emits_ping_latency() {
         let reader = make_dormant_ws_reader().await;
-        let (mut core, mut sub_rx) = make_test_core(MockMessageSink::ready(), reader);
+        let mut config = test_config();
+        config.ping_latency_updates = true;
+        let (mut core, mut sub_rx) =
+            make_test_core_with_config(MockMessageSink::ready(), reader, config);
 
         // Register a pending ping
         core.ping_manager.sent();
@@ -1266,6 +1273,29 @@ mod tests {
         assert!(update.is_update);
         assert!(update.error.is_none());
         assert!(matches!(update.message, RithmicMessage::PingLatency(_)));
+    }
+
+    #[tokio::test]
+    async fn handle_rithmic_message_pong_emits_nothing_when_updates_are_disabled() {
+        let reader = make_dormant_ws_reader().await;
+        let (mut core, mut sub_rx) = make_test_core(MockMessageSink::ready(), reader);
+
+        // Register a pending ping
+        core.ping_manager.sent();
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Pong(vec![].into())))
+            .await;
+
+        assert!(!stop, "pong should not stop the actor");
+        assert!(
+            core.ping_manager.next_timeout_at().is_none(),
+            "ping_manager should still be cleared after pong"
+        );
+        assert!(
+            sub_rx.try_recv().is_err(),
+            "no latency update should be emitted while disabled"
+        );
     }
 
     #[tokio::test]

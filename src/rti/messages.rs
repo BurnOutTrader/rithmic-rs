@@ -182,10 +182,12 @@ pub enum RithmicMessage {
     /// *Note: This is a synthetic message from rithmic-rs, not from Rithmic servers.*
     ///
     /// Emitted on every pong that answers one of our pings — about once per
-    /// ping interval (60s by default) per plant; the response's `source`
-    /// identifies the plant. The measurement is taken when the plant's actor
-    /// processes the pong, so it includes client-side scheduling delay and is
-    /// an upper bound on the network round-trip.
+    /// ping interval (60s by default) per plant — but only when opted in
+    /// with [`RithmicConfigBuilder::ping_latency_updates`](crate::RithmicConfigBuilder::ping_latency_updates);
+    /// off by default. The response's `source` identifies the plant. The
+    /// measurement is taken when the plant's actor processes the pong, so it
+    /// includes client-side scheduling delay and is an upper bound on the
+    /// network round-trip.
     ///
     /// # Example
     ///
