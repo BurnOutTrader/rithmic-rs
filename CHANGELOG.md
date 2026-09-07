@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `RithmicMessage::PingLatency`, opted in with
+  `RithmicConfigBuilder::ping_latency_updates(true)` — every WebSocket ping
+  answered by a pong then reports its round-trip time on the subscription
+  receiver, so a downstream system can track connection latency per plant.
+  Off by default: upgrading changes nothing on the subscription receiver
+  until you opt in. The measurement is taken when the plant processes the
+  pong, so it includes client-side scheduling delay and is an upper bound on
+  network RTT; `response.source` identifies the plant.
+- `RithmicConfigBuilder::ping_timeout` (and the `RithmicConfig::ping_timeout`
+  field) — how long to wait for a pong before the connection is declared dead.
+  Defaults to the previously fixed 50s.
+- `RithmicConfigBuilder::ping_interval` (and the `RithmicConfig::ping_interval`
+  field) — how often WebSocket pings are sent. Defaults to the previously
+  fixed 60s.
+
+Both durations must be at least 1s, and the timeout strictly below the
+interval; `build()` rejects anything else. `Duration::ZERO` selects the
+default, matching `request_timeout`'s convention.
+
+All of it is additive — `RithmicMessage` and `RithmicConfig` are
+`#[non_exhaustive]` — so no code change is needed to pick it up.
+
 ## [3.1.0]
 
 ### Requests no longer time out

@@ -29,8 +29,8 @@ use crate::{
     request_handler::{RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType},
     ws::{
-        PING_TIMEOUT_SECS, SEND_TIMEOUT_SECS, WebSocketSendError, connect_with_strategy,
-        get_heartbeat_interval, get_ping_interval, send_with_timeout,
+        SEND_TIMEOUT_SECS, WebSocketSendError, connect_with_strategy, get_heartbeat_interval,
+        get_ping_interval, send_with_timeout,
     },
 };
 
@@ -101,8 +101,8 @@ impl PlantCore<WsSink> {
         };
 
         let interval = get_heartbeat_interval(None);
-        let ping_interval = get_ping_interval();
-        let ping_manager = PingManager::new(PING_TIMEOUT_SECS);
+        let ping_interval = get_ping_interval(config.ping_interval);
+        let ping_manager = PingManager::new(config.ping_timeout);
 
         Ok(PlantCore {
             config: config.clone(),
@@ -139,6 +139,21 @@ where
         };
 
         let _ = self.subscription_sender.send(error_response);
+    }
+
+    /// Broadcast a measured ping round-trip to subscribers as an update.
+    pub(crate) fn emit_ping_latency(&self, rtt: Duration) {
+        let latency_response = RithmicResponse {
+            request_id: String::new(),
+            message: RithmicMessage::PingLatency(rtt),
+            is_update: true,
+            has_more: false,
+            multi_response: false,
+            error: None,
+            source: self.rithmic_receiver_api.source.clone(),
+        };
+
+        let _ = self.subscription_sender.send(latency_response);
     }
 
     pub(crate) fn fail_connection_and_drain(&mut self, request_id: &str, error: RithmicError) {
@@ -178,8 +193,8 @@ where
                 // so drain all pending requests and broadcast ConnectionError
                 // now rather than letting subsequent sends pile into a dead sink.
                 // The actor loop will stop when the next ping fires (within
-                // PING_INTERVAL_SECS). Heartbeat does not stop it because
-                // send_heartbeat returns early when logged_in=false.
+                // the configured ping interval). Heartbeat does not stop it
+                // because send_heartbeat returns early when logged_in=false.
                 self.fail_connection_and_drain(
                     request_id,
                     RithmicError::ConnectionFailed(
@@ -396,7 +411,15 @@ where
                 stop = true;
             }
             Ok(Message::Pong(_)) => {
-                self.ping_manager.received();
+                // A pong answering our latest ping reports its round-trip when
+                // latency updates are enabled. The pending ping is cleared
+                // either way — timeout detection does not depend on the
+                // setting — and an unsolicited pong matches no ping.
+                if let Some(rtt) = self.ping_manager.received() {
+                    if self.config.ping_latency_updates {
+                        self.emit_ping_latency(rtt);
+                    }
+                }
             }
             Ok(Message::Binary(data)) => match self.rithmic_receiver_api.buf_to_message(data) {
                 Ok(response) => {
@@ -661,7 +684,7 @@ mod tests {
         ping_manager::PingManager,
         request_handler::{RithmicRequest, RithmicRequestHandler},
         rti::messages::RithmicMessage,
-        ws::{PING_TIMEOUT_SECS, get_heartbeat_interval, get_ping_interval},
+        ws::{get_heartbeat_interval, get_ping_interval},
     };
 
     enum MockSinkBehavior {
@@ -838,13 +861,16 @@ mod tests {
 
         let request_handler = RithmicRequestHandler::new();
 
+        let ping_interval = get_ping_interval(config.ping_interval);
+        let ping_manager = PingManager::new(config.ping_timeout);
+
         let core = PlantCore {
             config,
             close_requested: false,
             interval: get_heartbeat_interval(None),
             logged_in: false,
-            ping_interval: get_ping_interval(),
-            ping_manager: PingManager::new(PING_TIMEOUT_SECS),
+            ping_interval,
+            ping_manager,
             request_handler,
             rithmic_reader,
             rithmic_receiver_api,
@@ -1220,6 +1246,92 @@ mod tests {
         assert!(
             core.ping_manager.next_timeout_at().is_none(),
             "ping_manager should be cleared after pong"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_rithmic_message_pong_emits_ping_latency() {
+        let reader = make_dormant_ws_reader().await;
+        let mut config = test_config();
+        config.ping_latency_updates = true;
+        let (mut core, mut sub_rx) =
+            make_test_core_with_config(MockMessageSink::ready(), reader, config);
+
+        // Register a pending ping
+        core.ping_manager.sent();
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Pong(vec![].into())))
+            .await;
+
+        assert!(!stop, "pong should not stop the actor");
+
+        let update = sub_rx
+            .recv()
+            .await
+            .expect("a pong answering a ping should emit a latency update");
+        assert!(update.is_update);
+        assert!(update.error.is_none());
+        assert!(matches!(update.message, RithmicMessage::PingLatency(_)));
+    }
+
+    #[tokio::test]
+    async fn handle_rithmic_message_pong_emits_nothing_when_updates_are_disabled() {
+        let reader = make_dormant_ws_reader().await;
+        let (mut core, mut sub_rx) = make_test_core(MockMessageSink::ready(), reader);
+
+        // Register a pending ping
+        core.ping_manager.sent();
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Pong(vec![].into())))
+            .await;
+
+        assert!(!stop, "pong should not stop the actor");
+        assert!(
+            core.ping_manager.next_timeout_at().is_none(),
+            "ping_manager should still be cleared after pong"
+        );
+        assert!(
+            sub_rx.try_recv().is_err(),
+            "no latency update should be emitted while disabled"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_rithmic_message_unsolicited_pong_emits_nothing() {
+        let reader = make_dormant_ws_reader().await;
+        let (mut core, mut sub_rx) = make_test_core(MockMessageSink::ready(), reader);
+
+        let stop = core
+            .handle_rithmic_message(Ok(Message::Pong(vec![].into())))
+            .await;
+
+        assert!(!stop, "pong should not stop the actor");
+        assert!(
+            sub_rx.try_recv().is_err(),
+            "an unsolicited pong should not emit a latency update"
+        );
+    }
+
+    #[tokio::test]
+    async fn ping_manager_uses_the_configured_timeout() {
+        let reader = make_dormant_ws_reader().await;
+        let mut config = test_config();
+        config.ping_timeout = Duration::from_secs(2);
+        let (mut core, _sub_rx) =
+            make_test_core_with_config(MockMessageSink::ready(), reader, config);
+
+        core.ping_manager.sent();
+
+        let remaining = core
+            .ping_manager
+            .next_timeout_at()
+            .expect("a sent ping should be pending")
+            - tokio::time::Instant::now();
+        assert!(
+            remaining > Duration::from_secs(1) && remaining <= Duration::from_secs(2),
+            "timeout should follow the configured 2s, not the 50s default (remaining: {remaining:?})"
         );
     }
 

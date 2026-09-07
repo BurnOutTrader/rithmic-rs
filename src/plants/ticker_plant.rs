@@ -127,6 +127,10 @@ pub(crate) enum TickerPlantCommand {
 ///
 /// The subscription receiver also provides connection health events:
 /// - **WebSocket ping/pong timeouts**: primary dead-connection signal (auto-detected)
+/// - **Ping latency updates**: with
+///   `RithmicConfigBuilder::ping_latency_updates(true)` (off by default),
+///   every answered ping reports its round-trip as
+///   [`RithmicMessage::PingLatency`]
 /// - **Heartbeat errors**: forwarded as `HeartbeatTimeout`
 /// - **Forced logout events**: session terminated by the server
 ///

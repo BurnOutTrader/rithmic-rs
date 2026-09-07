@@ -16,10 +16,13 @@ use tokio_tungstenite::{
 /// response carries no interval of its own.
 pub(crate) const HEARTBEAT_SECS: u64 = 60;
 
-/// Number of seconds between WebSocket ping frames sent to detect dead connections.
+/// Default number of seconds between WebSocket ping frames sent to detect
+/// dead connections. Overridable via [`crate::config::RithmicConfig::ping_interval`].
 pub(crate) const PING_INTERVAL_SECS: u64 = 60;
 
-/// Timeout in seconds for WebSocket pong response.
+/// Default timeout in seconds for the WebSocket pong response. Overridable
+/// via [`crate::config::RithmicConfig::ping_timeout`]; must stay below the
+/// ping interval.
 pub(crate) const PING_TIMEOUT_SECS: u64 = 50;
 
 /// Timeout in seconds for any actor-owned WebSocket write.
@@ -97,14 +100,14 @@ pub(crate) fn get_heartbeat_interval(override_secs: Option<u64>) -> Interval {
     interval_at(start_offset, heartbeat_interval)
 }
 
-/// Creates an interval for sending WebSocket pings.
+/// Creates an interval for sending WebSocket pings with the given period.
 ///
-/// Returns an interval starting after the first ping period elapses.
-pub(crate) fn get_ping_interval() -> Interval {
-    let ping_interval = Duration::from_secs(PING_INTERVAL_SECS);
-    let start_offset = Instant::now() + ping_interval;
+/// Returns an interval starting after the first period elapses, so no ping
+/// is sent immediately on connect.
+pub(crate) fn get_ping_interval(period: Duration) -> Interval {
+    let start_offset = Instant::now() + period;
 
-    interval_at(start_offset, ping_interval)
+    interval_at(start_offset, period)
 }
 
 /// Connect to a single URL without retry.
@@ -366,5 +369,23 @@ mod tests {
 
         assert_eq!(get_heartbeat_interval(None).period(), default);
         assert_eq!(get_heartbeat_interval(Some(0)).period(), default);
+    }
+
+    #[tokio::test]
+    async fn get_ping_interval_uses_the_configured_period() {
+        assert_eq!(
+            get_ping_interval(Duration::from_secs(30)).period(),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn get_ping_interval_waits_one_period_before_the_first_ping() {
+        let mut interval = get_ping_interval(Duration::from_secs(5));
+
+        let started = Instant::now();
+        interval.tick().await;
+
+        assert_eq!(Instant::now() - started, Duration::from_secs(5));
     }
 }

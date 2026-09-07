@@ -26,6 +26,7 @@
 
 #[allow(deprecated)]
 use crate::request_handler::DEFAULT_REQUEST_TIMEOUT;
+use crate::ws::{PING_INTERVAL_SECS, PING_TIMEOUT_SECS};
 use std::{env, fmt, str::FromStr, time::Duration};
 
 /// Trading environment selector.
@@ -227,6 +228,17 @@ pub struct LoginConfig {
 
 const REQUEST_TIMEOUT_VAR: &str = "RITHMIC_REQUEST_TIMEOUT_SECS";
 
+/// Default time between WebSocket pings, from [`crate::ws::PING_INTERVAL_SECS`].
+const DEFAULT_PING_INTERVAL: Duration = Duration::from_secs(PING_INTERVAL_SECS);
+
+/// Default pong wait before a ping is declared unanswered, from
+/// [`crate::ws::PING_TIMEOUT_SECS`].
+const DEFAULT_PING_TIMEOUT: Duration = Duration::from_secs(PING_TIMEOUT_SECS);
+
+/// Lower bound for both ping durations: a sub-second cadence would flap the
+/// connection, and a zero period would panic inside `interval_at`.
+const MIN_PING_DURATION: Duration = Duration::from_secs(1);
+
 /// Parse a duration given as a plain decimal count of seconds.
 ///
 /// Stricter than `u64::from_str`, which also takes a sign and leading zeros:
@@ -283,6 +295,21 @@ pub struct RithmicConfig {
         note = "the library no longer times out requests; wrap the call in tokio::time::timeout"
     )]
     pub request_timeout: Duration,
+    /// How long to wait for a pong before a ping is considered unanswered and
+    /// the connection declared dead. Defaults to 50s.
+    ///
+    /// Must be at least 1s and strictly less than
+    /// [`ping_interval`](Self::ping_interval); [`RithmicConfigBuilder::build`]
+    /// rejects anything else.
+    pub ping_timeout: Duration,
+    /// How long to wait between WebSocket pings. Defaults to 60s. Must be at
+    /// least 1s. The application-level Rithmic heartbeat (server-negotiated,
+    /// ~60s) is separate and unaffected by this setting.
+    pub ping_interval: Duration,
+    /// Whether answered pings report their round-trip time on the subscription
+    /// receiver as `RithmicMessage::PingLatency`. Off by default, so
+    /// upgrading changes nothing on the subscription stream until you opt in.
+    pub ping_latency_updates: bool,
 }
 
 impl fmt::Debug for RithmicConfig {
@@ -298,6 +325,9 @@ impl fmt::Debug for RithmicConfig {
             .field("app_name", &self.app_name)
             .field("app_version", &self.app_version)
             .field("request_timeout", &self.request_timeout)
+            .field("ping_timeout", &self.ping_timeout)
+            .field("ping_interval", &self.ping_interval)
+            .field("ping_latency_updates", &self.ping_latency_updates)
             .finish()
     }
 }
@@ -400,6 +430,9 @@ impl RithmicConfig {
             app_name,
             app_version,
             request_timeout,
+            ping_timeout: DEFAULT_PING_TIMEOUT,
+            ping_interval: DEFAULT_PING_INTERVAL,
+            ping_latency_updates: false,
         })
     }
 
@@ -436,6 +469,9 @@ pub struct RithmicConfigBuilder {
     app_name: Option<String>,
     app_version: Option<String>,
     request_timeout: Duration,
+    ping_timeout: Duration,
+    ping_interval: Duration,
+    ping_latency_updates: bool,
 }
 
 impl RithmicConfigBuilder {
@@ -465,6 +501,9 @@ impl RithmicConfigBuilder {
             app_name: Some(config.app_name),
             app_version: Some(config.app_version),
             request_timeout: config.request_timeout,
+            ping_timeout: config.ping_timeout,
+            ping_interval: config.ping_interval,
+            ping_latency_updates: config.ping_latency_updates,
         })
     }
 
@@ -483,6 +522,9 @@ impl RithmicConfigBuilder {
             app_name: None,
             app_version: None,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            ping_timeout: DEFAULT_PING_TIMEOUT,
+            ping_interval: DEFAULT_PING_INTERVAL,
+            ping_latency_updates: false,
         }
     }
 
@@ -545,11 +587,70 @@ impl RithmicConfigBuilder {
         self
     }
 
+    /// Set how long to wait for a pong before declaring the connection dead.
+    ///
+    /// `Duration::ZERO` selects the default (50s). At build time the value
+    /// must be at least 1s and strictly less than the ping interval.
+    pub fn ping_timeout(mut self, ping_timeout: Duration) -> Self {
+        self.ping_timeout = if ping_timeout.is_zero() {
+            DEFAULT_PING_TIMEOUT
+        } else {
+            ping_timeout
+        };
+        self
+    }
+
+    /// Set how often WebSocket pings are sent.
+    ///
+    /// `Duration::ZERO` selects the default (60s). At build time the value
+    /// must be at least 1s, and the ping timeout must stay strictly below it.
+    pub fn ping_interval(mut self, ping_interval: Duration) -> Self {
+        self.ping_interval = if ping_interval.is_zero() {
+            DEFAULT_PING_INTERVAL
+        } else {
+            ping_interval
+        };
+        self
+    }
+
+    /// Set whether answered pings report their round-trip time on the
+    /// subscription receiver as
+    /// [`RithmicMessage::PingLatency`](crate::rti::messages::RithmicMessage::PingLatency).
+    ///
+    /// Off by default; enable it to track connection latency per plant.
+    /// Ping/pong timeout detection runs regardless of this setting.
+    pub fn ping_latency_updates(mut self, emit: bool) -> Self {
+        self.ping_latency_updates = emit;
+        self
+    }
+
     /// Build the configuration.
     ///
-    /// Returns an error if any required fields are missing.
+    /// Returns an error if any required fields are missing, or if the ping
+    /// durations are below 1s or the timeout is not strictly below the
+    /// interval.
     #[allow(deprecated)]
     pub fn build(self) -> Result<RithmicConfig, ConfigError> {
+        if self.ping_timeout < MIN_PING_DURATION {
+            return Err(ConfigError::InvalidValue {
+                var: "ping_timeout".to_string(),
+                reason: "must be at least 1 second".to_string(),
+            });
+        }
+        if self.ping_interval < MIN_PING_DURATION {
+            return Err(ConfigError::InvalidValue {
+                var: "ping_interval".to_string(),
+                reason: "must be at least 1 second".to_string(),
+            });
+        }
+        if self.ping_timeout >= self.ping_interval {
+            return Err(ConfigError::InvalidValue {
+                var: "ping_timeout".to_string(),
+                reason: "must be less than ping_interval, or the next ping replaces the pending one before it can time out"
+                    .to_string(),
+            });
+        }
+
         Ok(RithmicConfig {
             env: self.env,
             url: self
@@ -574,6 +675,9 @@ impl RithmicConfigBuilder {
                 .app_version
                 .ok_or_else(|| ConfigError::MissingField("app_version".to_string()))?,
             request_timeout: self.request_timeout,
+            ping_timeout: self.ping_timeout,
+            ping_interval: self.ping_interval,
+            ping_latency_updates: self.ping_latency_updates,
         })
     }
 }
@@ -746,6 +850,107 @@ mod tests {
             .unwrap();
 
         assert_eq!(config.request_timeout, DEFAULT_REQUEST_TIMEOUT);
+    }
+
+    fn valid_builder() -> RithmicConfigBuilder {
+        RithmicConfigBuilder::new(RithmicEnv::Demo)
+            .user("u")
+            .password("p")
+            .url("ws://localhost:9999")
+            .beta_url("ws://localhost:9998")
+            .app_name("a")
+            .app_version("1")
+    }
+
+    #[test]
+    fn ping_durations_default_from_the_constants() {
+        let config = valid_builder().build().unwrap();
+
+        assert_eq!(config.ping_timeout, DEFAULT_PING_TIMEOUT);
+        assert_eq!(config.ping_interval, DEFAULT_PING_INTERVAL);
+        assert_eq!(config.ping_timeout, Duration::from_secs(50));
+        assert_eq!(config.ping_interval, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn from_env_defaults_the_ping_durations() {
+        temp_env::with_vars(demo_env_vars(), || {
+            let config = RithmicConfig::from_env(RithmicEnv::Demo).unwrap();
+
+            assert_eq!(config.ping_timeout, DEFAULT_PING_TIMEOUT);
+            assert_eq!(config.ping_interval, DEFAULT_PING_INTERVAL);
+            assert!(!config.ping_latency_updates);
+        });
+    }
+
+    #[test]
+    fn ping_latency_updates_default_off() {
+        let config = valid_builder().build().unwrap();
+
+        assert!(!config.ping_latency_updates);
+    }
+
+    #[test]
+    fn the_builder_enables_ping_latency_updates() {
+        let config = valid_builder().ping_latency_updates(true).build().unwrap();
+
+        assert!(config.ping_latency_updates);
+    }
+
+    #[test]
+    fn the_builder_accepts_valid_ping_durations() {
+        let config = valid_builder()
+            .ping_timeout(Duration::from_secs(5))
+            .ping_interval(Duration::from_secs(10))
+            .build()
+            .unwrap();
+
+        assert_eq!(config.ping_timeout, Duration::from_secs(5));
+        assert_eq!(config.ping_interval, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn zero_ping_durations_select_the_defaults() {
+        let config = valid_builder()
+            .ping_timeout(Duration::ZERO)
+            .ping_interval(Duration::ZERO)
+            .build()
+            .unwrap();
+
+        assert_eq!(config.ping_timeout, DEFAULT_PING_TIMEOUT);
+        assert_eq!(config.ping_interval, DEFAULT_PING_INTERVAL);
+    }
+
+    #[test]
+    fn sub_second_ping_durations_are_rejected() {
+        for result in [
+            valid_builder()
+                .ping_timeout(Duration::from_millis(500))
+                .build(),
+            valid_builder()
+                .ping_interval(Duration::from_millis(500))
+                .build(),
+        ] {
+            assert!(
+                matches!(result, Err(ConfigError::InvalidValue { .. })),
+                "a sub-second ping duration should have been rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn a_ping_timeout_at_or_above_the_interval_is_rejected() {
+        for (timeout, interval) in [(70, 60), (10, 10)] {
+            let result = valid_builder()
+                .ping_timeout(Duration::from_secs(timeout))
+                .ping_interval(Duration::from_secs(interval))
+                .build();
+
+            assert!(
+                matches!(&result, Err(ConfigError::InvalidValue { var, .. }) if var == "ping_timeout"),
+                "timeout {timeout}s against interval {interval}s should have been rejected: {result:?}"
+            );
+        }
     }
 
     #[test]
