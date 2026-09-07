@@ -235,6 +235,8 @@ pub(crate) enum OrderPlantCommand {
 /// The subscription receiver carries real-time order notifications (fills,
 /// cancellations, and status changes) as well as connection health events:
 /// - **WebSocket ping/pong timeouts**: primary dead-connection signal (auto-detected)
+/// - **Ping latency updates**: every answered ping reports its round-trip as
+///   [`RithmicMessage::PingLatency`]
 /// - **Heartbeat errors**: forwarded as `HeartbeatTimeout`
 /// - **Forced logout events**: session terminated by the server
 ///

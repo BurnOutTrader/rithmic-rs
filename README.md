@@ -366,6 +366,41 @@ Three strategies for initial connection:
 
 If you need to handle disconnections and automatically reconnect, you must implement your own reconnection loop. See [`examples/reconnect.rs`](examples/reconnect.rs) for a complete example that tracks subscriptions and re-subscribes after reconnect.
 
+### Connection Health & Latency
+
+Every plant sends a WebSocket ping once per ping interval (60s by default) and
+answers each pong on the subscription receiver, so a trading platform can
+track connection latency alongside its data:
+
+```rust
+use rithmic_rs::rti::messages::RithmicMessage;
+
+while let Ok(update) = handle.subscription_receiver.recv().await {
+    if let RithmicMessage::PingLatency(rtt) = update.message {
+        // update.source names the plant ("ticker_plant", "order_plant", ...)
+        println!("{}: ping round-trip: {:?}", update.source, rtt);
+    }
+}
+```
+
+The measurement is taken when the plant processes the pong, so it includes
+client-side scheduling delay — treat it as an upper bound on network RTT. A
+ping that goes unanswered past the ping timeout (50s by default) surfaces as
+`HeartbeatTimeout` instead.
+
+Both durations are configurable on the builder. The timeout must stay at least
+1s and strictly below the interval; `build()` rejects anything else.
+
+```rust
+use std::time::Duration;
+
+let config = RithmicConfig::builder(RithmicEnv::Demo)
+    // ... required fields ...
+    .ping_interval(Duration::from_secs(30))
+    .ping_timeout(Duration::from_secs(10))
+    .build()?;
+```
+
 ## Feature Flags
 
 | Flag | Default | What it adds |

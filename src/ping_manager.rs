@@ -16,7 +16,8 @@ use tracing::warn;
 /// - Timeout indicates dead connection
 ///
 /// The timeout is supplied by the caller; see [`crate::ws::PING_INTERVAL_SECS`]
-/// and [`crate::ws::PING_TIMEOUT_SECS`] for the values the plants use.
+/// and [`crate::ws::PING_TIMEOUT_SECS`] for the defaults, which can be
+/// overridden through [`crate::config::RithmicConfig`].
 #[derive(Debug)]
 pub struct PingManager {
     /// Pending ping waiting for pong response
@@ -26,11 +27,12 @@ pub struct PingManager {
 }
 
 impl PingManager {
-    /// Creates a new ping manager with the given timeout in seconds.
-    pub fn new(timeout_secs: u64) -> Self {
+    /// Creates a new ping manager that declares a ping unanswered after
+    /// `timeout`.
+    pub fn new(timeout: Duration) -> Self {
         Self {
             pending: None,
-            timeout: Duration::from_secs(timeout_secs),
+            timeout,
         }
     }
 
@@ -45,10 +47,12 @@ impl PingManager {
 
     /// Registers that a pong response was received.
     ///
-    /// Clears pending state. WebSocket protocol guarantees pongs echo pings,
-    /// so any pong corresponds to our most recent ping.
-    pub fn received(&mut self) {
-        self.pending = None;
+    /// Returns the round-trip time when the pong answered a pending ping, and
+    /// `None` when no ping was pending (an unsolicited pong). WebSocket
+    /// protocol guarantees pongs echo pings, so any pong corresponds to our
+    /// most recent ping.
+    pub fn received(&mut self) -> Option<Duration> {
+        self.pending.take().map(|sent_at| sent_at.elapsed())
     }
 
     /// Resolves once the pending ping has gone unanswered for the timeout.
@@ -79,28 +83,44 @@ mod tests {
 
     #[test]
     fn new_has_no_pending() {
-        let mgr = PingManager::new(60);
+        let mgr = PingManager::new(Duration::from_secs(60));
         assert!(mgr.next_timeout_at().is_none());
     }
 
     #[test]
     fn sent_marks_pending() {
-        let mut mgr = PingManager::new(60);
+        let mut mgr = PingManager::new(Duration::from_secs(60));
         mgr.sent();
         assert!(mgr.next_timeout_at().is_some());
     }
 
     #[test]
     fn received_clears_pending() {
-        let mut mgr = PingManager::new(60);
+        let mut mgr = PingManager::new(Duration::from_secs(60));
         mgr.sent();
-        mgr.received();
+        assert!(mgr.received().is_some());
         assert!(mgr.next_timeout_at().is_none());
     }
 
     #[tokio::test(start_paused = true)]
+    async fn received_returns_the_elapsed_round_trip() {
+        let mut mgr = PingManager::new(Duration::from_secs(60));
+        mgr.sent();
+
+        tokio::time::advance(Duration::from_secs(5)).await;
+
+        assert_eq!(mgr.received(), Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn received_returns_none_without_a_pending_ping() {
+        let mut mgr = PingManager::new(Duration::from_secs(60));
+        assert_eq!(mgr.received(), None);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn timed_out_waits_for_the_timeout() {
-        let mut mgr = PingManager::new(60);
+        let mut mgr = PingManager::new(Duration::from_secs(60));
         mgr.sent();
 
         let started = Instant::now();
@@ -111,7 +131,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn timed_out_never_resolves_without_a_pending_ping() {
-        let mut mgr = PingManager::new(60);
+        let mut mgr = PingManager::new(Duration::from_secs(60));
 
         tokio::select! {
             _ = mgr.timed_out() => panic!("resolved with no ping pending"),
@@ -121,7 +141,7 @@ mod tests {
 
     #[test]
     fn sent_twice_replaces_pending() {
-        let mut mgr = PingManager::new(60);
+        let mut mgr = PingManager::new(Duration::from_secs(60));
         mgr.sent();
         mgr.sent(); // should not panic, just log a warning
         assert!(mgr.next_timeout_at().is_some());
@@ -129,7 +149,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn timed_out_clears_pending_so_it_reports_once() {
-        let mut mgr = PingManager::new(1);
+        let mut mgr = PingManager::new(Duration::from_secs(1));
         mgr.sent();
 
         mgr.timed_out().await;

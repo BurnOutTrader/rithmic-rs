@@ -52,6 +52,9 @@
 //!                     RithmicMessage::BestBidOffer(bbo) => {
 //!                         println!("BBO: {:?}", bbo);
 //!                     }
+//!                     RithmicMessage::PingLatency(rtt) => {
+//!                         println!("Ping round-trip: {:?}", rtt);
+//!                     }
 //!                     _ => {}
 //!                 }
 //!             }

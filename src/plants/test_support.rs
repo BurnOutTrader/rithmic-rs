@@ -20,7 +20,7 @@ use crate::{
     ping_manager::PingManager,
     plants::core::{PlantActor, PlantCore},
     request_handler::RithmicRequestHandler,
-    ws::{PING_TIMEOUT_SECS, get_heartbeat_interval, get_ping_interval},
+    ws::{get_heartbeat_interval, get_ping_interval},
 };
 
 const WIRE_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -62,13 +62,16 @@ pub(crate) async fn core_with_wire(source: &str) -> (PlantCore, TcpStream) {
 
     let request_handler = RithmicRequestHandler::new();
 
+    let ping_interval = get_ping_interval(config.ping_interval);
+    let ping_manager = PingManager::new(config.ping_timeout);
+
     let core = PlantCore {
         config,
         close_requested: false,
         interval: get_heartbeat_interval(None),
         logged_in: true,
-        ping_interval: get_ping_interval(),
-        ping_manager: PingManager::new(PING_TIMEOUT_SECS),
+        ping_interval,
+        ping_manager,
         request_handler,
         rithmic_reader,
         rithmic_receiver_api: RithmicReceiverApi {

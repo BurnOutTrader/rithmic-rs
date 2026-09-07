@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::util::unknown_message::UnknownTemplateMessage;
 
 use super::{
@@ -174,6 +176,28 @@ pub enum RithmicMessage {
     /// }
     /// ```
     HeartbeatTimeout,
+
+    /// Round-trip time of a WebSocket ping answered by a pong.
+    ///
+    /// *Note: This is a synthetic message from rithmic-rs, not from Rithmic servers.*
+    ///
+    /// Emitted on every pong that answers one of our pings — about once per
+    /// ping interval (60s by default) per plant; the response's `source`
+    /// identifies the plant. The measurement is taken when the plant's actor
+    /// processes the pong, so it includes client-side scheduling delay and is
+    /// an upper bound on the network round-trip.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// match update.message {
+    ///     RithmicMessage::PingLatency(rtt) => {
+    ///         tracing::debug!("{}: ping round-trip: {:?}", update.source, rtt);
+    ///     }
+    ///     _ => {}
+    /// }
+    /// ```
+    PingLatency(Duration),
 
     /// A frame whose `template_id` has no message definition in this crate.
     ///
