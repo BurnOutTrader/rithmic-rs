@@ -80,6 +80,9 @@ struct Envelope {
     /// Login response only.
     #[prost(double, optional, tag = "153633")]
     heartbeat_interval: Option<f64>,
+    /// Login response only: the venue's session id, which names the node.
+    #[prost(string, optional, tag = "153428")]
+    unique_user_id: Option<String>,
 }
 
 impl Envelope {
@@ -294,8 +297,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let envelope = Envelope::decode(&data[4..])?;
         if envelope.template_id == Some(11) {
             println!(
-                "login reply: rp_code={:?} heartbeat_interval={:?}",
-                envelope.rp_code, envelope.heartbeat_interval
+                "login reply: rp_code={:?} heartbeat_interval={:?} session={:?}",
+                envelope.rp_code, envelope.heartbeat_interval, envelope.unique_user_id
             );
             if envelope.rp_code.first().map(String::as_str) != Some("0") {
                 return Err(format!("login refused: {:?}", envelope.rp_code).into());
