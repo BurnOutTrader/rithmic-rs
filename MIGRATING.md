@@ -220,6 +220,16 @@ at the crate root. The old path still works.
 `subscribe_account_rms_updates` gains a required `update_bits` parameter. Pass
 `vec![]` for the old behavior.
 
+## Request-scoped replay control
+
+The additive `start_time_bar_replay`, `start_tick_bar_replay`, and
+`start_volume_profile_replay` methods return `ReplayHandle`. Use its coalesced
+progress receiver for caller-owned inactivity deadlines, its single owned result
+for explicit complete/truncated/refused outcomes, and acknowledged local
+cancellation to retire a replay without disconnecting the plant. Existing
+`load_*` signatures remain available; a refused automatic continuation now
+returns `Err` rather than presenting a partial prefix as a successful reply.
+
 ## 7. Your replays were probably truncated
 
 Nothing here breaks, but it is the change most likely to have been quietly
