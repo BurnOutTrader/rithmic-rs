@@ -146,7 +146,12 @@ where
         self.request_handler.drain_and_drop();
     }
 
-    pub(crate) async fn send_or_fail(&mut self, msg: Message, request_id: &str) {
+    /// Returns false only if local replay cancellation prevented any write.
+    /// A transport error still counts as a write attempt: bytes may have escaped.
+    pub(crate) async fn send_or_fail(&mut self, msg: Message, request_id: &str) -> bool {
+        if !self.request_handler.replay_send_allowed(request_id) {
+            return false;
+        }
         match send_with_timeout(
             &mut self.rithmic_sender,
             msg,
@@ -154,7 +159,7 @@ where
         )
         .await
         {
-            Ok(()) => {}
+            Ok(()) => self.request_handler.mark_sent(request_id),
             Err(WebSocketSendError::Transport(error)) => {
                 error!(
                     "{}: WebSocket send failed for request {}: {}",
@@ -188,6 +193,7 @@ where
                 );
             }
         }
+        true
     }
 
     /// Await the next thing the actor must react to.
@@ -383,10 +389,19 @@ where
     /// fails the replay itself — the caller is the one waiting.
     async fn resume_truncated_replay(&mut self, resume: Resume) {
         let (buf, resume_id) = self.rithmic_sender_api.request_resume_bars(&resume.key);
+        // Check before creating an acknowledgement correlation. A cancelled
+        // continuation that never goes on the wire has no remote end to await.
+        if !self.request_handler.replay_send_allowed(&resume.request_id) {
+            return;
+        }
         self.request_handler
-            .register_resume(resume_id, resume.request_id.clone());
-        self.send_or_fail(Message::Binary(buf.into()), &resume.request_id)
-            .await;
+            .register_resume(resume_id.clone(), resume.request_id.clone());
+        if !self
+            .send_or_fail(Message::Binary(buf.into()), &resume.request_id)
+            .await
+        {
+            self.request_handler.forget_resume(&resume_id);
+        }
     }
 
     /// Handle a raw WebSocket message. Returns `true` if the actor should stop.
@@ -987,6 +1002,38 @@ mod tests {
             broadcast_msg.message,
             RithmicMessage::ConnectionError
         ));
+    }
+
+    #[tokio::test]
+    async fn scoped_progress_is_not_sent_while_the_socket_write_is_pending() {
+        use crate::replay::ReplayRequest;
+        let reader = make_dormant_ws_reader().await;
+        let (mut core, _sub_rx) = make_test_core(MockMessageSink::pending(), reader);
+        let (sender, _receiver) = tokio::sync::mpsc::channel(4);
+        let (mut replay, request) = ReplayRequest::new(sender);
+        let progress = replay.subscribe_progress();
+        assert!(
+            core.request_handler
+                .register_replay("pending".into(), request)
+        );
+        tokio::time::pause();
+        let writer = tokio::spawn(async move {
+            core.send_or_fail(Message::Binary(Vec::new().into()), "pending")
+                .await;
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(progress.borrow().sent_at, None);
+        tokio::time::advance(std::time::Duration::from_secs(SEND_TIMEOUT_SECS + 1)).await;
+        writer.await.unwrap();
+        assert!(matches!(
+            replay.result().await.unwrap().end,
+            crate::ReplayEnd::Failed(_)
+        ));
+        assert_eq!(
+            progress.borrow().sent_at,
+            None,
+            "a failed write is not successful admission"
+        );
     }
 
     #[tokio::test]
