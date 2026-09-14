@@ -944,6 +944,16 @@ impl TickBarReplayRequest {
 /// A time bar covers a fixed span: [`bar_type`](Self::bar_type) picks the unit
 /// and [`bar_type_period`](Self::bar_type_period) how many of them per bar.
 ///
+/// # Window indices
+///
+/// `SecondBar` and `MinuteBar` use Unix seconds. `DailyBar` and `WeeklyBar`
+/// use date indices encoded as `YYYYMMDD`, for example `20260914`. Their
+/// response `marker` uses the same date encoding, rather than a Unix close
+/// timestamp. The public fields retain the names `start_time_sec` and
+/// `end_time_sec`, but their values are forwarded unchanged to the protocol's
+/// `start_index` and `finish_index`. Select the encoding for the requested
+/// bar type; the builder does not convert timestamps to dates.
+///
 /// # Example
 ///
 /// ```
@@ -977,9 +987,11 @@ pub struct TimeBarReplayRequest {
     pub bar_type: Option<TimeBarType>,
     /// How many of those units each bar covers.
     pub bar_type_period: i32,
-    /// Start of the window as a Unix timestamp in seconds.
+    /// Start index: Unix seconds for second/minute bars; `YYYYMMDD` for
+    /// daily/weekly bars. Forwarded unchanged despite the field name.
     pub start_time_sec: i32,
-    /// End of the window as a Unix timestamp in seconds.
+    /// End index: Unix seconds for second/minute bars; `YYYYMMDD` for
+    /// daily/weekly bars. Forwarded unchanged despite the field name.
     pub end_time_sec: i32,
     /// Cap on records returned. Leaving this unset lets the server apply its
     /// own cap of 10,000, silently.
@@ -1019,13 +1031,14 @@ impl TimeBarReplayRequest {
         self
     }
 
-    /// Start of the window as a Unix timestamp in seconds.
+    /// Start index, forwarded unchanged: Unix seconds for second/minute bars,
+    /// or `YYYYMMDD` for daily/weekly bars.
     pub fn start_time_sec(mut self, start_time_sec: i32) -> Self {
         self.start_time_sec = start_time_sec;
         self
     }
 
-    /// End of the window as a Unix timestamp in seconds.
+    /// End index, using the same bar-type-dependent encoding as the start.
     pub fn end_time_sec(mut self, end_time_sec: i32) -> Self {
         self.end_time_sec = end_time_sec;
         self
@@ -1044,7 +1057,8 @@ impl TimeBarReplayRequest {
     }
 
     /// Requires a symbol, an exchange, a bar type, a bar period, and an ordered
-    /// time window.
+    /// index window. Indices must be positive and ordered; this does not
+    /// validate calendar dates or convert between the bar types' encodings.
     pub fn validate(&self) -> Result<(), RithmicError> {
         validate_replay_window(
             "time bar replay",
@@ -1069,7 +1083,8 @@ impl TimeBarReplayRequest {
     }
 
     /// Requires a symbol, an exchange, a bar type, a bar period, and an ordered
-    /// time window.
+    /// index window. Indices must be positive and ordered; this does not
+    /// validate calendar dates or convert between the bar types' encodings.
     pub fn build(self) -> Result<Self, RithmicError> {
         self.validate()?;
         Ok(self)
