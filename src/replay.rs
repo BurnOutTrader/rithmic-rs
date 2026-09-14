@@ -15,18 +15,18 @@ use crate::{RithmicError, RithmicResponse, plants::history_plant::HistoryPlantCo
 ///
 /// The SDK sets no deadline. A caller may measure inactivity from `last_progress_at`
 /// after `sent_at` becomes available. Heartbeats, other requests, empty intermediate
-/// frames, and repeated continuation keys do not advance this snapshot.
+/// frames, and repeated continuation notices without new data do not advance it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ReplayProgress {
     /// When the original request finished writing to the socket; not queue admission.
     pub sent_at: Option<Instant>,
-    /// Last data frame, distinct continuation notice, matched successful resume
+    /// Last data frame, accepted continuation notice, matched successful resume
     /// acknowledgement, or original send.
     pub last_progress_at: Option<Instant>,
     /// Data-bearing frames received for this request, including its continuation.
     pub data_frames: u64,
-    /// Distinct continuation keys received for this request.
+    /// Accepted continuation notices. A key may repeat after new replay data.
     pub continuations: u64,
 }
 

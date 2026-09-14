@@ -328,10 +328,13 @@ or `start_volume_profile_replay`. Each returns a `ReplayHandle` after bounded
 queue admission. Clone its `subscribe_progress()` receiver and select progress
 changes against `result()` and your own deadline or cancellation signal.
 `ReplayProgress::sent_at` is set only after the original socket write completes;
-`last_progress_at` advances for correlated data, a new continuation key, or a
+`last_progress_at` advances for correlated data, an accepted continuation notice, or a
 matched successful continuation acknowledgement. Other requests, heartbeats,
-empty intermediate frames, and repeated notices do not keep this replay alive.
+empty intermediate frames, and repeated notices without new data do not keep
+this replay alive.
 The SDK imposes neither an inactivity deadline nor a total replay duration limit.
+A resume key may repeat after another chunk of replay data; repeated notices
+without intervening data remain inert.
 
 These methods lift the record cap and continue on the original replay request,
 independently of `resume_truncated_replays`. `ReplayOutcome` owns the received

@@ -79,8 +79,8 @@ impl RithmicRequestHandler {
         let request = self.replay_map.get_mut(&id)?;
         if response.is_truncated() {
             let key = response.resume_key()?.to_owned();
-            // Duplicate notices are not progress and cannot generate an
-            // unbounded sequence of identical resume requests.
+            // Duplicate notices without intervening data are not progress.
+            // The venue reuses a key when a later chunk reaches its budget.
             if !request.continuation_keys.insert(key.clone()) {
                 return None;
             }
@@ -100,6 +100,7 @@ impl RithmicRequestHandler {
             _ => false,
         };
         if data && response.error.is_none() {
+            request.continuation_keys.clear();
             request.progress.send_modify(|progress| {
                 progress.data_frames = progress.data_frames.saturating_add(1);
                 progress.last_progress_at = Some(Instant::now());
@@ -178,6 +179,52 @@ mod tests {
         });
         response.error = error;
         response
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reused_continuation_key_resumes_again_after_new_replay_data() {
+        let mut handler = RithmicRequestHandler::new();
+        let mut replay = registered(&mut handler, "original");
+        let _other = registered(&mut handler, "other");
+        let progress = replay.subscribe_progress();
+        handler.mark_sent("original");
+        handler.handle_response(frame("original", Some(1), &[], None));
+        let first = handler
+            .handle_response(frame("original", None, &[], Some("0")))
+            .expect("first cut asks to resume");
+        handler.register_resume("resume-one".into(), first.request_id);
+        handler.handle_response(ack("resume-one", None));
+        let acknowledged = *progress.borrow();
+        handler.handle_response(frame("other", Some(1), &[], None));
+        assert!(
+            handler
+                .handle_response(frame("original", None, &[], Some("0")))
+                .is_none(),
+            "an acknowledgement or another replay cannot rearm the key"
+        );
+        assert_eq!(*progress.borrow(), acknowledged);
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        handler.handle_response(frame("original", Some(2), &[], None));
+        let continued = handler
+            .handle_response(frame("original", None, &[], Some("0")))
+            .expect("the venue reuses the same key after another chunk of data");
+        assert_eq!(continued.request_id, "original");
+        assert_eq!(continued.key, "0");
+        let second = *progress.borrow();
+        assert_eq!(second.continuations, 2);
+        assert!(second.last_progress_at > acknowledged.last_progress_at);
+        assert!(
+            handler
+                .handle_response(frame("original", None, &[], Some("0")))
+                .is_none(),
+            "the repeated notice remains inert until data advances again"
+        );
+        assert_eq!(*progress.borrow(), second);
+        handler.handle_response(frame("original", None, &["0"], None));
+        let outcome = replay.result().await.unwrap();
+        assert_eq!(outcome.end, ReplayEnd::Complete);
+        assert_eq!(outcome.responses.len(), 3);
     }
 
     #[tokio::test(start_paused = true)]
