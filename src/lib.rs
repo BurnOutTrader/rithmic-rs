@@ -262,7 +262,9 @@ mod ping_manager;
 /// reconnecting them independently.
 pub mod plants;
 
+mod replay;
 mod request_handler;
+pub use replay::{ReplayEnd, ReplayHandle, ReplayOutcome, ReplayProgress};
 
 /// Rithmic protocol message definitions (protobuf-generated).
 ///

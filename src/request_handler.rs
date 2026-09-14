@@ -4,6 +4,9 @@ use tracing::{error, info, warn};
 
 use tokio::sync::oneshot;
 
+mod replay;
+use crate::replay::{ReplayEnd, ReplayRequest};
+
 use crate::{
     api::{receiver_api::RithmicResponse, rp_code::response_rp_code_info},
     error::RithmicError,
@@ -47,6 +50,7 @@ pub(crate) struct Resume {
 #[derive(Debug)]
 pub struct RithmicRequestHandler {
     handle_map: HashMap<String, Responder>,
+    replay_map: HashMap<String, ReplayRequest>,
     response_vec_map: HashMap<String, Vec<RithmicResponse>>,
 
     /// Whether a truncation notice for a pending replay is answered with a
@@ -80,8 +84,8 @@ pub struct RithmicRequestHandler {
     /// Resume requests in flight, by their own id, mapped to the replay they
     /// continue. The venue answers a resume with `ResponseResumeBars` on the
     /// resume's id and streams the continuation on the replay's id; the
-    /// acknowledgement is consumed here, a refusal resolves the replay with
-    /// what it has, and nothing is delivered on the resume's id.
+    /// acknowledgement is consumed here, a refusal fails the replay, and
+    /// nothing is delivered on the resume's id.
     resumes: HashMap<String, String>,
 }
 
@@ -89,6 +93,7 @@ impl Default for RithmicRequestHandler {
     fn default() -> Self {
         Self {
             handle_map: HashMap::new(),
+            replay_map: HashMap::new(),
             response_vec_map: HashMap::new(),
             resume_truncated: true,
             late_continuations: HashMap::new(),
@@ -154,6 +159,11 @@ impl RithmicRequestHandler {
     ///
     /// Returns `true` if the request was found and the error was sent.
     pub fn fail_request(&mut self, request_id: &str, error: RithmicError) -> bool {
+        if let Some(request) = self.replay_map.remove(request_id) {
+            self.late_continuations.insert(request_id.to_owned(), 0);
+            request.finish(ReplayEnd::Failed(error));
+            return true;
+        }
         self.response_vec_map.remove(request_id);
         self.resumes.retain(|_, replay| replay != request_id);
         if let Some(responder) = self.handle_map.remove(request_id) {
@@ -168,6 +178,10 @@ impl RithmicRequestHandler {
     /// response is the notice that closes a truncated replay somebody is
     /// still waiting on; `None` otherwise.
     pub(crate) fn handle_response(&mut self, response: RithmicResponse) -> Option<Resume> {
+        self.release_cancelled_replays();
+        if self.replay_map.contains_key(&response.request_id) {
+            return self.handle_replay_response(response);
+        }
         match response.message {
             RithmicMessage::ResponseHeartbeat(_) => {
                 // Handle heartbeat response if a callback is registered
@@ -252,37 +266,41 @@ impl RithmicRequestHandler {
         None
     }
 
-    /// The venue's answer to a resume the plant sent: consumed here, since
-    /// the continuation itself arrives on the replay's id. A refusal ends
-    /// the wait — the replay resolves with the parts streamed before the
-    /// notice, which are a prefix of the window, said at WARN.
+    /// The resume acknowledgement belongs to the original replay. A refusal
+    /// must never make its partial data look like a complete successful reply.
     fn handle_resume_ack(&mut self, ack: RithmicResponse) {
         let Some(replay) = self.resumes.remove(&ack.request_id) else {
             return;
         };
-        let rp_code = ack.rp_code().unwrap_or(&[]);
-
-        match ack.error {
-            None => info!(
-                "request_id {}: the venue acknowledged the resume of request_id {} (rp_code {:?})",
-                ack.request_id, replay, rp_code
-            ),
-            Some(error) => {
+        if let Some(error) = ack.error.clone() {
+            if let Some(mut request) = self.replay_map.remove(&replay) {
+                request.responses.push(ack);
+                request.finish(ReplayEnd::Refused(error));
+                self.late_continuations.insert(replay, 0);
+            } else if let Some(responder) = self.handle_map.remove(&replay) {
                 let parts = self.response_vec_map.remove(&replay).unwrap_or_default();
-
                 warn!(
-                    "request_id {}: the venue refused to resume request_id {} ({}); the {} parts \
-                     streamed before the cut are delivered as the reply, a prefix of the window",
+                    "request_id {}: the venue refused to resume request_id {} ({}); {} parts are incomplete",
                     ack.request_id,
                     replay,
                     error,
                     parts.len()
                 );
-
-                if let Some(responder) = self.handle_map.remove(&replay) {
-                    self.send_to_responder(responder, parts);
+                let _ = responder.send(Err(error));
+                self.late_continuations.insert(replay, 0);
+            }
+        } else {
+            if ack.rp_code_num() == Some("0") {
+                if let Some(request) = self.replay_map.get_mut(&replay) {
+                    request.progress.send_modify(|progress| {
+                        progress.last_progress_at = Some(tokio::time::Instant::now());
+                    });
                 }
             }
+            info!(
+                "request_id {}: the venue acknowledged the resume of request_id {}",
+                ack.request_id, replay
+            );
         }
     }
 
@@ -379,8 +397,28 @@ impl RithmicRequestHandler {
     /// frame and it stays an error — one line naming the request, the message
     /// and its rp_code, never a dump of the whole response.
     fn report_unmatched_terminal(&mut self, response: &RithmicResponse) {
+        if response.is_truncated() {
+            // A cut is not the remote end, including after local cancellation.
+            self.late_continuations
+                .entry(response.request_id.clone())
+                .or_insert(0);
+            return;
+        }
         let rp_code = response.rp_code().unwrap_or(&[]);
-
+        let replay_or_decode_failure = matches!(
+            response.message,
+            RithmicMessage::ResponseTimeBarReplay(_)
+                | RithmicMessage::ResponseTickBarReplay(_)
+                | RithmicMessage::ResponseVolumeProfileMinuteBars(_)
+        ) || response.error.is_some();
+        if rp_code.is_empty()
+            && replay_or_decode_failure
+            && self.late_continuations.contains_key(&response.request_id)
+        {
+            // A malformed dataless frame or correlated decode failure supplies
+            // no evidence that the server stopped streaming this request.
+            return;
+        }
         match self.late_continuations.remove(&response.request_id) {
             Some(parts) => info!(
                 "request_id {}: the venue kept streaming after nothing was waiting: {} more \
@@ -402,6 +440,9 @@ impl RithmicRequestHandler {
     /// Call this during an unclean shutdown (e.g., abort) to unblock any tasks that are
     /// waiting for a response that will never arrive.
     pub fn drain_and_drop(&mut self) {
+        for (_, request) in self.replay_map.drain() {
+            request.finish(ReplayEnd::Failed(RithmicError::ConnectionClosed));
+        }
         for (_, responder) in self.handle_map.drain() {
             let _ = responder.send(Err(RithmicError::ConnectionClosed));
         }
@@ -1213,10 +1254,9 @@ mod tests {
     }
 
     /// A venue that refuses the resume ends the wait: the caller gets the
-    /// parts streamed before the notice, a prefix of the window, and the
-    /// refusal is said at WARN.
+    /// refusal as an error, never the prefix as a successful complete reply.
     #[test]
-    fn a_refused_resume_hands_the_caller_the_prefix() {
+    fn a_refused_resume_never_reports_a_complete_prefix() {
         let mut handler = RithmicRequestHandler::new();
         let mut rx = register(&mut handler, "7");
 
@@ -1236,8 +1276,11 @@ mod tests {
         refusal.error = Some(RithmicError::ProtocolError("refused".to_string()));
         let (_, logged) = log_capture::capture(|| handler.handle_response(refusal));
 
-        let reply = rx.try_recv().unwrap().unwrap();
-        assert_eq!(reply.len(), 1, "the prefix, and nothing invented after it");
+        let reply = rx.try_recv().unwrap();
+        assert_eq!(
+            reply,
+            Err(RithmicError::ProtocolError("refused".to_string()))
+        );
         assert!(
             logged.contains("refused to resume request_id 7") && logged.contains("1 parts"),
             "{logged}"

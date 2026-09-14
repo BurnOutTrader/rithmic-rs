@@ -1,3 +1,5 @@
+use crate::replay::{ReplayControl, ReplayHandle, ReplayRequest};
+use std::sync::Arc;
 use tracing::{debug, error, info};
 
 use tokio::{
@@ -53,6 +55,14 @@ pub(crate) enum HistoryPlantCommand {
         request: VolumeProfileMinuteBarsRequest,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
+    StartReplay {
+        query: ReplayQuery,
+        request: ReplayRequest,
+    },
+    CancelReplay {
+        control: Arc<ReplayControl>,
+        acknowledged: Option<oneshot::Sender<()>>,
+    },
     ResumeBars {
         request_key: String,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
@@ -76,12 +86,23 @@ pub(crate) enum HistoryPlantCommand {
     },
 }
 
+pub(crate) enum ReplayQuery {
+    Time(TimeBarReplayRequest),
+    Tick(TickBarReplayRequest),
+    Volume(VolumeProfileMinuteBarsRequest),
+}
+
 /// Historical market data from Rithmic: past ticks and past bars.
 ///
 /// Connect once, log in, then ask for whatever window of history you need. The
 /// plant runs on its own background task; you talk to it through a
 /// [`RithmicHistoryPlantHandle`], which is cheap to clone and safe to share
 /// between tasks.
+///
+/// For request-scoped progress and acknowledged local cancellation, use the
+/// `start_*_replay` methods on [`RithmicHistoryPlantHandle`]. They return a
+/// [`ReplayHandle`] and distinguish successful completion from an incomplete
+/// prefix. The SDK has no replay deadline; the caller owns that policy.
 ///
 /// # Getting data out
 ///
@@ -280,6 +301,7 @@ impl PlantActor for HistoryPlant {
 
     async fn run(&mut self) {
         loop {
+            self.core.request_handler.release_cancelled_replays();
             let result = self.core.next_event(&mut self.request_receiver).await;
 
             let stop = match result {
@@ -315,6 +337,7 @@ impl PlantActor for HistoryPlant {
                     | HistoryPlantCommand::UpdateHeartbeat { .. }
                     | HistoryPlantCommand::SetResumeTruncated { .. }
                     | HistoryPlantCommand::Abort
+                    | HistoryPlantCommand::CancelReplay { .. }
             )
         {
             debug!("history_plant: dropping a command queued after close was requested");
@@ -385,6 +408,41 @@ impl PlantActor for HistoryPlant {
                     .request_volume_profile_minute_bars(&request);
 
                 self.core.register_and_send(buf, id, response_sender).await;
+            }
+            HistoryPlantCommand::StartReplay { query, request } => {
+                let (buf, id) = match query {
+                    ReplayQuery::Time(query) => {
+                        self.core.rithmic_sender_api.request_time_bar_replay(&query)
+                    }
+                    ReplayQuery::Tick(query) => {
+                        self.core.rithmic_sender_api.request_tick_bar_replay(&query)
+                    }
+                    ReplayQuery::Volume(query) => self
+                        .core
+                        .rithmic_sender_api
+                        .request_volume_profile_minute_bars(&query),
+                };
+                if self
+                    .core
+                    .request_handler
+                    .register_replay(id.clone(), request)
+                {
+                    self.core
+                        .send_or_fail(
+                            tokio_tungstenite::tungstenite::Message::Binary(buf.into()),
+                            &id,
+                        )
+                        .await;
+                }
+            }
+            HistoryPlantCommand::CancelReplay {
+                control,
+                acknowledged,
+            } => {
+                self.core.request_handler.cancel_replay(&control);
+                if let Some(acknowledged) = acknowledged {
+                    let _ = acknowledged.send(());
+                }
             }
             HistoryPlantCommand::ResumeBars {
                 request_key,
@@ -1071,6 +1129,54 @@ impl RithmicHistoryPlantHandle {
         let _ = self.sender.send(command).await;
 
         await_first_response(rx).await
+    }
+}
+
+impl RithmicHistoryPlantHandle {
+    /// Start a time-bar replay with request-scoped progress and cancellation.
+    ///
+    /// Native continuation stays on the original request, independent of
+    /// [`Self::resume_truncated_replays`]. The SDK sets no replay deadline.
+    pub async fn start_time_bar_replay(
+        &self,
+        request: TimeBarReplayRequest,
+    ) -> Result<ReplayHandle, RithmicError> {
+        request.validate()?;
+        self.start_replay(ReplayQuery::Time(request.resume_bars(true)))
+            .await
+    }
+
+    /// Start a tick-bar replay with request-scoped progress and cancellation.
+    /// Native continuation is enabled independently of the legacy plant flag.
+    pub async fn start_tick_bar_replay(
+        &self,
+        request: TickBarReplayRequest,
+    ) -> Result<ReplayHandle, RithmicError> {
+        request.validate()?;
+        self.start_replay(ReplayQuery::Tick(request.resume_bars(true)))
+            .await
+    }
+
+    /// Start a per-minute volume-profile replay with request-scoped progress
+    /// and cancellation. Native continuation is enabled for this request.
+    pub async fn start_volume_profile_replay(
+        &self,
+        request: VolumeProfileMinuteBarsRequest,
+    ) -> Result<ReplayHandle, RithmicError> {
+        request.validate()?;
+        self.start_replay(ReplayQuery::Volume(request.resume_bars(true)))
+            .await
+    }
+
+    async fn start_replay(&self, query: ReplayQuery) -> Result<ReplayHandle, RithmicError> {
+        // Construct the handle before awaiting admission: dropping this future
+        // also cancels a command that might already have entered the queue.
+        let (handle, request) = ReplayRequest::new(self.sender.clone());
+        self.sender
+            .send(HistoryPlantCommand::StartReplay { query, request })
+            .await
+            .map_err(|_| RithmicError::ConnectionClosed)?;
+        Ok(handle)
     }
 }
 

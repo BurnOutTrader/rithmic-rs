@@ -323,6 +323,35 @@ than a day at a time. A window far past the budget may draw no reply at all — 
 one-minute replay over 120 days did not answer in ten minutes — so wrap the call
 in your own deadline.
 
+For an inactivity deadline, use `start_time_bar_replay`, `start_tick_bar_replay`,
+or `start_volume_profile_replay`. Each returns a `ReplayHandle` after bounded
+queue admission. Clone its `subscribe_progress()` receiver and select progress
+changes against `result()` and your own deadline or cancellation signal.
+`ReplayProgress::sent_at` is set only after the original socket write completes;
+`last_progress_at` advances for correlated data, a new continuation key, or a
+matched successful continuation acknowledgement. Other requests, heartbeats,
+empty intermediate frames, and repeated notices do not keep this replay alive.
+The SDK imposes neither an inactivity deadline nor a total replay duration limit.
+
+These methods lift the record cap and continue on the original replay request,
+independently of `resume_truncated_replays`. `ReplayOutcome` owns the received
+frames once and distinguishes `Complete`, `Truncated` (output inhibited),
+`Refused`, `Failed`, and `Cancelled`. A non-complete result's frames are a prefix,
+not a successful reply. Even a successful server marker does not certify that
+an illiquid or silent-cut window contains data through its requested end; the
+coverage checks described above still belong to the caller.
+
+`cancel().await` acknowledges local retirement of that request's responder and
+accumulator. The result remains available, including any incomplete prefix.
+Cancellation does not log out or disconnect the healthy history plant. The SDK
+retains only inert correlation for late frames until the server ends them, and
+never resumes a cancelled replay. Dropping the handle also cancels locally;
+dropping a pending `result()` future alone does not. A dropped start future is
+safe even while waiting for command-queue admission.
+
+Legacy `load_*` methods remain available. A refused automatic continuation now
+returns an error instead of incorrectly returning its prefix as `Ok`.
+
 Volume profile bars take a request struct:
 
 ```rust
