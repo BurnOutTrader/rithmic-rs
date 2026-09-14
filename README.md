@@ -264,6 +264,13 @@ let ticks = handle
 let tick_bars = handle.load_tick_bars_all(symbol, exchange, 5, start, end).await?;
 ```
 
+**Match time-bar indices to the bar type.** The second/minute example above uses
+Unix seconds. `DailyBar` and `WeeklyBar` instead require `YYYYMMDD` date indices
+(for example `20260914`), and their response `marker` values use that date
+encoding too. The legacy arguments and builder fields are still named
+`start_time_sec` / `end_time_sec`; the SDK forwards them unchanged as the wire
+`start_index` / `finish_index`. It does not convert Unix timestamps into dates.
+
 **Use the `_all` loaders.** Rithmic caps a replay at 10,000 records and gives no
 sign that it did — the closing response of a replay cut at that count is
 identical to a complete one's. The `_all` variants set `resume_bars`, which

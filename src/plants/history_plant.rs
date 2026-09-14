@@ -126,8 +126,10 @@ pub(crate) enum ReplayQuery {
 ///   with a response that carries no bar. Matching on the message type as above
 ///   skips it; counting `responses.len()` does not, so subtract one if you want
 ///   a record count.
-/// - **Times are Unix seconds as `i32`,** both going in and coming back. This is
-///   Rithmic's own type and it overflows in 2038.
+/// - **Index encoding depends on the replay.** Tick, second/minute time bars,
+///   and minute volume profiles use Unix seconds as `i32` (which overflow in
+///   2038). Daily/weekly time bars instead use `YYYYMMDD` date indices for both
+///   request bounds and response `marker` values; they are not Unix timestamps.
 /// - **Tick bars carry two timestamps.** `data_bar_ssboe` and `data_bar_usecs`
 ///   are two-element arrays holding the bar's open and close: index 0 is when
 ///   the bar started, index 1 is when it ended. For one-tick bars both describe
@@ -862,6 +864,9 @@ impl RithmicHistoryPlantHandle {
     /// bars pass 10,000 in under three hours, so this is the one you usually
     /// want. See [`load_ticks_all`](Self::load_ticks_all) for how the cap is
     /// lifted and what it costs in memory.
+    /// The `start_time_sec` and `end_time_sec` arguments use Unix seconds for
+    /// second/minute bars, but `YYYYMMDD` date indices for daily/weekly bars.
+    /// Values are forwarded unchanged, as in [`Self::load_time_bars`].
     ///
     /// # Example
     /// See [`load_historical_bars.rs`](https://github.com/pbeets/rithmic-rs/blob/main/examples/load_historical_bars.rs).
@@ -893,8 +898,11 @@ impl RithmicHistoryPlantHandle {
     /// `bar_type_period` how many of them per bar. `MinuteBar` with a period of
     /// 5 gives five-minute bars.
     ///
-    /// Each bar carries a `marker`, which is the time the bar **closed**, plus
-    /// its open, high, low, close, volume and trade count.
+    /// Each bar carries a `marker`, plus its open, high, low, close, volume and
+    /// trade count. For second/minute bars, the marker is the bar's close in
+    /// Unix seconds. For daily/weekly bars, it is a `YYYYMMDD` date index, not
+    /// a close timestamp. Request bounds use the corresponding encoding too;
+    /// the `_sec` argument names do not cause any conversion.
     ///
     /// Returns **at most 10,000 bars**, with no sign when the result was cut
     /// short. Use [`load_time_bars_all`](Self::load_time_bars_all) for the whole
@@ -905,8 +913,9 @@ impl RithmicHistoryPlantHandle {
     /// * `exchange` - The exchange code, e.g. `"CME"`
     /// * `bar_type` - `SecondBar`, `MinuteBar`, `DailyBar` or `WeeklyBar`
     /// * `bar_type_period` - How many of those units per bar
-    /// * `start_time_sec` - Window start, Unix seconds
-    /// * `end_time_sec` - Window end, Unix seconds
+    /// * `start_time_sec` - Start index: Unix seconds for second/minute bars,
+    ///   or `YYYYMMDD` for daily/weekly bars
+    /// * `end_time_sec` - End index, using the same encoding as the start
     ///
     /// # Returns
     /// One response per bar, followed by an end marker carrying no data.
@@ -1134,6 +1143,10 @@ impl RithmicHistoryPlantHandle {
 
 impl RithmicHistoryPlantHandle {
     /// Start a time-bar replay with request-scoped progress and cancellation.
+    ///
+    /// [`TimeBarReplayRequest`] uses Unix-second bounds for second/minute bars
+    /// and `YYYYMMDD` date indices for daily/weekly bars. The latter also return
+    /// date-encoded response markers. These values are forwarded unchanged.
     ///
     /// Native continuation stays on the original request, independent of
     /// [`Self::resume_truncated_replays`]. The SDK sets no replay deadline.
