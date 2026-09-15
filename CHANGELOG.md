@@ -50,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the terminal is one `INFO` line rather than a dump of every frame.
 - A terminal for a request nothing is waiting on is one `ERROR` line naming the
   request, the message and its `rp_code`, not a `{:#?}` dump.
+- `UserAccountUpdate` frames from template version 5.42 (template 358) are now
+  decoded instead of surfacing as `UnknownTemplate`. A generated-schema coverage
+  test now exercises every inbound template and fails when a future `src/rti.rs`
+  refresh adds an unregistered message.
 
 ## [3.1.0]
 
