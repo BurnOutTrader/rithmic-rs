@@ -9,6 +9,19 @@ use crate::{
     rti::messages::RithmicMessage,
 };
 
+/// Whether this frame carries replay data — the evidence, on either path,
+/// that new data has arrived since a truncation notice, re-arming the keys
+/// that notice already used. Time-bar and volume-profile parts carry a
+/// `marker`; tick-bar parts carry bar ssboe stamps.
+pub(super) fn carries_replay_data(response: &RithmicResponse) -> bool {
+    match &response.message {
+        RithmicMessage::ResponseTimeBarReplay(m) => m.marker.is_some(),
+        RithmicMessage::ResponseTickBarReplay(m) => !m.data_bar_ssboe.is_empty(),
+        RithmicMessage::ResponseVolumeProfileMinuteBars(m) => m.marker.is_some(),
+        _ => false,
+    }
+}
+
 impl RithmicRequestHandler {
     /// Admission is checked before sending, including a handle dropped while
     /// its start future was waiting for room in the command queue.
@@ -93,12 +106,7 @@ impl RithmicRequestHandler {
                 key,
             });
         }
-        let data = match &response.message {
-            RithmicMessage::ResponseTimeBarReplay(m) => m.marker.is_some(),
-            RithmicMessage::ResponseTickBarReplay(m) => !m.data_bar_ssboe.is_empty(),
-            RithmicMessage::ResponseVolumeProfileMinuteBars(m) => m.marker.is_some(),
-            _ => false,
-        };
+        let data = carries_replay_data(&response);
         if data && response.error.is_none() {
             request.continuation_keys.clear();
             request.progress.send_modify(|progress| {

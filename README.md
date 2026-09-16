@@ -283,7 +283,9 @@ window asked and whatever the flag says. When it does so with its truncation
 notice — a dataless frame carrying a `request_key` and no response code — the
 plant resumes the reply itself (`RequestResumeBars` with that key; the server
 continues on the same request) until the real end marker arrives, so the `_all`
-call still returns the whole window, one round trip per cut; a caller that pages
+call still returns the whole window, one round trip per cut; a key repeated
+without intervening data is not asked for again, on these loaders and the
+scoped replays alike; a caller that pages
 replays itself turns that off with `resume_truncated_replays(false)` and gets
 the notice as the reply's last frame. A time bar reply has also been seen cut with a
 complete end marker and nothing else: a 60-day one-minute window came back as

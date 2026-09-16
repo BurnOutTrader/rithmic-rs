@@ -1,5 +1,8 @@
 use std::collections::hash_map::Entry;
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 use tracing::{error, info, warn};
 
 use tokio::sync::oneshot;
@@ -87,6 +90,16 @@ pub struct RithmicRequestHandler {
     /// acknowledgement is consumed here, a refusal fails the replay, and
     /// nothing is delivered on the resume's id.
     resumes: HashMap<String, String>,
+
+    /// Resume keys a legacy loader's reply has already asked for, by request
+    /// id, so a notice the venue repeats without intervening data is not
+    /// answered with a second `RequestResumeBars`. The venue reuses a key
+    /// across cuts of the same replay, and only data between notices makes a
+    /// repeated key a new cut. A data part for the id clears its set; the
+    /// reply's resolution, a refused resume, a failed request and the
+    /// connection dropping remove it. The scoped replays keep the same set
+    /// on each [`ReplayRequest`].
+    legacy_continuation_keys: HashMap<String, HashSet<String>>,
 }
 
 impl Default for RithmicRequestHandler {
@@ -98,6 +111,7 @@ impl Default for RithmicRequestHandler {
             resume_truncated: true,
             late_continuations: HashMap::new(),
             resumes: HashMap::new(),
+            legacy_continuation_keys: HashMap::new(),
         }
     }
 }
@@ -159,6 +173,7 @@ impl RithmicRequestHandler {
     ///
     /// Returns `true` if the request was found and the error was sent.
     pub fn fail_request(&mut self, request_id: &str, error: RithmicError) -> bool {
+        self.legacy_continuation_keys.remove(request_id);
         if let Some(request) = self.replay_map.remove(request_id) {
             // Only a request the venue saw can still be streaming for an id
             // nothing is waiting on; one that failed to send cannot.
@@ -213,6 +228,12 @@ impl RithmicRequestHandler {
                 } else {
                     // If response has more, we store it in a vector and wait for more messages
                     if response.has_more {
+                        if replay::carries_replay_data(&response) && response.error.is_none() {
+                            // Data since the last notice re-arms the resume
+                            // key it used: the venue reuses a key across
+                            // cuts of the same replay.
+                            self.legacy_continuation_keys.remove(&response.request_id);
+                        }
                         // Accumulate only while a caller is still waiting: parts
                         // for a gone id would re-create an entry nothing removes,
                         // and parts for a caller that dropped its receiver would
@@ -239,10 +260,24 @@ impl RithmicRequestHandler {
                     {
                         // The venue cut the reply and handed out the key to
                         // continue it: the caller keeps waiting, the parts
-                        // stay, and the plant asks the venue to go on.
-                        return Some(self.ask_to_resume(&response));
+                        // stay, and the plant asks the venue to go on. A key
+                        // this reply has already asked for is not asked for
+                        // again until data arrives for it: the venue reuses
+                        // a key across cuts of the same replay.
+                        if self
+                            .legacy_continuation_keys
+                            .entry(response.request_id.clone())
+                            .or_default()
+                            .insert(response.resume_key().unwrap_or_default().to_owned())
+                        {
+                            return Some(self.ask_to_resume(&response));
+                        }
+                        // A repeated notice without intervening data is
+                        // inert; the caller keeps waiting for the data the
+                        // first resume asked for.
                     } else if let Some(responder) = self.handle_map.remove(&response.request_id) {
                         let request_id = response.request_id.clone();
+                        self.legacy_continuation_keys.remove(&request_id);
                         let truncated = response.is_truncated();
                         let response_vec = match self.response_vec_map.remove(&request_id) {
                             Some(mut vec) => {
@@ -283,6 +318,7 @@ impl RithmicRequestHandler {
                 self.late_continuations.insert(replay, 0);
             } else if let Some(responder) = self.handle_map.remove(&replay) {
                 let parts = self.response_vec_map.remove(&replay).unwrap_or_default();
+                self.legacy_continuation_keys.remove(&replay);
                 warn!(
                     "request_id {}: the venue refused to resume request_id {} ({}); {} parts are incomplete",
                     ack.request_id,
@@ -358,6 +394,7 @@ impl RithmicRequestHandler {
     /// here so that continuation does not announce itself a second time.
     fn release_abandoned(&mut self, request_id: &str) {
         self.handle_map.remove(request_id);
+        self.legacy_continuation_keys.remove(request_id);
         let parts = self
             .response_vec_map
             .remove(request_id)
@@ -462,6 +499,7 @@ impl RithmicRequestHandler {
         self.response_vec_map.clear();
         self.late_continuations.clear();
         self.resumes.clear();
+        self.legacy_continuation_keys.clear();
     }
 }
 
@@ -580,6 +618,18 @@ mod tests {
             request_key: Some(key.to_string()),
             ..Default::default()
         })
+    }
+
+    /// A part that carries replay data: a marker is what the venue sets on a
+    /// volume-profile frame that does.
+    fn marker_part(id: &str) -> RithmicResponse {
+        part(
+            id,
+            RithmicMessage::ResponseVolumeProfileMinuteBars(ResponseVolumeProfileMinuteBars {
+                marker: Some(60),
+                ..Default::default()
+            }),
+        )
     }
 
     /// A data part of a multi-part reply: `has_more` is set, so the venue is
@@ -1264,6 +1314,53 @@ mod tests {
         assert!(reply[3].rp_code() == Some(&["0".to_string()][..]));
         assert!(handler.late_continuations.is_empty());
         assert!(handler.resumes.is_empty());
+        assert!(handler.legacy_continuation_keys.is_empty());
+    }
+
+    /// A resume key the venue repeats without intervening data is not asked
+    /// for again; data for the reply re-arms it, because the venue reuses a
+    /// key across cuts of the same replay. The scoped replays keep the same
+    /// rule on each `ReplayRequest`.
+    #[test]
+    fn a_repeated_resume_key_without_new_data_is_not_asked_for_again() {
+        let mut handler = RithmicRequestHandler::new();
+        let mut rx = register(&mut handler, "7");
+
+        handler.handle_response(part("7", volume_profile_message(&[])));
+        assert_eq!(
+            handler.handle_response(terminal("7", truncation_notice("0"))),
+            Some(Resume {
+                request_id: "7".to_string(),
+                key: "0".to_string(),
+            })
+        );
+
+        let (resume, logged) =
+            log_capture::capture(|| handler.handle_response(terminal("7", truncation_notice("0"))));
+        assert_eq!(resume, None, "a repeated key is not asked for again");
+        assert!(!logged.contains("asking it to resume"), "{logged}");
+        assert!(rx.try_recv().is_err(), "the caller keeps waiting");
+
+        handler.handle_response(marker_part("7"));
+        assert_eq!(
+            handler.handle_response(terminal("7", truncation_notice("0"))),
+            Some(Resume {
+                request_id: "7".to_string(),
+                key: "0".to_string(),
+            }),
+            "data re-arms the key the venue reuses"
+        );
+
+        handler.handle_response(terminal("7", volume_profile_message(&["0"])));
+        let reply = rx.try_recv().unwrap().unwrap();
+        assert_eq!(
+            reply.len(),
+            3,
+            "two parts and the end marker; the notices are not data"
+        );
+        assert!(reply.iter().all(|frame| !frame.is_truncated()));
+        assert!(handler.legacy_continuation_keys.is_empty());
+        assert!(handler.resumes.is_empty());
     }
 
     /// The venue can acknowledge a resume twice: the first acknowledgement
@@ -1349,6 +1446,7 @@ mod tests {
             "{logged}"
         );
         assert!(handler.resumes.is_empty());
+        assert!(handler.legacy_continuation_keys.is_empty());
     }
 
     /// A truncation notice for a caller that stopped waiting is not resumed:
