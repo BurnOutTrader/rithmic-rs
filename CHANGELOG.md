@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request, until its real end marker. The loaders therefore return the whole
   window, one round trip per cut (about four seconds of streaming each); the
   notice is never delivered, the cut is said once at `INFO`, and a refused
-  resume delivers the prefix at `WARN`. A notice for a caller that has stopped
+  resume returns the refusal to the caller at `WARN`, never the prefix as a
+  complete reply. A notice for a caller that has stopped
   waiting is counted, not resumed.
 - `RithmicHistoryPlantHandle::resume_truncated_replays(bool)`: turns that off
   for a caller that pages replays itself and needs every reply back inside its

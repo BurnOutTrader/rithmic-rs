@@ -160,7 +160,11 @@ impl RithmicRequestHandler {
     /// Returns `true` if the request was found and the error was sent.
     pub fn fail_request(&mut self, request_id: &str, error: RithmicError) -> bool {
         if let Some(request) = self.replay_map.remove(request_id) {
-            self.late_continuations.insert(request_id.to_owned(), 0);
+            // Only a request the venue saw can still be streaming for an id
+            // nothing is waiting on; one that failed to send cannot.
+            if request.progress.borrow().sent_at.is_some() {
+                self.late_continuations.insert(request_id.to_owned(), 0);
+            }
             request.finish(ReplayEnd::Failed(error));
             return true;
         }
@@ -393,9 +397,11 @@ impl RithmicRequestHandler {
     ///
     /// If the id has a late continuation open, this frame ends it: it is the
     /// venue finishing what it started, so it is reported once at INFO with
-    /// how many parts it sent and how it ended. Otherwise nothing explains the
-    /// frame and it stays an error — one line naming the request, the message
-    /// and its rp_code, never a dump of the whole response.
+    /// how many parts it sent and how it ended. A resume acknowledgement is
+    /// a duplicate — the first one consumed its correlation or its caller —
+    /// and is one INFO line. Otherwise nothing explains the frame and it
+    /// stays an error — one line naming the request, the message and its
+    /// rp_code, never a dump of the whole response.
     fn report_unmatched_terminal(&mut self, response: &RithmicResponse) {
         if response.is_truncated() {
             // A cut is not the remote end, including after local cancellation.
@@ -405,6 +411,13 @@ impl RithmicRequestHandler {
             return;
         }
         let rp_code = response.rp_code().unwrap_or(&[]);
+        if matches!(response.message, RithmicMessage::ResponseResumeBars(_)) {
+            info!(
+                "request_id {}: a resume acknowledgement nothing is waiting on, rp_code {:?}",
+                response.request_id, rp_code
+            );
+            return;
+        }
         let replay_or_decode_failure = matches!(
             response.message,
             RithmicMessage::ResponseTimeBarReplay(_)
@@ -1250,6 +1263,56 @@ mod tests {
         assert!(reply.iter().all(|frame| !frame.is_truncated()));
         assert!(reply[3].rp_code() == Some(&["0".to_string()][..]));
         assert!(handler.late_continuations.is_empty());
+        assert!(handler.resumes.is_empty());
+    }
+
+    /// The venue can acknowledge a resume twice: the first acknowledgement
+    /// consumes the correlation, so the second finds no caller. One line at
+    /// INFO, not an error for a reply nobody is missing.
+    #[test]
+    fn a_duplicate_resume_acknowledgement_is_counted_not_an_error() {
+        let mut handler = RithmicRequestHandler::new();
+        let mut rx = register(&mut handler, "7");
+
+        handler.handle_response(part("7", volume_profile_message(&[])));
+        let resume = handler
+            .handle_response(terminal("7", truncation_notice("0")))
+            .expect("a pending truncated reply asks to resume");
+        handler.register_resume("9".to_string(), resume.request_id);
+
+        let (_, logged) = log_capture::capture(|| {
+            handler.handle_response(terminal(
+                "9",
+                RithmicMessage::ResponseResumeBars(ResponseResumeBars {
+                    rp_code: vec!["0".to_string()],
+                    ..Default::default()
+                }),
+            ))
+        });
+        assert!(
+            logged.contains("acknowledged the resume of request_id 7"),
+            "{logged}"
+        );
+
+        let (_, logged) = log_capture::capture(|| {
+            handler.handle_response(terminal(
+                "9",
+                RithmicMessage::ResponseResumeBars(ResponseResumeBars {
+                    rp_code: vec!["0".to_string()],
+                    ..Default::default()
+                }),
+            ))
+        });
+        assert!(
+            logged.contains("request_id 9: a resume acknowledgement nothing is waiting on"),
+            "{logged}"
+        );
+        assert!(!logged.contains("no caller waiting"), "{logged}");
+        assert!(!logged.contains("ERROR"), "{logged}");
+
+        handler.handle_response(terminal("7", volume_profile_message(&["0"])));
+        let reply = rx.try_recv().unwrap().unwrap();
+        assert_eq!(reply.len(), 2, "one part and the end marker");
         assert!(handler.resumes.is_empty());
     }
 

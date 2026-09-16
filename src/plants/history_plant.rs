@@ -1047,7 +1047,8 @@ impl RithmicHistoryPlantHandle {
     /// * `request_key` - The `request_key` carried on the previous response
     ///
     /// # Returns
-    /// The remaining bar data responses or an error message
+    /// The server's acknowledgement of the resume, or an error message; the
+    /// continuation itself is counted, not delivered
     pub async fn resume_bars(
         &self,
         request_key: String,

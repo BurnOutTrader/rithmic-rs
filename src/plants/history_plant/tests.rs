@@ -363,9 +363,13 @@ async fn scoped_replay_reports_sent_only_after_actor_writes_and_cancel_preserves
     assert!(progress.borrow().sent_at.is_some());
     let actor = tokio::spawn(async move { plant.run().await });
     write_wire_response(&mut client, &tick_at(&original, 100, 1)).await;
-    while progress.borrow().data_frames == 0 {
-        progress.changed().await.unwrap();
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while progress.borrow().data_frames == 0 {
+            progress.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("the first data frame reaches progress");
     tokio::time::timeout(std::time::Duration::from_secs(2), replay.cancel())
         .await
         .unwrap()

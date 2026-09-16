@@ -388,6 +388,23 @@ mod tests {
             ReplayEnd::Failed(RithmicError::SendFailed)
         );
         assert_eq!(progress.borrow().sent_at, None);
+        assert!(
+            !handler.late_continuations.contains_key("failed"),
+            "the venue never saw a request that failed to send"
+        );
+
+        let mut sent = registered(&mut handler, "sent");
+        handler.mark_sent("sent");
+        handler.fail_request("sent", RithmicError::SendFailed);
+        assert_eq!(
+            sent.result().await.unwrap().end,
+            ReplayEnd::Failed(RithmicError::SendFailed)
+        );
+        assert_eq!(
+            handler.late_continuations.get("sent"),
+            Some(&0),
+            "a request the venue saw can still be streaming for its id"
+        );
     }
 
     #[tokio::test]
