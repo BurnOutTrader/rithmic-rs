@@ -1649,10 +1649,8 @@ mod tests {
     };
     use prost::{Message, bytes::Bytes};
 
-    // Prost retains the template_id field and its wire tag, but the canonical
-    // value lives outside the .proto schema. Keep that protocol knowledge in
-    // one table, then use it both to exercise the receiver and to audit every
-    // generated server-originated message in src/rti.rs.
+    // Prost keeps template_id's wire tag but drops the canonical mapping,
+    // which lives outside the .proto schema — this table supplies it.
     macro_rules! inbound_templates {
         ($consumer:ident) => {
             $consumer! {
@@ -1664,6 +1662,7 @@ mod tests {
                 19 => ResponseHeartbeat,
                 21 => ResponseRithmicSystemGatewayInfo,
                 75 => Reject,
+                76 => UserAccountUpdate,
                 77 => ForcedLogout,
                 101 => ResponseMarketDataUpdate,
                 103 => ResponseGetInstrumentByUnderlying,
@@ -1906,13 +1905,11 @@ mod tests {
                     let response = decode_with_api(&message);
 
                     assert!(
-                        !matches!(
-                            response.message,
-                            RithmicMessage::Unknown | RithmicMessage::UnknownTemplate(_)
-                        ),
-                        "template {} ({}) is not decoded by the receiver",
+                        matches!(response.message, RithmicMessage::$message(_)),
+                        "template {} ({}) is not decoded by the receiver, got {:?}",
                         $template_id,
                         stringify!($message),
+                        response.message,
                     );
                 )*
             };
@@ -1929,9 +1926,13 @@ mod tests {
             })
             .collect::<BTreeSet<_>>();
 
-        assert_eq!(
-            registered, expected,
-            "the inbound template registry and generated src/rti.rs messages differ"
+        let unregistered = expected.difference(&registered).collect::<Vec<_>>();
+        let stale = registered.difference(&expected).collect::<Vec<_>>();
+
+        assert!(
+            unregistered.is_empty() && stale.is_empty(),
+            "src/rti.rs messages missing from the registry: {unregistered:?}; \
+             registry entries no longer in src/rti.rs: {stale:?}"
         );
 
         inbound_templates!(assert_all_decode);

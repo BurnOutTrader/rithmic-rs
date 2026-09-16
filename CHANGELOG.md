@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `UserAccountUpdate` frames from template version 5.42 (template 358) are now
   decoded instead of surfacing as `UnknownTemplate`. A generated-schema coverage
   test now exercises every inbound template and fails when a future `src/rti.rs`
-  refresh adds an unregistered message.
+  refresh adds an unregistered message or a template decodes as the wrong type.
 
 ## [3.1.0]
 
