@@ -15,13 +15,17 @@
 //! ```text
 //! RITHMIC_URL=wss://rprotocol.rithmic.com:443 RITHMIC_USER=… RITHMIC_PW=… \
 //! RITHMIC_SYSTEM_NAME=… RITHMIC_APP_NAME=… RITHMIC_APP_VERSION=… \
-//! KIND=vp SYMBOL=MNQU6 EXCHANGE=CME DAYS_BACK=7 \
+//! KIND=vp PRODUCT=MNQ EXCHANGE=CME DAYS_BACK=7 \
 //! cargo run --release --example replay_frames
 //! ```
 //!
 //! - `KIND`: `vp` (template 208, one-minute per-price bars), `minute` or
 //!   `second` (template 202 with `PERIOD`, default 1), `tick` (template 206,
 //!   one-tick bars).
+//! - `SYMBOL`: a full contract symbol, pinning the replay to that contract.
+//!   Unset, the ticker plant's front-month adapter resolves `PRODUCT`
+//!   (default `MNQ`) on `EXCHANGE`, so the probe keeps working as contracts
+//!   roll.
 //! - `DAYS_BACK` (default 7) or `START`/`END` in Unix seconds; `END` defaults
 //!   to now.
 //! - `RESUME_BARS` (default `true`).
@@ -53,6 +57,9 @@ use rithmic_rs::rti::{
     RequestHeartbeat, RequestLogin, RequestLogout, RequestResumeBars, RequestTickBarReplay,
     RequestTimeBarReplay, RequestVolumeProfileMinuteBars, request_login::SysInfraType,
     request_tick_bar_replay, request_time_bar_replay,
+};
+use rithmic_rs::{
+    ConnectStrategy, RithmicConfig, RithmicEnv, RithmicTickerPlant, rti::messages::RithmicMessage,
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -206,8 +213,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_version = require(&["RITHMIC_APP_VERSION"])?;
 
     let kind = var("KIND").unwrap_or_else(|| "vp".to_owned());
-    let symbol = var("SYMBOL").unwrap_or_else(|| "MNQU6".to_owned());
     let exchange = var("EXCHANGE").unwrap_or_else(|| "CME".to_owned());
+    let symbol = match var("SYMBOL") {
+        Some(symbol) => {
+            println!("symbol {symbol} (SYMBOL pins the contract)");
+            symbol
+        }
+        None => {
+            // The front month rolls, so the probe asks the ticker plant for
+            // it instead of naming a contract that expires; the session is
+            // closed before the history socket opens.
+            let product = var("PRODUCT").unwrap_or_else(|| "MNQ".to_owned());
+            let config = RithmicConfig::builder(RithmicEnv::Demo)
+                .url(&url)
+                .beta_url(&url)
+                .user(&user)
+                .password(&password)
+                .system_name(&system_name)
+                .app_name(&app_name)
+                .app_version(&app_version)
+                .build()?;
+            let ticker = RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?;
+            let handle = ticker.get_handle();
+            handle.login().await?;
+            let response = handle
+                .get_front_month_contract(&product, &exchange, false)
+                .await?;
+            handle.disconnect().await?;
+            let symbol = match &response.message {
+                RithmicMessage::ResponseFrontMonthContract(fm) => fm.trading_symbol.clone(),
+                _ => None,
+            }
+            .ok_or_else(|| {
+                format!(
+                    "no front month for {product} on {exchange} (error {:?}, rp_code {:?}); \
+                     set SYMBOL to pin a contract",
+                    response.error,
+                    response.rp_code()
+                )
+            })?;
+            println!("front month for {product} on {exchange}: {symbol}");
+            symbol
+        }
+    };
     let period: i32 = var("PERIOD").map(|v| v.parse()).transpose()?.unwrap_or(1);
     let resume_bars: bool = var("RESUME_BARS")
         .map(|v| v.parse())

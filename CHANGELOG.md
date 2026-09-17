@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`RithmicResponse::is_truncated`).
 - `examples/replay_frames.rs`: every frame of one replay on the raw socket,
   bypassing the request handler, including what the server sends after a
-  truncation. It is how the behaviour below was established.
+  truncation. It is how the behaviour below was established. Its symbol is
+  the ticker plant's front month for `PRODUCT` (default `MNQ`) unless
+  `SYMBOL` pins one, so it keeps running as contracts roll.
 
 ### Fixed
 
