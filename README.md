@@ -324,7 +324,9 @@ Left alone, a truncated request keeps streaming for a moment and then draws
 logged once, never delivered, and a request sent in the meantime is served at
 once. [`examples/replay_frames.rs`](examples/replay_frames.rs) records every
 frame of one replay on the raw socket, which is how all of this was
-established.
+established. It resolves the front month of `PRODUCT` (default `MNQ`) through
+the ticker plant, so it keeps running as contracts roll; `SYMBOL` pins a
+contract.
 
 The whole window is buffered before the call returns. A full 23-hour ES session
 runs to hundreds of thousands of records, so ask for the window you need rather
