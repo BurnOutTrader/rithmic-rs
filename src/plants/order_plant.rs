@@ -395,6 +395,17 @@ impl RithmicOrderPlant {
             ),
         }
     }
+
+    /// Every account's messages, unfiltered.
+    ///
+    /// [`Self::get_handle`] wraps the stream in a [`SubscriptionFilter`] scoped
+    /// to one account, which is what a strategy wants. A proxy or forwarder
+    /// that relays a multi-account login wants the opposite: an account-scoped
+    /// handle drops every frame tagged with a different `account_id`, silently,
+    /// so the frames never arrive and nothing says why.
+    pub fn subscribe_all(&self) -> broadcast::Receiver<RithmicResponse> {
+        self.subscription_sender.subscribe()
+    }
 }
 
 #[derive(Debug)]
