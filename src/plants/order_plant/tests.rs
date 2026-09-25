@@ -1324,8 +1324,10 @@ async fn subscribe_all_retains_every_account() {
     };
     let mut receiver = plant.subscribe_all();
     for account in ["account-a", "account-b"] {
-        let mut update = crate::rti::AccountPnLPositionUpdate::default();
-        update.account_id = Some(account.into());
+        let update = crate::rti::AccountPnLPositionUpdate {
+            account_id: Some(account.into()),
+            ..Default::default()
+        };
         plant
             .subscription_sender
             .send(RithmicResponse {
