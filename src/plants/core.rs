@@ -26,8 +26,7 @@ use crate::{
     config::{LoginConfig, RithmicConfig},
     error::RithmicError,
     ping_manager::PingManager,
-    replay::ReplayRequest,
-    request_handler::{Resume, RithmicRequest, RithmicRequestHandler},
+    request_handler::{PendingReplay, Resume, RithmicRequest, RithmicRequestHandler},
     rti::{messages::RithmicMessage, request_login::SysInfraType},
     ws::{
         PING_TIMEOUT_SECS, SEND_TIMEOUT_SECS, WebSocketSendError, connect_with_strategy,
@@ -147,12 +146,7 @@ where
         self.request_handler.drain_and_drop();
     }
 
-    /// Send `msg`, failing `request_id` if the write fails. Returns `false`
-    /// only if nothing was written because the replay was cancelled.
-    pub(crate) async fn send_or_fail(&mut self, msg: Message, request_id: &str) -> bool {
-        if !self.request_handler.replay_send_allowed(request_id) {
-            return false;
-        }
+    pub(crate) async fn send_or_fail(&mut self, msg: Message, request_id: &str) {
         match send_with_timeout(
             &mut self.rithmic_sender,
             msg,
@@ -194,7 +188,6 @@ where
                 );
             }
         }
-        true
     }
 
     /// Await the next thing the actor must react to.
@@ -391,20 +384,17 @@ where
     /// caller waiting on the replay gets the whole window. A send failure
     /// fails the replay itself — the caller is the one waiting.
     async fn resume_truncated_replay(&mut self, resume: Resume) {
-        let (buf, resume_id) = self.rithmic_sender_api.request_resume_bars(&resume.key);
-        // Check before creating an acknowledgement correlation. A cancelled
-        // continuation that never goes on the wire has no remote end to await.
-        if !self.request_handler.replay_send_allowed(&resume.request_id) {
+        // Nobody would get the rest of a replay whose caller stopped waiting.
+        if !self.request_handler.replay_waiting(&resume.request_id) {
             return;
         }
+
+        let (buf, resume_id) = self.rithmic_sender_api.request_resume_bars(&resume.key);
         self.request_handler
-            .register_resume(resume_id.clone(), resume.request_id.clone());
-        if !self
-            .send_or_fail(Message::Binary(buf.into()), &resume.request_id)
-            .await
-        {
-            self.request_handler.forget_resume(&resume_id);
-        }
+            .register_resume(resume_id, resume.request_id.clone());
+
+        self.send_or_fail(Message::Binary(buf.into()), &resume.request_id)
+            .await;
     }
 
     /// Handle a raw WebSocket message. Returns `true` if the actor should stop.
@@ -610,15 +600,15 @@ where
         self.send_or_fail(Message::Binary(buf.into()), &id).await;
     }
 
-    /// Register a `start_*` replay and send it, unless it was cancelled while
-    /// queued.
+    /// Register a history replay and send it, unless its caller stopped
+    /// waiting while it was queued.
     pub(crate) async fn register_replay_and_send(
         &mut self,
         buf: Vec<u8>,
         id: String,
-        request: ReplayRequest,
+        replay: PendingReplay,
     ) {
-        if self.request_handler.register_replay(id.clone(), request) {
+        if self.request_handler.register_replay(id.clone(), replay) {
             self.send_or_fail(Message::Binary(buf.into()), &id).await;
         }
     }
@@ -922,7 +912,7 @@ mod tests {
 
         let reader = make_dormant_ws_reader().await;
         let (mut core, _sub_rx) = make_test_core(MockMessageSink::ready(), reader);
-        let mut rx = register_request(&mut core, "vp-1");
+        let mut rx = core.request_handler.register_test_replay("vp-1");
 
         let frame_of = |message: &ResponseVolumeProfileMinuteBars| {
             let mut payload = Vec::new();
@@ -1021,34 +1011,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scoped_progress_is_not_sent_while_the_socket_write_is_pending() {
-        use crate::replay::ReplayRequest;
+    async fn a_replay_whose_write_fails_is_not_marked_sent() {
         let reader = make_dormant_ws_reader().await;
-        let (mut core, _sub_rx) = make_test_core(MockMessageSink::pending(), reader);
-        let (sender, _receiver) = tokio::sync::mpsc::channel(4);
-        let (mut replay, request) = ReplayRequest::new(sender);
-        let progress = replay.subscribe_progress();
+        let (mut core, _sub_rx) = make_test_core(MockMessageSink::error(), reader);
+        let mut rx = core.request_handler.register_test_replay("failed");
+
+        core.send_or_fail(Message::Binary(Vec::new().into()), "failed")
+            .await;
+
+        assert_eq!(rx.try_recv().unwrap(), Err(RithmicError::SendFailed));
         assert!(
-            core.request_handler
-                .register_replay("pending".into(), request)
-        );
-        tokio::time::pause();
-        let writer = tokio::spawn(async move {
-            core.send_or_fail(Message::Binary(Vec::new().into()), "pending")
-                .await;
-        });
-        tokio::task::yield_now().await;
-        assert_eq!(progress.borrow().sent_at, None);
-        tokio::time::advance(std::time::Duration::from_secs(SEND_TIMEOUT_SECS + 1)).await;
-        writer.await.unwrap();
-        assert!(matches!(
-            replay.result().await.unwrap().end,
-            crate::ReplayEnd::Failed(_)
-        ));
-        assert_eq!(
-            progress.borrow().sent_at,
-            None,
-            "a failed write is not successful admission"
+            !core.request_handler.expects_late_frames("failed"),
+            "the server never saw a write that failed"
         );
     }
 
