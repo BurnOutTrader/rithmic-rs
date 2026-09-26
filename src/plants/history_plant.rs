@@ -22,6 +22,9 @@ use crate::{
     types::{TickBarReplayRequest, TimeBarReplayRequest, VolumeProfileMinuteBarsRequest},
 };
 
+/// Default subscription channel capacity.
+const DEFAULT_SUBSCRIPTION_CAPACITY: usize = 10_000;
+
 pub(crate) enum HistoryPlantCommand {
     Close,
     Abort,
@@ -211,7 +214,10 @@ impl RithmicHistoryPlant {
         strategy: ConnectStrategy,
     ) -> Result<RithmicHistoryPlant, RithmicError> {
         let (req_tx, req_rx) = mpsc::channel::<HistoryPlantCommand>(32);
-        let (sub_tx, _sub_rx) = broadcast::channel::<RithmicResponse>(20_000);
+        let capacity = config
+            .subscription_capacity
+            .unwrap_or(DEFAULT_SUBSCRIPTION_CAPACITY);
+        let (sub_tx, _sub_rx) = broadcast::channel::<RithmicResponse>(capacity);
         let mut history_plant = HistoryPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
@@ -858,6 +864,9 @@ impl RithmicHistoryPlantHandle {
         self.replay(ReplayQuery::Volume(request)).await
     }
 
+    /// Deprecated: the plant resumes truncated replays itself, as described on
+    /// [`load_ticks_all`](Self::load_ticks_all), so there is no need to call this.
+    ///
     /// Ask the server to continue a replay it cut short.
     ///
     /// The `load_*` methods do this automatically and never return the notice
@@ -873,6 +882,10 @@ impl RithmicHistoryPlantHandle {
     ///
     /// # Returns
     /// The server's acknowledgement, `ResponseResumeBars`.
+    #[deprecated(
+        since = "3.2.0",
+        note = "the plant resumes truncated replays itself; the continuation this requests is counted, not delivered"
+    )]
     pub async fn resume_bars(
         &self,
         request_key: String,
