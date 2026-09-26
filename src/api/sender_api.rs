@@ -1053,6 +1053,10 @@ impl RithmicSenderApi {
 
     /// Build a time bar replay request.
     ///
+    /// Copies `start_time_sec` and `end_time_sec` unchanged into the wire
+    /// `start_index` and `finish_index`. Second/minute bars use Unix seconds;
+    /// daily/weekly bars use `YYYYMMDD` date indices. No date conversion occurs.
+    ///
     /// # Arguments
     ///
     /// * `request` - The window and bar size to replay. Build it with
