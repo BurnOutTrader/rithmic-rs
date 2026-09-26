@@ -288,6 +288,14 @@ pub struct RithmicConfig {
     /// [`RithmicConfigBuilder::subscription_capacity`], which explains what
     /// the capacity costs.
     pub subscription_capacity: Option<usize>,
+    /// How long [`ConnectStrategy::Retry`](crate::ConnectStrategy::Retry) and
+    /// [`ConnectStrategy::AlternateWithRetry`](crate::ConnectStrategy::AlternateWithRetry)
+    /// keep trying before `connect` gives up with
+    /// [`RithmicError::ConnectionFailed`](crate::RithmicError::ConnectionFailed).
+    /// The limit covers every attempt together, not each one. `None`, the
+    /// default, retries until connected. Set it with
+    /// [`RithmicConfigBuilder::retry_timeout`].
+    pub retry_timeout: Option<Duration>,
 }
 
 impl fmt::Debug for RithmicConfig {
@@ -304,6 +312,7 @@ impl fmt::Debug for RithmicConfig {
             .field("app_version", &self.app_version)
             .field("request_timeout", &self.request_timeout)
             .field("subscription_capacity", &self.subscription_capacity)
+            .field("retry_timeout", &self.retry_timeout)
             .finish()
     }
 }
@@ -407,6 +416,7 @@ impl RithmicConfig {
             app_version,
             request_timeout,
             subscription_capacity: None,
+            retry_timeout: None,
         })
     }
 
@@ -444,6 +454,7 @@ pub struct RithmicConfigBuilder {
     app_version: Option<String>,
     request_timeout: Duration,
     subscription_capacity: Option<usize>,
+    retry_timeout: Option<Duration>,
 }
 
 impl RithmicConfigBuilder {
@@ -474,6 +485,7 @@ impl RithmicConfigBuilder {
             app_version: Some(config.app_version),
             request_timeout: config.request_timeout,
             subscription_capacity: config.subscription_capacity,
+            retry_timeout: config.retry_timeout,
         })
     }
 
@@ -493,6 +505,7 @@ impl RithmicConfigBuilder {
             app_version: None,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             subscription_capacity: None,
+            retry_timeout: None,
         }
     }
 
@@ -546,6 +559,42 @@ impl RithmicConfigBuilder {
         } else {
             request_timeout
         };
+        self
+    }
+
+    /// Give up connecting after `timeout` instead of retrying forever.
+    ///
+    /// The timeout covers the whole retry loop, every attempt and backoff
+    /// together, not a single attempt.
+    ///
+    /// Applies to [`ConnectStrategy::Retry`](crate::ConnectStrategy::Retry)
+    /// and [`ConnectStrategy::AlternateWithRetry`](crate::ConnectStrategy::AlternateWithRetry),
+    /// which keep their usual backoff but cap each attempt's timeout at the
+    /// time left and stop before a backoff that would run past the timeout.
+    /// At least one attempt is always made. `connect` then returns
+    /// [`RithmicError::ConnectionFailed`](crate::RithmicError::ConnectionFailed)
+    /// with the attempt count and the timeout in its message.
+    /// [`ConnectStrategy::Simple`](crate::ConnectStrategy::Simple) makes one
+    /// attempt either way and ignores this.
+    ///
+    /// ```no_run
+    /// use std::time::Duration;
+    /// use rithmic_rs::{
+    ///     ConnectStrategy, RithmicConfigBuilder, RithmicEnv, RithmicTickerPlant,
+    /// };
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let config = RithmicConfigBuilder::from_env(RithmicEnv::Demo)?
+    ///     .retry_timeout(Duration::from_secs(30))
+    ///     .build()?;
+    ///
+    /// // Retries for up to 30 seconds, then returns ConnectionFailed.
+    /// let plant = RithmicTickerPlant::connect(&config, ConnectStrategy::Retry).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn retry_timeout(mut self, timeout: Duration) -> Self {
+        self.retry_timeout = Some(timeout);
         self
     }
 
@@ -605,6 +654,7 @@ impl RithmicConfigBuilder {
                 .ok_or_else(|| ConfigError::MissingField("app_version".to_string()))?,
             request_timeout: self.request_timeout,
             subscription_capacity: self.subscription_capacity,
+            retry_timeout: self.retry_timeout,
         })
     }
 }
@@ -821,6 +871,35 @@ mod tests {
                 .unwrap();
             assert_eq!(config.subscription_capacity, None);
         });
+    }
+
+    #[test]
+    fn the_builder_leaves_the_retry_timeout_unset_by_default() {
+        let builder = RithmicConfig::builder(RithmicEnv::Demo)
+            .user("u")
+            .password("p")
+            .url("ws://localhost:9999")
+            .beta_url("ws://localhost:9998")
+            .app_name("a")
+            .app_version("1");
+
+        assert_eq!(builder.build().unwrap().retry_timeout, None);
+    }
+
+    #[test]
+    fn the_builder_records_the_retry_timeout() {
+        let config = RithmicConfig::builder(RithmicEnv::Demo)
+            .user("u")
+            .password("p")
+            .url("ws://localhost:9999")
+            .beta_url("ws://localhost:9998")
+            .app_name("a")
+            .app_version("1")
+            .retry_timeout(Duration::from_secs(30))
+            .build()
+            .unwrap();
+
+        assert_eq!(config.retry_timeout, Some(Duration::from_secs(30)));
     }
 
     #[test]
