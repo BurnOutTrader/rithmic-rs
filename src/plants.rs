@@ -14,15 +14,19 @@ use tokio::sync::oneshot;
 
 use crate::{api::receiver_api::RithmicResponse, error::RithmicError};
 
+pub(crate) mod actor;
 pub(crate) mod core;
 /// Access to historical market data
 pub mod history_plant;
+pub(crate) mod kind;
 /// Order entry and management
 pub mod order_plant;
 /// Position and P&L tracking
 pub mod pnl_plant;
+pub(crate) mod session;
 /// Account-scoped subscription helpers for shared order/PnL plants
 pub mod subscription;
+pub(crate) mod tag;
 #[cfg(test)]
 pub(crate) mod test_support;
 /// Real-time market data subscription

@@ -1,4 +1,5 @@
-use tracing::{debug, error, info};
+use std::convert::Infallible;
+use tracing::{error, info};
 
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
@@ -11,10 +12,11 @@ use crate::{
     config::{LoginConfig, RithmicConfig},
     error::RithmicError,
     plants::{
+        actor::Plant,
         await_all_responses, await_first_response,
-        core::{PlantActor, PlantCore, SelectResult},
+        kind::{Cx, PlantCommand, PlantKind},
     },
-    request_handler::PendingReplay,
+    request_handler::{PendingReplay, RequestResult},
     rti::{
         messages::RithmicMessage, request_login::SysInfraType, request_tick_bar_update,
         request_time_bar_replay::BarType, request_time_bar_update,
@@ -229,7 +231,8 @@ impl RithmicHistoryPlant {
             .subscription_capacity
             .unwrap_or(DEFAULT_SUBSCRIPTION_CAPACITY);
         let (sub_tx, _sub_rx) = broadcast::channel::<RithmicResponse>(capacity);
-        let mut history_plant = HistoryPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
+        let mut history_plant =
+            Plant::new(HistoryPlant, req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
             history_plant.run().await;
@@ -262,122 +265,55 @@ impl RithmicHistoryPlant {
     }
 }
 
-#[derive(Debug)]
-struct HistoryPlant {
-    core: PlantCore,
-    request_receiver: mpsc::Receiver<HistoryPlantCommand>,
-}
+/// The history plant's commands. It loads nothing after login.
+#[derive(Debug, Default)]
+struct HistoryPlant;
 
-impl HistoryPlant {
-    async fn new(
-        request_receiver: mpsc::Receiver<HistoryPlantCommand>,
-        subscription_sender: broadcast::Sender<RithmicResponse>,
-        config: &RithmicConfig,
-        strategy: ConnectStrategy,
-    ) -> Result<HistoryPlant, RithmicError> {
-        let core = PlantCore::new(subscription_sender, config, strategy, "history_plant").await?;
-
-        Ok(HistoryPlant {
-            core,
-            request_receiver,
-        })
-    }
-}
-
-impl PlantActor for HistoryPlant {
+impl PlantKind for HistoryPlant {
     type Command = HistoryPlantCommand;
+    type Tag = Infallible;
 
-    async fn run(&mut self) {
-        loop {
-            self.core.request_handler.release_abandoned_replays();
-            let result = self.core.next_event(&mut self.request_receiver).await;
+    const SOURCE: &'static str = "history_plant";
+    const INFRA: SysInfraType = SysInfraType::HistoryPlant;
 
-            let stop = match result {
-                SelectResult::HeartbeatFired => self.core.send_heartbeat().await,
-                SelectResult::PingFired => self.core.send_ping().await,
-                SelectResult::PingTimeout => self.core.handle_ping_timeout(),
-                SelectResult::Command(cmd) => {
-                    if matches!(cmd, HistoryPlantCommand::Abort) {
-                        self.core.handle_abort()
-                    } else {
-                        self.handle_command(cmd).await;
-
-                        false
-                    }
-                }
-                SelectResult::RithmicMessage(msg) => self.core.handle_rithmic_message(msg).await,
-                SelectResult::StreamClosed => self.core.handle_stream_closed(),
-            };
-
-            if stop {
-                break;
-            }
-        }
-    }
-
-    async fn handle_command(&mut self, command: HistoryPlantCommand) {
-        // Disconnect race guard — see `TickerPlant::handle_command`.
-        if self.core.close_requested
-            && !matches!(
-                command,
-                HistoryPlantCommand::Close | HistoryPlantCommand::Abort
-            )
-        {
-            debug!("history_plant: dropping a command queued after close was requested");
-
-            return;
-        }
-
+    fn shared(command: HistoryPlantCommand) -> Result<PlantCommand, HistoryPlantCommand> {
         match command {
-            HistoryPlantCommand::Close => {
-                self.core.handle_close().await;
-            }
+            HistoryPlantCommand::Close => Ok(PlantCommand::Close),
+            HistoryPlantCommand::Abort => Ok(PlantCommand::Abort),
             HistoryPlantCommand::GetSystemInfo { response_sender } => {
-                self.core.handle_get_system_info(response_sender).await;
+                Ok(PlantCommand::GetSystemInfo { response_sender })
             }
             HistoryPlantCommand::Login {
                 config,
                 response_sender,
-            } => {
-                self.core
-                    .handle_login(config, SysInfraType::HistoryPlant, response_sender)
-                    .await;
-            }
+            } => Ok(PlantCommand::Login {
+                config,
+                response_sender,
+            }),
             HistoryPlantCommand::Logout { response_sender } => {
-                self.core.handle_logout(response_sender).await;
+                Ok(PlantCommand::Logout { response_sender })
             }
+            command => Err(command),
+        }
+    }
+
+    fn on_command(&mut self, command: HistoryPlantCommand, cx: &mut Cx<'_, Infallible>) {
+        match command {
             HistoryPlantCommand::Replay {
                 query,
                 response_sender,
-            } => {
-                let (buf, id) = match query {
-                    ReplayQuery::Time(query) => {
-                        self.core.rithmic_sender_api.request_time_bar_replay(&query)
-                    }
-                    ReplayQuery::Tick(query) => {
-                        self.core.rithmic_sender_api.request_tick_bar_replay(&query)
-                    }
-                    ReplayQuery::Volume(query) => self
-                        .core
-                        .rithmic_sender_api
-                        .request_volume_profile_minute_bars(&query),
-                };
-
-                self.core
-                    .register_replay_and_send(buf, id, PendingReplay::new(response_sender))
-                    .await;
-            }
+            } => cx.send_replay(
+                |api| match query {
+                    ReplayQuery::Time(query) => api.request_time_bar_replay(&query),
+                    ReplayQuery::Tick(query) => api.request_tick_bar_replay(&query),
+                    ReplayQuery::Volume(query) => api.request_volume_profile_minute_bars(&query),
+                },
+                PendingReplay::new(response_sender),
+            ),
             HistoryPlantCommand::ResumeBars {
                 request_key,
                 response_sender,
-            } => {
-                let (buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_resume_bars(&request_key);
-
-                self.core.register_and_send(buf, id, response_sender).await;
-            }
+            } => cx.send_for(|api| api.request_resume_bars(&request_key), response_sender),
             HistoryPlantCommand::SubscribeTimeBarUpdates {
                 symbol,
                 exchange,
@@ -385,17 +321,18 @@ impl PlantActor for HistoryPlant {
                 bar_type_period,
                 request,
                 response_sender,
-            } => {
-                let (buf, id) = self.core.rithmic_sender_api.request_time_bar_update(
-                    &symbol,
-                    &exchange,
-                    bar_type,
-                    bar_type_period,
-                    request,
-                );
-
-                self.core.register_and_send(buf, id, response_sender).await;
-            }
+            } => cx.send_for(
+                |api| {
+                    api.request_time_bar_update(
+                        &symbol,
+                        &exchange,
+                        bar_type,
+                        bar_type_period,
+                        request,
+                    )
+                },
+                response_sender,
+            ),
             HistoryPlantCommand::SubscribeTickBarUpdates {
                 symbol,
                 exchange,
@@ -404,22 +341,31 @@ impl PlantActor for HistoryPlant {
                 bar_type_specifier,
                 request,
                 response_sender,
-            } => {
-                let (buf, id) = self.core.rithmic_sender_api.request_tick_bar_update(
-                    &symbol,
-                    &exchange,
-                    bar_type,
-                    bar_sub_type,
-                    &bar_type_specifier,
-                    request,
-                );
-
-                self.core.register_and_send(buf, id, response_sender).await;
-            }
-            HistoryPlantCommand::Abort => {
-                unreachable!("Abort is handled in run() before handle_command");
+            } => cx.send_for(
+                |api| {
+                    api.request_tick_bar_update(
+                        &symbol,
+                        &exchange,
+                        bar_type,
+                        bar_sub_type,
+                        &bar_type_specifier,
+                        request,
+                    )
+                },
+                response_sender,
+            ),
+            HistoryPlantCommand::Close
+            | HistoryPlantCommand::Abort
+            | HistoryPlantCommand::GetSystemInfo { .. }
+            | HistoryPlantCommand::Login { .. }
+            | HistoryPlantCommand::Logout { .. } => {
+                unreachable!("the plant handles the commands every plant shares")
             }
         }
+    }
+
+    fn on_reply(&mut self, tag: Infallible, _reply: RequestResult) {
+        match tag {}
     }
 }
 
@@ -472,10 +418,22 @@ impl RithmicHistoryPlantHandle {
 
     /// Log in to the Rithmic History plant
     ///
-    /// This must be called before requesting historical data
+    /// This must be called before requesting historical data.
+    ///
+    /// The plant logs in once per connection. A call with the same config made
+    /// while that login is in progress waits for it, and one made after it
+    /// returns its response at once. Neither sends anything.
     ///
     /// # Returns
-    /// The login response or an error message
+    /// The login response, once the server accepts the login.
+    ///
+    /// # Errors
+    /// * The error the server's refusal carries, usually
+    ///   [`RithmicError::RequestRejected`]. You can log in again.
+    /// * [`RithmicError::LoginConflict`] if this plant is logging in, or is
+    ///   logged in, with a different [`LoginConfig`].
+    /// * [`RithmicError::ConnectionClosed`] if the plant disconnects before
+    ///   the login is done, or has disconnected.
     pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
         self.login_with_config(LoginConfig::default()).await
     }
@@ -483,12 +441,18 @@ impl RithmicHistoryPlantHandle {
     /// Log in to the Rithmic History plant with custom configuration
     ///
     /// This must be called before requesting historical data.
+    /// `aggregated_quotes` does not apply to this plant and is ignored.
     ///
     /// # Arguments
     /// * `config` - Login configuration options. See [`LoginConfig`] for details.
     ///
     /// # Returns
-    /// The login response or an error message
+    /// The login response, once the server accepts the login.
+    ///
+    /// # Errors
+    /// As for [`login`](Self::login). [`RithmicError::LoginConflict`] means
+    /// this plant logged in, or is logging in, with a config other than
+    /// `config`.
     pub async fn login_with_config(
         &self,
         config: LoginConfig,
@@ -514,8 +478,8 @@ impl RithmicHistoryPlantHandle {
             return Err(err);
         }
 
-        // The actor marks itself logged in and adopts the server's heartbeat
-        // period when it sees this reply, so nothing here needs to reach it.
+        // The actor owns the session: it heartbeats before this reply reaches
+        // us, whether or not anyone is still waiting for it.
         if let RithmicMessage::ResponseLogin(resp) = &response.message {
             if let Some(session_id) = &resp.unique_user_id {
                 info!("history_plant: session id: {}", session_id);

@@ -1,5 +1,5 @@
-use std::sync::{Arc, OnceLock};
-use tracing::{debug, error, info, warn};
+use std::sync::Arc;
+use tracing::{error, info, warn};
 
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
@@ -20,11 +20,14 @@ use crate::{
     config::{LoginConfig, RithmicAccount, RithmicConfig},
     error::RithmicError,
     plants::{
+        actor::Plant,
         await_all_responses, await_first_response,
-        core::{PlantActor, PlantCore, SelectResult},
+        kind::{Cx, PlantCommand, PlantKind},
         subscription::SubscriptionFilter,
+        tag::answer_caller,
         trade_routes::TradeRouteCache,
     },
+    request_handler::{RequestResult, Responder},
     rti::{TradeRoute, messages::RithmicMessage, request_login::SysInfraType},
     types::{EasyToBorrowRequest, FillHistoryRange, RmsUpdateBits},
 };
@@ -102,7 +105,6 @@ pub(crate) enum OrderPlantCommand {
         subscribe_for_updates: bool,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
-    RecordTradeRoutes(Vec<RithmicResponse>),
     RecordTradeRouteUpdate(Box<TradeRoute>),
     TradeRouteFor {
         exchange: String,
@@ -322,8 +324,6 @@ pub struct RithmicOrderPlant {
     pub(crate) connection_handle: JoinHandle<()>,
     sender: mpsc::Sender<OrderPlantCommand>,
     subscription_sender: broadcast::Sender<RithmicResponse>,
-    /// Shared with the actor and every handle, so one login scopes them all.
-    login_scope: Arc<OnceLock<LoginScope>>,
 }
 
 impl RithmicOrderPlant {
@@ -353,13 +353,12 @@ impl RithmicOrderPlant {
             .subscription_capacity
             .unwrap_or(DEFAULT_SUBSCRIPTION_CAPACITY);
         let (sub_tx, _sub_rx) = broadcast::channel(capacity);
-        let login_scope = Arc::new(OnceLock::new());
-        let mut order_plant = OrderPlant::new(
+        let mut order_plant = Plant::new(
+            OrderPlant::default(),
             req_rx,
             sub_tx.clone(),
             config,
             strategy,
-            Arc::clone(&login_scope),
         )
         .await?;
 
@@ -371,7 +370,6 @@ impl RithmicOrderPlant {
             connection_handle,
             sender: req_tx,
             subscription_sender: sub_tx,
-            login_scope,
         })
     }
 }
@@ -392,7 +390,6 @@ impl RithmicOrderPlant {
 
         RithmicOrderPlantHandle {
             account,
-            login_scope: Arc::clone(&self.login_scope),
             sender: self.sender.clone(),
             subscription_receiver: SubscriptionFilter::new(
                 account_for_filter,
@@ -411,126 +408,145 @@ impl RithmicOrderPlant {
     }
 }
 
+/// A request the order plant sends for itself.
 #[derive(Debug)]
+enum OrderTag {
+    /// The login info, which scopes later requests. `caller` is the handle
+    /// that asked for it, or `None` when the plant loads it after login.
+    LoginInfo { caller: Option<Responder> },
+    /// The trade routes the plant loads after login, which orders go out on.
+    TradeRoutes,
+}
+
+/// The order plant's commands, and what it loads after login and keeps for
+/// the connection. Only the actor writes it.
+#[derive(Debug, Default)]
 struct OrderPlant {
-    core: PlantCore,
-    request_receiver: mpsc::Receiver<OrderPlantCommand>,
-    login_scope: Arc<OnceLock<LoginScope>>,
+    /// Scopes the requests that carry a user type. Set by the first login
+    /// info that has one.
+    login_scope: Option<LoginScope>,
+    /// The routes orders go out on.
     trade_routes: TradeRouteCache,
+    /// The login info loaded after login is still outstanding.
+    loading_login_info: bool,
+    /// The trade routes loaded after login are still outstanding.
+    loading_trade_routes: bool,
 }
 
 impl OrderPlant {
-    async fn new(
-        request_receiver: mpsc::Receiver<OrderPlantCommand>,
-        subscription_sender: broadcast::Sender<RithmicResponse>,
-        config: &RithmicConfig,
-        strategy: ConnectStrategy,
-        login_scope: Arc<OnceLock<LoginScope>>,
-    ) -> Result<OrderPlant, RithmicError> {
-        let core = PlantCore::new(subscription_sender, config, strategy, "order_plant").await?;
-
-        Ok(OrderPlant {
-            core,
-            request_receiver,
-            login_scope,
-            trade_routes: TradeRouteCache::default(),
-        })
-    }
-}
-
-impl PlantActor for OrderPlant {
-    type Command = OrderPlantCommand;
-
-    async fn run(&mut self) {
-        loop {
-            let result = self.core.next_event(&mut self.request_receiver).await;
-
-            let stop = match result {
-                SelectResult::HeartbeatFired => self.core.send_heartbeat().await,
-                SelectResult::PingFired => self.core.send_ping().await,
-                SelectResult::PingTimeout => self.core.handle_ping_timeout(),
-                SelectResult::Command(cmd) => {
-                    if matches!(cmd, OrderPlantCommand::Abort) {
-                        self.core.handle_abort()
-                    } else {
-                        self.handle_command(cmd).await;
-                        false
-                    }
-                }
-                SelectResult::RithmicMessage(msg) => self.core.handle_rithmic_message(msg).await,
-                SelectResult::StreamClosed => self.core.handle_stream_closed(),
-            };
-
-            if stop {
-                break;
-            }
-        }
-    }
-
-    async fn handle_command(&mut self, command: OrderPlantCommand) {
-        // Disconnect race guard — see `TickerPlant::handle_command`.
-        if self.core.close_requested
-            && !matches!(command, OrderPlantCommand::Close | OrderPlantCommand::Abort)
-        {
-            debug!("order_plant: dropping a command queued after close was requested");
-
+    /// Scope later requests with the login info in `reply`, unless a scope is
+    /// already set. A rejected response has no usable identity in it.
+    fn record_login_info(&mut self, reply: &RequestResult) {
+        if self.login_scope.is_some() {
             return;
         }
 
-        match command {
-            OrderPlantCommand::Close => {
-                self.core.handle_close().await;
+        // A `match` rather than a let-chain: those need Rust 1.88 and the MSRV
+        // is 1.85.
+        if let Ok(frames) = reply {
+            if let Some(response) = frames.first() {
+                match &response.message {
+                    RithmicMessage::ResponseLoginInfo(info) if response.error.is_none() => {
+                        self.login_scope = LoginScope::from_login_info(info);
+                    }
+                    _ => {}
+                }
             }
+        }
+    }
+
+    /// Fill the route cache from the reply to the routes loaded after login.
+    /// A rejected frame is never cached.
+    fn record_trade_routes(&mut self, responses: &[RithmicResponse]) {
+        let loaded = responses
+            .iter()
+            .filter(|response| self.trade_routes.record_response(response))
+            .count();
+
+        match loaded {
+            0 => {
+                error!("order_plant: no trade routes published, orders will fail with NoTradeRoute")
+            }
+            loaded => info!("order_plant: {} trade routes loaded", loaded),
+        }
+    }
+}
+
+impl PlantKind for OrderPlant {
+    type Command = OrderPlantCommand;
+    type Tag = OrderTag;
+
+    const SOURCE: &'static str = "order_plant";
+    const INFRA: SysInfraType = SysInfraType::OrderPlant;
+
+    fn shared(command: OrderPlantCommand) -> Result<PlantCommand, OrderPlantCommand> {
+        match command {
+            OrderPlantCommand::Close => Ok(PlantCommand::Close),
+            OrderPlantCommand::Abort => Ok(PlantCommand::Abort),
             OrderPlantCommand::GetSystemInfo { response_sender } => {
-                self.core.handle_get_system_info(response_sender).await;
+                Ok(PlantCommand::GetSystemInfo { response_sender })
             }
             OrderPlantCommand::Login {
                 config,
                 response_sender,
-            } => {
-                self.core
-                    .handle_login(config, SysInfraType::OrderPlant, response_sender)
-                    .await;
-            }
+            } => Ok(PlantCommand::Login {
+                config,
+                response_sender,
+            }),
             OrderPlantCommand::Logout { response_sender } => {
-                self.core.handle_logout(response_sender).await;
+                Ok(PlantCommand::Logout { response_sender })
             }
-            OrderPlantCommand::AccountList { response_sender } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_account_list(self.login_scope.get());
+            command => Err(command),
+        }
+    }
 
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
+    /// Load the login info and the routes orders are sent on. The routes are
+    /// the snapshot orders route from for the life of the connection. The
+    /// request subscribes, so updates reach the subscription channel, but only
+    /// `record_trade_route` applies one.
+    fn after_login(&mut self, cx: &mut Cx<'_, OrderTag>) {
+        self.loading_login_info = true;
+        self.loading_trade_routes = true;
+
+        cx.send(
+            |api| api.request_login_info(),
+            OrderTag::LoginInfo { caller: None },
+        );
+        cx.send(|api| api.request_trade_routes(true), OrderTag::TradeRoutes);
+    }
+
+    fn is_ready(&self) -> bool {
+        !self.loading_login_info && !self.loading_trade_routes
+    }
+
+    fn on_command(&mut self, command: OrderPlantCommand, cx: &mut Cx<'_, OrderTag>) {
+        match command {
+            OrderPlantCommand::AccountList { response_sender } => {
+                // Warn here too, not just at login: this is where the wider list
+                // comes back.
+                if self.login_scope.is_none() {
+                    warn!("order_plant: no login info retained, listing accounts unscoped");
+                }
+
+                cx.send_for(
+                    |api| api.request_account_list(self.login_scope.as_ref()),
+                    response_sender,
+                );
             }
             OrderPlantCommand::SubscribeOrderUpdates {
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_subscribe_for_order_updates(&account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_subscribe_for_order_updates(&account),
+                response_sender,
+            ),
             OrderPlantCommand::SubscribeBracketUpdates {
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_subscribe_to_bracket_updates(&account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_subscribe_to_bracket_updates(&account),
+                response_sender,
+            ),
             OrderPlantCommand::PlaceBracketOrder {
                 bracket_order,
                 account,
@@ -547,150 +563,83 @@ impl PlantActor for OrderPlant {
                     }
                 };
 
-                let (req_buf, id) = self.core.rithmic_sender_api.request_bracket_order(
-                    *bracket_order,
-                    &account,
-                    self.login_scope.get(),
-                    &trade_route,
+                cx.send_for(
+                    |api| {
+                        api.request_bracket_order(
+                            *bracket_order,
+                            &account,
+                            self.login_scope.as_ref(),
+                            &trade_route,
+                        )
+                    },
+                    response_sender,
                 );
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
             }
             OrderPlantCommand::ModifyOrder {
                 order,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_modify_order(&order, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_modify_order(&order, &account),
+                response_sender,
+            ),
             OrderPlantCommand::CancelOrder {
                 order,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_cancel_order(&order, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_cancel_order(&order, &account),
+                response_sender,
+            ),
             OrderPlantCommand::ModifyStop {
                 adjustment,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_update_stop_bracket_level(&adjustment, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_update_stop_bracket_level(&adjustment, &account),
+                response_sender,
+            ),
             OrderPlantCommand::ModifyTarget {
                 adjustment,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_update_target_bracket_level(&adjustment, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_update_target_bracket_level(&adjustment, &account),
+                response_sender,
+            ),
             OrderPlantCommand::ShowOrders {
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self.core.rithmic_sender_api.request_show_orders(&account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(|api| api.request_show_orders(&account), response_sender),
             OrderPlantCommand::CancelAllOrders {
                 command,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self.core.rithmic_sender_api.request_cancel_all_orders(
-                    &command,
-                    &account,
-                    self.login_scope.get(),
-                );
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_cancel_all_orders(&command, &account, self.login_scope.as_ref()),
+                response_sender,
+            ),
             OrderPlantCommand::GetAccountRmsInfo {
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_account_rms_info(&account, self.login_scope.get());
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_account_rms_info(&account, self.login_scope.as_ref()),
+                response_sender,
+            ),
             OrderPlantCommand::GetProductRmsInfo {
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_product_rms_info(&account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_product_rms_info(&account),
+                response_sender,
+            ),
             OrderPlantCommand::GetTradeRoutes {
                 subscribe_for_updates,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_trade_routes(subscribe_for_updates);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
-            OrderPlantCommand::RecordTradeRoutes(responses) => {
-                let loaded = responses
-                    .iter()
-                    .filter(|response| self.trade_routes.record_response(response))
-                    .count();
-
-                match loaded {
-                    0 => error!(
-                        "order_plant: no trade routes published, orders will fail with NoTradeRoute"
-                    ),
-                    loaded => info!("order_plant: {} trade routes loaded", loaded),
-                }
-            }
+            } => cx.send_for(
+                |api| api.request_trade_routes(subscribe_for_updates),
+                response_sender,
+            ),
             OrderPlantCommand::RecordTradeRouteUpdate(update) => {
                 self.trade_routes.record_update(&update);
             }
@@ -700,59 +649,35 @@ impl PlantActor for OrderPlant {
             } => {
                 let _ = response_sender.send(self.trade_routes.resolve(None, &exchange));
             }
-            OrderPlantCommand::ShowOrderHistoryDates { response_sender } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_show_order_history_dates();
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            OrderPlantCommand::ShowOrderHistoryDates { response_sender } => cx.send_for(
+                |api| api.request_show_order_history_dates(),
+                response_sender,
+            ),
             OrderPlantCommand::ShowOrderHistorySummary {
                 date,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_show_order_history_summary(&date, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_show_order_history_summary(&date, &account),
+                response_sender,
+            ),
             OrderPlantCommand::ShowOrderHistoryDetail {
                 basket_id,
                 date,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_show_order_history_detail(&basket_id, &date, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_show_order_history_detail(&basket_id, &date, &account),
+                response_sender,
+            ),
             OrderPlantCommand::ShowOrderHistory {
                 basket_id,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_show_order_history(basket_id.as_deref(), &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_show_order_history(basket_id.as_deref(), &account),
+                response_sender,
+            ),
             OrderPlantCommand::PlaceOrder {
                 order,
                 account,
@@ -769,14 +694,10 @@ impl PlantActor for OrderPlant {
                     }
                 };
 
-                let (req_buf, id) =
-                    self.core
-                        .rithmic_sender_api
-                        .request_order(&order, &account, &trade_route);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
+                cx.send_for(
+                    |api| api.request_order(&order, &account, &trade_route),
+                    response_sender,
+                );
             }
             OrderPlantCommand::PlaceOcoOrder {
                 order,
@@ -793,261 +714,212 @@ impl PlantActor for OrderPlant {
                     }
                 };
 
-                let (req_buf, id) = match self
-                    .core
-                    .rithmic_sender_api
-                    .request_oco_order(legs, timing, &account)
-                {
-                    Ok(request) => request,
-                    Err(err) => {
-                        let _ = response_sender.send(Err(err));
-                        return;
-                    }
-                };
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
+                cx.try_send_for(
+                    |api| api.request_oco_order(legs, timing, &account),
+                    response_sender,
+                );
             }
             OrderPlantCommand::ShowBrackets {
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self.core.rithmic_sender_api.request_show_brackets(&account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(|api| api.request_show_brackets(&account), response_sender),
             OrderPlantCommand::ShowBracketStops {
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_show_bracket_stops(&account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_show_bracket_stops(&account),
+                response_sender,
+            ),
             OrderPlantCommand::ExitPosition {
                 command,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_exit_position(&command, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_exit_position(&command, &account),
+                response_sender,
+            ),
             OrderPlantCommand::LinkOrders {
                 command,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_link_orders(command, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_link_orders(command, &account),
+                response_sender,
+            ),
             OrderPlantCommand::GetEasyToBorrowList {
                 request_type,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_easy_to_borrow_list(request_type);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_easy_to_borrow_list(request_type),
+                response_sender,
+            ),
             OrderPlantCommand::ModifyOrderReferenceData {
                 command,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_modify_order_reference_data(&command, &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_modify_order_reference_data(&command, &account),
+                response_sender,
+            ),
             OrderPlantCommand::GetOrderSessionConfig {
                 should_defer_request,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_order_session_config(should_defer_request);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_order_session_config(should_defer_request),
+                response_sender,
+            ),
             OrderPlantCommand::ReplayExecutions {
                 start_index_sec,
                 finish_index_sec,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self.core.rithmic_sender_api.request_replay_executions(
-                    start_index_sec,
-                    finish_index_sec,
-                    &account,
-                );
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_replay_executions(start_index_sec, finish_index_sec, &account),
+                response_sender,
+            ),
             OrderPlantCommand::GetUserInfo {
                 user,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_get_user_info(user.as_deref(), &account);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_get_user_info(user.as_deref(), &account),
+                response_sender,
+            ),
             OrderPlantCommand::ShowFillHistory {
                 range,
                 max_record_count,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self.core.rithmic_sender_api.request_show_fill_history(
-                    range,
-                    max_record_count,
-                    &account,
-                );
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_show_fill_history(range, max_record_count, &account),
+                response_sender,
+            ),
             OrderPlantCommand::SubscribeAccountRmsUpdates {
                 subscribe,
                 update_bits,
                 account,
                 response_sender,
-            } => {
-                let (req_buf, id) = self.core.rithmic_sender_api.request_account_rms_updates(
-                    subscribe,
-                    update_bits,
-                    &account,
-                );
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
-            OrderPlantCommand::GetLoginInfo { response_sender } => {
-                let (req_buf, id) = self.core.rithmic_sender_api.request_login_info();
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
-            OrderPlantCommand::ListUnacceptedAgreements { response_sender } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_list_unaccepted_agreements();
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
-            OrderPlantCommand::ListAcceptedAgreements { response_sender } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_list_accepted_agreements();
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_account_rms_updates(subscribe, update_bits, &account),
+                response_sender,
+            ),
+            OrderPlantCommand::GetLoginInfo { response_sender } => cx.send(
+                |api| api.request_login_info(),
+                OrderTag::LoginInfo {
+                    caller: Some(response_sender),
+                },
+            ),
+            OrderPlantCommand::ListUnacceptedAgreements { response_sender } => cx.send_for(
+                |api| api.request_list_unaccepted_agreements(),
+                response_sender,
+            ),
+            OrderPlantCommand::ListAcceptedAgreements { response_sender } => cx.send_for(
+                |api| api.request_list_accepted_agreements(),
+                response_sender,
+            ),
             OrderPlantCommand::AcceptAgreement {
                 agreement_id,
                 market_data_usage_capacity,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_accept_agreement(&agreement_id, market_data_usage_capacity.as_deref());
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| {
+                    api.request_accept_agreement(
+                        &agreement_id,
+                        market_data_usage_capacity.as_deref(),
+                    )
+                },
+                response_sender,
+            ),
             OrderPlantCommand::ShowAgreement {
                 agreement_id,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_show_agreement(&agreement_id);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_show_agreement(&agreement_id),
+                response_sender,
+            ),
             OrderPlantCommand::SetRithmicMrktDataSelfCertStatus {
                 agreement_id,
                 market_data_usage_capacity,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_set_rithmic_mrkt_data_self_cert_status(
+            } => cx.send_for(
+                |api| {
+                    api.request_set_rithmic_mrkt_data_self_cert_status(
                         &agreement_id,
                         &market_data_usage_capacity,
-                    );
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
-            }
+                    )
+                },
+                response_sender,
+            ),
             OrderPlantCommand::ListExchangePermissions {
                 user,
                 response_sender,
-            } => {
-                let (req_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_list_exchange_permissions(&user);
-
-                self.core
-                    .register_and_send(req_buf, id, response_sender)
-                    .await;
+            } => cx.send_for(
+                |api| api.request_list_exchange_permissions(&user),
+                response_sender,
+            ),
+            OrderPlantCommand::Close
+            | OrderPlantCommand::Abort
+            | OrderPlantCommand::GetSystemInfo { .. }
+            | OrderPlantCommand::Login { .. }
+            | OrderPlantCommand::Logout { .. } => {
+                unreachable!("the plant handles the commands every plant shares")
             }
-            OrderPlantCommand::Abort => {
-                unreachable!("Abort is handled in run() before handle_command");
+        }
+    }
+
+    /// A failure here is only logged: the login already succeeded, so it
+    /// leaves later requests unscoped, or orders failing with
+    /// [`RithmicError::NoTradeRoute`], rather than failing the connection.
+    fn on_reply(&mut self, tag: OrderTag, reply: RequestResult) {
+        match tag {
+            OrderTag::LoginInfo { caller } => {
+                self.record_login_info(&reply);
+
+                match caller {
+                    Some(caller) => answer_caller(caller, reply),
+                    None => {
+                        self.loading_login_info = false;
+
+                        match reply.as_ref().map(|frames| frames.first()) {
+                            Ok(Some(response)) => {
+                                if let Some(err) = &response.error {
+                                    warn!(
+                                        "order_plant: login info rejected, account list will be unscoped: {:?}",
+                                        err
+                                    );
+                                }
+                            }
+                            Ok(None) => warn!(
+                                "order_plant: login info unavailable, account list will be unscoped: {:?}",
+                                RithmicError::EmptyResponse
+                            ),
+                            Err(err) => warn!(
+                                "order_plant: login info unavailable, account list will be unscoped: {:?}",
+                                err
+                            ),
+                        }
+                    }
+                }
+            }
+            OrderTag::TradeRoutes => {
+                self.loading_trade_routes = false;
+
+                match reply {
+                    Ok(responses) => {
+                        for rejection in responses.iter().filter_map(|resp| resp.error.as_ref()) {
+                            error!(
+                                "order_plant: trade route request rejected, orders will fail: {}",
+                                rejection
+                            );
+                        }
+
+                        self.record_trade_routes(&responses);
+                    }
+                    Err(err) => error!(
+                        "order_plant: trade routes unavailable, orders will fail: {}",
+                        err
+                    ),
+                }
             }
         }
     }
@@ -1061,8 +933,6 @@ impl PlantActor for OrderPlant {
 /// [`subscription_receiver`](Self::subscription_receiver).
 pub struct RithmicOrderPlantHandle {
     account: Arc<RithmicAccount>,
-    /// Set by the first successful login on any handle from this plant.
-    login_scope: Arc<OnceLock<LoginScope>>,
     sender: mpsc::Sender<OrderPlantCommand>,
     /// Receiver for real-time order updates and responses.
     pub subscription_receiver: SubscriptionFilter,
@@ -1098,26 +968,48 @@ impl RithmicOrderPlantHandle {
     ///
     /// This must be called before sending orders or subscriptions.
     ///
-    /// Also loads the trade routes orders are sent on. If that fails the login still
-    /// succeeds, and orders fail with [`RithmicError::NoTradeRoute`].
+    /// Once the server accepts the login, the plant loads the login info, which
+    /// scopes later requests, and the trade routes orders are sent on. It does
+    /// so even if you stop waiting for this call. A failure to load either is
+    /// only logged: the login still succeeds, and orders fail with
+    /// [`RithmicError::NoTradeRoute`].
+    ///
+    /// The plant logs in once per connection. A call with the same config made
+    /// while that login is in progress waits for it, and one made after it
+    /// returns its response at once. Neither sends anything.
     ///
     /// # Returns
-    /// The login response or an error message
+    /// The login response, once the login info and trade routes are recorded
+    /// or have failed.
+    ///
+    /// # Errors
+    /// * The error the server's refusal carries, usually
+    ///   [`RithmicError::RequestRejected`]. You can log in again.
+    /// * [`RithmicError::LoginConflict`] if this plant is logging in, or is
+    ///   logged in, with a different [`LoginConfig`].
+    /// * [`RithmicError::ConnectionClosed`] if the plant disconnects before
+    ///   the login is done, or has disconnected.
     pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
         self.login_with_config(LoginConfig::default()).await
     }
 
     /// Log in to the Rithmic Order plant with custom configuration
     ///
-    /// This must be called before sending orders or subscriptions.
-    ///
-    /// Loads trade routes on success, like [`login`](Self::login).
+    /// This must be called before sending orders or subscriptions. It loads
+    /// the login info and trade routes, like [`login`](Self::login).
+    /// `aggregated_quotes` does not apply to this plant and is ignored.
     ///
     /// # Arguments
     /// * `config` - Login configuration options. See [`LoginConfig`] for details.
     ///
     /// # Returns
-    /// The login response or an error message
+    /// The login response, once the login info and trade routes are recorded
+    /// or have failed.
+    ///
+    /// # Errors
+    /// As for [`login`](Self::login). [`RithmicError::LoginConflict`] means
+    /// this plant logged in, or is logging in, with a config other than
+    /// `config`.
     pub async fn login_with_config(
         &self,
         config: LoginConfig,
@@ -1143,68 +1035,17 @@ impl RithmicOrderPlantHandle {
             return Err(err);
         }
 
-        // The actor marks itself logged in and adopts the server's heartbeat
-        // period when it sees this reply, so nothing here needs to reach it.
+        // The actor owns the session: it heartbeats, and has loaded the login
+        // info and trade routes, before this reply reaches us.
         if let RithmicMessage::ResponseLogin(resp) = &response.message {
             if let Some(session_id) = &resp.unique_user_id {
                 info!("order_plant: session id: {}", session_id);
             }
         }
 
-        // Non-fatal: the login already succeeded, so failing to get the scope just
-        // leaves later requests unscoped rather than failing the connection.
-        match self.get_login_info().await {
-            Ok(response) => {
-                if let Some(err) = &response.error {
-                    warn!(
-                        "order_plant: login info rejected, account list will be unscoped: {:?}",
-                        err
-                    );
-                }
-            }
-            Err(err) => warn!(
-                "order_plant: login info unavailable, account list will be unscoped: {:?}",
-                err
-            ),
-        }
-
-        self.prime_trade_routes().await;
-
         info!("order_plant: logged in");
 
         Ok(response)
-    }
-
-    /// Load the routes orders are sent on, once, and hand them to the plant.
-    ///
-    /// This is the snapshot orders route from for the life of the connection.
-    /// It subscribes, so updates reach the subscription channel, but only
-    /// [`record_trade_route`](Self::record_trade_route) applies one.
-    ///
-    /// A failure here is only logged: you get [`RithmicError::NoTradeRoute`]
-    /// when placing an order, rather than a bad route.
-    async fn prime_trade_routes(&self) {
-        match self.get_trade_routes(true).await {
-            Ok(responses) => {
-                for rejection in responses.iter().filter_map(|resp| resp.error.as_ref()) {
-                    error!(
-                        "order_plant: trade route request rejected, orders will fail: {}",
-                        rejection
-                    );
-                }
-
-                // Queued on the same channel orders are, so an order placed the
-                // moment `connect` returns is still handled after this.
-                let _ = self
-                    .sender
-                    .send(OrderPlantCommand::RecordTradeRoutes(responses))
-                    .await;
-            }
-            Err(err) => error!(
-                "order_plant: trade routes unavailable, orders will fail: {}",
-                err
-            ),
-        }
     }
 
     /// Disconnect from the Rithmic Order plant
@@ -1220,7 +1061,7 @@ impl RithmicOrderPlantHandle {
 
         let _ = self.sender.send(command).await;
         // Held rather than propagated here so that `Close` is queued either way:
-        // `handle_logout` has already set `close_requested`, so an actor that
+        // the logout has already closed the session, so an actor that
         // never receives `Close` stops sending heartbeats, drops every later
         // command, and never drains its pending requests.
         let outcome = rx.await.map_err(|_| RithmicError::ConnectionClosed);
@@ -1251,11 +1092,6 @@ impl RithmicOrderPlantHandle {
     /// A vector of account list responses or an error message
     pub async fn get_account_list(&self) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
-
-        // Warn here too, not just at login: this is where the wider list comes back.
-        if self.login_scope.get().is_none() {
-            warn!("order_plant: no login info retained, listing accounts unscoped");
-        }
 
         let command = OrderPlantCommand::AccountList {
             response_sender: tx,
@@ -2164,8 +2000,9 @@ impl RithmicOrderPlantHandle {
 
     /// Get login information for the current session
     ///
-    /// [`Self::login`] already calls this once and the first success is what scopes
-    /// later requests, so calling it again returns the response but changes nothing.
+    /// [`Self::login`] already loads this once, and the first success is what
+    /// scopes later requests. Calling it again returns the response, and scopes
+    /// the plant only if no login info has yet.
     ///
     /// # Returns
     /// The login info response or an error message
@@ -2178,22 +2015,7 @@ impl RithmicOrderPlantHandle {
 
         let _ = self.sender.send(command).await;
 
-        let response = await_first_response(rx).await?;
-
-        // A rejected response has no usable identity in it. (A `match` rather than a
-        // let-chain: those need Rust 1.88 and the MSRV is 1.85.)
-        let scope = match &response.message {
-            RithmicMessage::ResponseLoginInfo(info) if response.error.is_none() => {
-                LoginScope::from_login_info(info)
-            }
-            _ => None,
-        };
-
-        if let Some(scope) = scope {
-            let _ = self.login_scope.set(scope);
-        }
-
-        Ok(response)
+        await_first_response(rx).await
     }
 
     /// List unaccepted agreements
@@ -2338,7 +2160,6 @@ impl Clone for RithmicOrderPlantHandle {
     fn clone(&self) -> Self {
         RithmicOrderPlantHandle {
             account: Arc::clone(&self.account),
-            login_scope: Arc::clone(&self.login_scope),
             sender: self.sender.clone(),
             subscription_receiver: self.subscription_receiver.resubscribe(),
         }

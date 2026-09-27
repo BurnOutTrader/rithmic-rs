@@ -1,16 +1,16 @@
+use prost::Message as _;
 use tokio::net::TcpStream;
 
 use super::*;
 use crate::{
-    RithmicRequestError,
-    api::{
-        commands::{RithmicBracketOrder, RithmicOcoOrderLeg},
-        sender_api::LoginUserType,
-    },
-    plants::test_support::{
-        self, Responder, assert_close_still_sent, assert_rejected_after_close,
-        assert_sent_while_open, assert_wire_silent, awaited_caller_outcome, read_wire_request,
-        test_account,
+    api::commands::{RithmicBracketOrder, RithmicOcoOrderLeg},
+    plants::{
+        core::{Effect, Event, PlantCore},
+        session::Session,
+        test_support::{
+            self, Responder, answer, assert_close_still_sent, assert_wire_silent,
+            awaited_caller_outcome, frame, read_wire_request, test_account, write_wire_response,
+        },
     },
     types::{ManualOrAutoEntry, OrderSide, OrderType, TimeInForce},
 };
@@ -22,7 +22,6 @@ fn test_handle() -> (RithmicOrderPlantHandle, mpsc::Receiver<OrderPlantCommand>)
 
     let handle = RithmicOrderPlantHandle {
         account: account.clone(),
-        login_scope: Arc::new(OnceLock::new()),
         sender,
         subscription_receiver: SubscriptionFilter::new(account, subscription_receiver),
     };
@@ -56,38 +55,12 @@ fn leg(tag: &str) -> RithmicOcoOrderLeg {
     }
 }
 
-async fn plant_with_wire() -> (OrderPlant, mpsc::Sender<OrderPlantCommand>, TcpStream) {
-    test_support::plant_with_wire("order_plant", |core, request_receiver| OrderPlant {
-        core,
-        request_receiver,
-        login_scope: Arc::new(OnceLock::new()),
-        trade_routes: TradeRouteCache::default(),
-    })
-    .await
-}
-
-/// Carries an explicit route, so a silent wire below is the close guard rather
-/// than an unroutable order.
-fn place_order(response_sender: Responder) -> OrderPlantCommand {
-    OrderPlantCommand::PlaceOrder {
-        order: RithmicOrder {
-            trade_route: Some("globex".to_string()),
-            ..RithmicOrder::default()
-        },
-        account: test_account(),
-        response_sender,
-    }
-}
-
-fn cancel_order(response_sender: Responder) -> OrderPlantCommand {
-    OrderPlantCommand::CancelOrder {
-        order: RithmicCancelOrder::new()
-            .id("basket-1")
-            .build()
-            .expect("valid cancellation"),
-        account: test_account(),
-        response_sender,
-    }
+async fn plant_with_wire() -> (
+    Plant<OrderPlant>,
+    mpsc::Sender<OrderPlantCommand>,
+    TcpStream,
+) {
+    test_support::plant_with_wire().await
 }
 
 #[tokio::test]
@@ -208,25 +181,9 @@ async fn adjust_target_and_stop_forward_the_bracket_level() {
 }
 
 #[tokio::test]
-async fn place_order_after_close_requested_is_not_sent() {
-    let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
-
-    assert_rejected_after_close(&mut plant, &mut client, place_order).await;
-}
-
-#[tokio::test]
-async fn cancel_order_after_close_requested_is_not_sent() {
-    let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
-
-    assert_rejected_after_close(&mut plant, &mut client, cancel_order).await;
-}
-
-#[tokio::test]
 async fn close_still_reaches_the_wire_after_close_requested() {
     let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
+    plant.core.session = Session::Closing;
 
     assert_close_still_sent(&mut plant, OrderPlantCommand::Close, &mut client).await;
 }
@@ -236,16 +193,15 @@ async fn close_still_reaches_the_wire_after_close_requested() {
 #[tokio::test]
 async fn place_order_through_the_handle_after_close_requested_reports_connection_closed() {
     let (mut plant, command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
+    plant.core.session = Session::Closing;
 
     let account = test_account();
     let handle = RithmicOrderPlantHandle {
         account: Arc::clone(&account),
-        login_scope: Arc::new(OnceLock::new()),
         sender: command_sender,
         subscription_receiver: SubscriptionFilter::new(
             account,
-            plant.core.subscription_sender.subscribe(),
+            plant.subscription_sender.subscribe(),
         ),
     };
 
@@ -273,13 +229,6 @@ async fn place_order_through_the_handle_after_close_requested_reports_connection
 }
 
 #[tokio::test]
-async fn place_order_is_sent_while_the_connection_is_open() {
-    let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-
-    assert_sent_while_open(&mut plant, &mut client, place_order).await;
-}
-
-#[tokio::test]
 async fn disconnect_sends_close_even_when_logout_fails() {
     let (handle, mut command_receiver) = test_handle();
     let call = tokio::spawn(async move { handle.disconnect().await });
@@ -300,34 +249,6 @@ async fn disconnect_sends_close_even_when_logout_fails() {
     ));
 }
 
-fn login_response() -> RithmicResponse {
-    RithmicResponse {
-        request_id: "1".to_string(),
-        message: RithmicMessage::ResponseLogin(crate::rti::ResponseLogin {
-            template_id: 11,
-            rp_code: vec!["0".to_string()],
-            ..crate::rti::ResponseLogin::default()
-        }),
-        is_update: false,
-        has_more: false,
-        multi_response: false,
-        error: None,
-        source: "order_plant".to_string(),
-    }
-}
-
-/// Answer `Login`, leaving the next command for the caller.
-async fn drive_login_to_login_info(command_receiver: &mut mpsc::Receiver<OrderPlantCommand>) {
-    match next_command(command_receiver).await {
-        OrderPlantCommand::Login {
-            response_sender, ..
-        } => {
-            let _ = response_sender.send(Ok(vec![login_response()]));
-        }
-        _ => panic!("expected Login first"),
-    }
-}
-
 /// An IB login. Its FCM and IB differ from the account's so a test can tell which
 /// one reached the wire.
 fn login_info() -> crate::rti::ResponseLoginInfo {
@@ -340,167 +261,248 @@ fn login_info() -> crate::rti::ResponseLoginInfo {
     }
 }
 
-/// A template-301 response as the receiver builds it: a server rejection arrives as
-/// a payload with `error` set, not as `Err`.
-fn login_info_response(error: Option<RithmicError>) -> RithmicResponse {
-    RithmicResponse {
-        request_id: "2".to_string(),
-        message: RithmicMessage::ResponseLoginInfo(login_info()),
-        is_update: false,
-        has_more: false,
-        multi_response: false,
-        error,
-        source: "order_plant".to_string(),
+/// A running actor on a live wire, as `connect` leaves it before any login,
+/// returned with the client half of the socket.
+async fn running_plant() -> (RithmicOrderPlant, TcpStream) {
+    let (mut plant, sender, client) = plant_with_wire().await;
+    plant.core.session = Session::Connected;
+
+    let subscription_sender = plant.subscription_sender.clone();
+    let connection_handle = tokio::spawn(async move { plant.run().await });
+
+    let plant = RithmicOrderPlant {
+        connection_handle,
+        sender,
+        subscription_sender,
+    };
+
+    (plant, client)
+}
+
+/// Reads the next request off the wire, asserting its template.
+async fn read_request<M: prost::Message + Default>(
+    client: &mut TcpStream,
+    template_id: i32,
+    expectation: &str,
+) -> M {
+    let payload = read_wire_request(client).await;
+    let sent = crate::rti::MessageType::decode(&*payload)
+        .expect("every request carries a template id")
+        .template_id;
+
+    assert_eq!(sent, template_id, "{expectation}");
+
+    M::decode(&*payload).expect("the actor serialized this request")
+}
+
+/// A login reply echoing `user_msg`, accepted when `rp_code` is `["0"]`.
+fn login_reply(user_msg: Vec<String>, rp_code: &[&str]) -> crate::rti::ResponseLogin {
+    crate::rti::ResponseLogin {
+        template_id: 11,
+        user_msg,
+        rp_code: rp_code.iter().map(|code| code.to_string()).collect(),
+        unique_user_id: Some("session-1".to_string()),
+        ..Default::default()
     }
 }
 
-/// Take the next command, failing rather than hanging if none arrives.
-async fn next_command(
-    command_receiver: &mut mpsc::Receiver<OrderPlantCommand>,
-) -> OrderPlantCommand {
-    tokio::time::timeout(std::time::Duration::from_secs(5), command_receiver.recv())
-        .await
-        .expect("timed out waiting for a command")
-        .expect("command channel closed")
+async fn read_login_request(client: &mut TcpStream) -> crate::rti::RequestLogin {
+    read_request(client, 10, "login must send the login request").await
 }
 
-/// Answer the `GetLoginInfo` that `login` issues with `response`.
-async fn answer_login_info(
-    command_receiver: &mut mpsc::Receiver<OrderPlantCommand>,
-    response: Result<Vec<RithmicResponse>, RithmicError>,
-) {
-    match next_command(command_receiver).await {
-        OrderPlantCommand::GetLoginInfo { response_sender } => {
-            let _ = response_sender.send(response);
-        }
-        _ => panic!("login must fetch the login info that scopes get_account_list"),
+/// Reads the login request off the wire and answers it with `rp_code`.
+async fn answer_login(client: &mut TcpStream, rp_code: &[&str]) {
+    let login = read_login_request(client).await;
+
+    write_wire_response(client, &login_reply(login.user_msg, rp_code)).await;
+}
+
+/// The two requests the actor sends once its login is accepted.
+struct PostLoginRequests {
+    login_info: crate::rti::RequestLoginInfo,
+    trade_routes: crate::rti::RequestTradeRoutes,
+}
+
+async fn read_post_login_requests(client: &mut TcpStream) -> PostLoginRequests {
+    let login_info = read_request(
+        client,
+        300,
+        "the plant must fetch the login info that scopes get_account_list",
+    )
+    .await;
+    let trade_routes = read_request(
+        client,
+        310,
+        "the plant must fetch the trade routes that orders are routed on",
+    )
+    .await;
+
+    PostLoginRequests {
+        login_info,
+        trade_routes,
     }
 }
 
-/// Answer the `GetTradeRoutes` that `login` issues, returning whether it asked to
-/// stay subscribed to later updates.
+fn rejected() -> Vec<String> {
+    vec!["5".to_string(), "denied".to_string()]
+}
+
+/// The login info the server returns for an accepted login, with `fcm_id`.
+async fn answer_login_info_with(client: &mut TcpStream, user_msg: &[String], fcm_id: &str) {
+    let reply = crate::rti::ResponseLoginInfo {
+        user_msg: user_msg.to_vec(),
+        rp_code: vec!["0".to_string()],
+        fcm_id: Some(fcm_id.to_string()),
+        ..login_info()
+    };
+
+    write_wire_response(client, &reply).await;
+}
+
+async fn answer_login_info(client: &mut TcpStream, request: &crate::rti::RequestLoginInfo) {
+    answer_login_info_with(client, &request.user_msg, "FCM_LOGIN").await;
+}
+
+/// A server refusing the request outright, echoing its id.
+async fn reject(client: &mut TcpStream, user_msg: &[String]) {
+    let reply = crate::rti::Reject {
+        template_id: 75,
+        user_msg: user_msg.to_vec(),
+        rp_code: rejected(),
+    };
+
+    write_wire_response(client, &reply).await;
+}
+
+/// One route per exchange, then the frame that ends the list.
 async fn answer_trade_routes(
-    command_receiver: &mut mpsc::Receiver<OrderPlantCommand>,
-    response: Result<Vec<RithmicResponse>, RithmicError>,
-) -> bool {
-    match next_command(command_receiver).await {
-        OrderPlantCommand::GetTradeRoutes {
-            subscribe_for_updates,
-            response_sender,
-        } => {
-            let _ = response_sender.send(response);
-
-            subscribe_for_updates
-        }
-        _ => panic!("login must fetch the trade routes that orders are routed on"),
-    }
-}
-
-fn trade_route_response(exchange: &str, trade_route: &str) -> RithmicResponse {
-    RithmicResponse {
-        request_id: "3".to_string(),
-        message: RithmicMessage::ResponseTradeRoutes(crate::rti::ResponseTradeRoutes {
+    client: &mut TcpStream,
+    request: &crate::rti::RequestTradeRoutes,
+    routes: &[(&str, &str)],
+) {
+    for (exchange, trade_route) in routes {
+        let part = crate::rti::ResponseTradeRoutes {
             template_id: 311,
+            user_msg: request.user_msg.clone(),
+            rq_handler_rp_code: vec!["0".to_string()],
             exchange: Some(exchange.to_string()),
             trade_route: Some(trade_route.to_string()),
+            is_default: Some(true),
             ..Default::default()
-        }),
-        is_update: false,
-        has_more: false,
-        multi_response: true,
-        error: None,
-        source: "order_plant".to_string(),
-    }
-}
-
-/// Routes are what orders are placed on, so a login must hand the plant the
-/// snapshot it read. Only `record_trade_route` fills the cache after that.
-#[tokio::test]
-async fn login_hands_the_trade_routes_it_read_to_the_plant() {
-    let (handle, mut command_receiver) = test_handle();
-
-    let driver = async {
-        drive_login_to_login_info(&mut command_receiver).await;
-        answer_login_info(&mut command_receiver, Ok(vec![login_info_response(None)])).await;
-
-        let subscribed = answer_trade_routes(
-            &mut command_receiver,
-            Ok(vec![trade_route_response("CME", "globex")]),
-        )
-        .await;
-
-        let recorded = match next_command(&mut command_receiver).await {
-            OrderPlantCommand::RecordTradeRoutes(responses) => responses,
-            _ => panic!("login must hand the routes it read to the plant"),
         };
 
-        (subscribed, recorded)
+        write_wire_response(client, &part).await;
+    }
+
+    let end = crate::rti::ResponseTradeRoutes {
+        template_id: 311,
+        user_msg: request.user_msg.clone(),
+        rp_code: vec!["0".to_string()],
+        ..Default::default()
     };
 
-    let (login, (subscribed, recorded)) = tokio::join!(handle.login(), driver);
+    write_wire_response(client, &end).await;
+}
 
-    assert!(login.is_ok());
-    assert!(
-        subscribed,
-        "a route the server changes later must at least reach subscribers"
-    );
-    assert_eq!(recorded.len(), 1, "the route read has to reach the plant");
+/// Plays the server through a whole login: accepted, with the login info and
+/// a CME route.
+async fn serve_login(client: &mut TcpStream) {
+    answer_login(client, &["0"]).await;
 
-    match &recorded[0].message {
-        RithmicMessage::ResponseTradeRoutes(route) => {
-            assert_eq!(route.exchange.as_deref(), Some("CME"));
-            assert_eq!(route.trade_route.as_deref(), Some("globex"));
-        }
-        _ => panic!("expected the ResponseTradeRoutes frame login read"),
+    let requests = read_post_login_requests(client).await;
+    answer_login_info(client, &requests.login_info).await;
+    answer_trade_routes(client, &requests.trade_routes, &[("CME", "globex")]).await;
+}
+
+/// The account list request `handle` puts on the wire, which shows how the
+/// plant is scoped. The call itself is left unanswered.
+async fn account_list_request(
+    handle: &RithmicOrderPlantHandle,
+    client: &mut TcpStream,
+) -> crate::rti::RequestAccountList {
+    let call = handle.get_account_list();
+    tokio::pin!(call);
+
+    tokio::select! {
+        _ = &mut call => panic!("the account list cannot return before it is answered"),
+        request = read_request(client, 302, "get_account_list must send its request") => request,
     }
 }
 
-/// An unavailable route request must not fail a login that already succeeded — the
-/// orders that follow fail individually with `NoTradeRoute` instead.
-#[tokio::test]
-async fn login_succeeds_when_the_trade_routes_are_unavailable() {
-    let (handle, mut command_receiver) = test_handle();
+/// Fails rather than hangs if `call` is still waiting after five seconds.
+async fn answered<T>(call: tokio::task::JoinHandle<T>) -> T {
+    tokio::time::timeout(std::time::Duration::from_secs(5), call)
+        .await
+        .expect("the call must be answered, not left waiting")
+        .expect("call task panicked")
+}
 
-    let driver = async {
-        drive_login_to_login_info(&mut command_receiver).await;
-        answer_login_info(&mut command_receiver, Ok(vec![login_info_response(None)])).await;
-        answer_trade_routes(&mut command_receiver, Err(RithmicError::EmptyResponse)).await;
+/// Routes are what orders are placed on, so the plant a login leaves behind must
+/// hold the snapshot the login read. Only `record_trade_route` fills the cache
+/// after that.
+#[tokio::test]
+async fn login_hands_the_trade_routes_it_read_to_the_plant() {
+    let (plant, mut client) = running_plant().await;
+    let handle = plant.get_handle(&test_account());
+
+    let server = async {
+        answer_login(&mut client, &["0"]).await;
+
+        let requests = read_post_login_requests(&mut client).await;
+        answer_login_info(&mut client, &requests.login_info).await;
+        answer_trade_routes(&mut client, &requests.trade_routes, &[("CME", "globex")]).await;
+
+        requests.trade_routes.subscribe_for_updates
     };
 
-    let (login, ()) = tokio::join!(handle.login(), driver);
+    let (login, subscribed) = tokio::join!(handle.login(), server);
 
-    assert!(
-        login.is_ok(),
-        "failing trade routes must not fail the login"
+    assert!(login.is_ok());
+    assert_eq!(
+        subscribed,
+        Some(true),
+        "a route the server changes later must at least reach subscribers"
+    );
+    assert_eq!(
+        handle.trade_route_for("CME").await.unwrap(),
+        "globex",
+        "the route read has to reach the plant"
     );
 }
 
 /// Neither failure shape may fail the login or leave a scope behind.
 #[tokio::test]
 async fn login_succeeds_and_stays_unscoped_when_the_login_info_fails() {
-    for response in [
-        Ok(vec![login_info_response(Some(
-            RithmicError::RequestRejected(RithmicRequestError {
-                rp_code: vec!["5".to_string(), "denied".to_string()],
-                code: Some("5".to_string()),
-                message: Some("denied".to_string()),
-            }),
-        ))]),
-        Err(RithmicError::EmptyResponse),
-    ] {
-        let (handle, mut command_receiver) = test_handle();
+    for refused_outright in [false, true] {
+        let (plant, mut client) = running_plant().await;
+        let handle = plant.get_handle(&test_account());
 
-        let driver = async {
-            drive_login_to_login_info(&mut command_receiver).await;
-            answer_login_info(&mut command_receiver, response).await;
-            answer_trade_routes(&mut command_receiver, Ok(vec![])).await;
+        let server = async {
+            answer_login(&mut client, &["0"]).await;
+
+            let requests = read_post_login_requests(&mut client).await;
+
+            if refused_outright {
+                reject(&mut client, &requests.login_info.user_msg).await;
+            } else {
+                let reply = crate::rti::ResponseLoginInfo {
+                    user_msg: requests.login_info.user_msg.clone(),
+                    rp_code: rejected(),
+                    ..login_info()
+                };
+
+                write_wire_response(&mut client, &reply).await;
+            }
+
+            answer_trade_routes(&mut client, &requests.trade_routes, &[]).await;
         };
 
-        let (login, ()) = tokio::join!(handle.login(), driver);
+        let (login, ()) = tokio::join!(handle.login(), server);
         assert!(login.is_ok(), "a failed login info must not fail the login");
 
-        assert!(
-            handle.login_scope.get().is_none(),
+        let account_list = account_list_request(&handle, &mut client).await;
+        assert_eq!(
+            account_list.fcm_id, None,
             "a failed login info must not scope"
         );
     }
@@ -511,68 +513,432 @@ async fn login_succeeds_and_stays_unscoped_when_the_login_info_fails() {
 /// on one, and those must be scoped too.
 #[tokio::test]
 async fn every_handle_from_one_plant_shares_the_login_scope() {
-    let (sender, mut command_receiver) = mpsc::channel(4);
-    let (subscription_sender, _keep_open) = broadcast::channel(4);
-
-    let plant = RithmicOrderPlant {
-        connection_handle: tokio::spawn(async {}),
-        sender,
-        subscription_sender,
-        login_scope: Arc::new(OnceLock::new()),
-    };
+    let (plant, mut client) = running_plant().await;
 
     let logs_in = plant.get_handle(&test_account());
     let never_logs_in = plant.get_handle(&RithmicAccount::new("FCM_B", "IB_B", "ACCOUNT_B"));
 
-    let driver = async {
-        drive_login_to_login_info(&mut command_receiver).await;
-        answer_login_info(&mut command_receiver, Ok(vec![login_info_response(None)])).await;
-        answer_trade_routes(&mut command_receiver, Ok(vec![])).await;
-    };
-
-    let (login, ()) = tokio::join!(logs_in.login(), driver);
+    let (login, ()) = tokio::join!(logs_in.login(), serve_login(&mut client));
     assert!(login.is_ok());
 
-    let scope = never_logs_in
-        .login_scope
-        .get()
-        .expect("a handle that never logged in must still be scoped");
+    let scope = account_list_request(&never_logs_in, &mut client).await;
 
     assert_eq!(scope.fcm_id.as_deref(), Some("FCM_LOGIN"));
     assert_eq!(scope.ib_id.as_deref(), Some("IB_LOGIN"));
-    assert_eq!(scope.user_type, LoginUserType::Ib);
+    assert_eq!(
+        scope.user_type,
+        Some(crate::rti::request_account_list::UserType::Ib.into())
+    );
+}
+
+/// The steps follow an accepted login reply, not anything else the plant sees.
+#[tokio::test]
+async fn a_refused_login_asks_for_neither_login_info_nor_routes() {
+    let (plant, mut client) = running_plant().await;
+    let handle = plant.get_handle(&test_account());
+
+    // A turn that is not a login reply.
+    assert!(handle.trade_route_for("CME").await.is_err());
+
+    let (login, ()) = tokio::join!(handle.login(), answer_login(&mut client, &["7", "bad"]));
+    assert!(matches!(login, Err(RithmicError::RequestRejected(_))));
+
+    assert_wire_silent(&mut client).await;
+}
+
+/// Logins that overlap share the one request, and all of them get its reply.
+#[tokio::test]
+async fn concurrent_logins_send_one_login_request() {
+    let (plant, mut client) = running_plant().await;
+    let first = plant.get_handle(&test_account());
+    let second = plant.get_handle(&RithmicAccount::new("FCM_B", "IB_B", "ACCOUNT_B"));
+
+    let server = async {
+        let login = read_login_request(&mut client).await;
+
+        // Both logins are queued by now; a second request would show here.
+        assert_wire_silent(&mut client).await;
+        write_wire_response(&mut client, &login_reply(login.user_msg, &["0"])).await;
+
+        let requests = read_post_login_requests(&mut client).await;
+        answer_login_info(&mut client, &requests.login_info).await;
+        answer_trade_routes(&mut client, &requests.trade_routes, &[("CME", "globex")]).await;
+    };
+
+    let (first_login, second_login, ()) = tokio::join!(first.login(), second.login(), server);
+
+    let first_login = first_login.expect("the first login must succeed");
+    let second_login = second_login.expect("the joined login must succeed");
+    assert_eq!(first_login.request_id, second_login.request_id);
+
+    assert_wire_silent(&mut client).await;
+}
+
+/// A plant that is logged in answers `login()` with the reply it kept.
+#[tokio::test]
+async fn a_login_on_a_logged_in_plant_returns_the_kept_reply_without_sending() {
+    let (plant, mut client) = running_plant().await;
+    let handle = plant.get_handle(&test_account());
+
+    let (first, ()) = tokio::join!(handle.login(), serve_login(&mut client));
+    let first = first.expect("the login must succeed");
+
+    // Normalised as the plant sends it: the order plant ignores this field.
+    let again = handle
+        .login_with_config(LoginConfig {
+            aggregated_quotes: Some(true),
+            ..LoginConfig::default()
+        })
+        .await
+        .expect("a login with the same config must succeed");
+
+    assert_eq!(again, first);
+    assert_wire_silent(&mut client).await;
+}
+
+/// `disconnect()` fails a login in flight at once, whether it waits on the
+/// login reply or on the login info and routes, rather than leaving it for
+/// replies that may never come.
+#[tokio::test]
+async fn disconnect_fails_a_login_in_flight_at_once() {
+    for reply_accepted in [false, true] {
+        let (plant, mut client) = running_plant().await;
+        let handle = plant.get_handle(&test_account());
+
+        let login = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.login().await }
+        });
+
+        let request = read_login_request(&mut client).await;
+        if reply_accepted {
+            write_wire_response(&mut client, &login_reply(request.user_msg, &["0"])).await;
+            read_post_login_requests(&mut client).await;
+        }
+
+        let disconnect = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.disconnect().await }
+        });
+        let _: crate::rti::RequestLogout =
+            read_request(&mut client, 12, "disconnect must send the logout").await;
+
+        // The logout is not answered, so only the disconnect itself can end it.
+        assert_eq!(answered(login).await, Err(RithmicError::ConnectionClosed));
+
+        handle.abort();
+        disconnect.abort();
+    }
+}
+
+/// A login in flight fails when the plant is aborted or the server hangs up.
+#[tokio::test]
+async fn a_login_in_flight_fails_when_the_connection_ends() {
+    for server_hangs_up in [false, true] {
+        let (plant, mut client) = running_plant().await;
+        let handle = plant.get_handle(&test_account());
+
+        let login = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.login().await }
+        });
+        read_login_request(&mut client).await;
+
+        if server_hangs_up {
+            drop(client);
+        } else {
+            handle.abort();
+        }
+
+        assert_eq!(answered(login).await, Err(RithmicError::ConnectionClosed));
+    }
+}
+
+/// Asking for the login info by hand returns it, and scopes a plant whose own
+/// login info failed. It never replaces a scope already set.
+#[tokio::test]
+async fn get_login_info_scopes_only_a_plant_without_a_scope() {
+    let (plant, mut client) = running_plant().await;
+    let handle = plant.get_handle(&test_account());
+
+    let server = async {
+        answer_login(&mut client, &["0"]).await;
+
+        let requests = read_post_login_requests(&mut client).await;
+        reject(&mut client, &requests.login_info.user_msg).await;
+        answer_trade_routes(&mut client, &requests.trade_routes, &[]).await;
+    };
+    let (login, ()) = tokio::join!(handle.login(), server);
+    assert!(login.is_ok());
+
+    for (fcm_id, scoped) in [("FCM_LOGIN", "FCM_LOGIN"), ("FCM_LATER", "FCM_LOGIN")] {
+        let server = async {
+            let request: crate::rti::RequestLoginInfo =
+                read_request(&mut client, 300, "get_login_info must send its request").await;
+            answer_login_info_with(&mut client, &request.user_msg, fcm_id).await;
+        };
+        let (info, ()) = tokio::join!(handle.get_login_info(), server);
+
+        match info.expect("the caller gets the login info").message {
+            RithmicMessage::ResponseLoginInfo(info) => {
+                assert_eq!(info.fcm_id.as_deref(), Some(fcm_id));
+            }
+            other => panic!("expected the login info, got {other:?}"),
+        }
+
+        let account_list = account_list_request(&handle, &mut client).await;
+        assert_eq!(account_list.fcm_id.as_deref(), Some(scoped));
+    }
+}
+
+/// The order plant's core, with no socket, as `connect` leaves it.
+fn order_core() -> PlantCore<OrderPlant> {
+    test_support::plant_core()
+}
+
+/// The ids of the requests `effects` puts on the wire.
+fn sent_ids(effects: &[Effect]) -> Vec<String> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::Send { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Logs `core` in and has the server accept it. Returns the login's reply
+/// receiver and the ids of the login info and trade routes requests that
+/// followed.
+fn accepted_login(
+    core: &mut PlantCore<OrderPlant>,
+) -> (
+    oneshot::Receiver<Result<Vec<RithmicResponse>, RithmicError>>,
+    String,
+    String,
+) {
+    let (response_sender, rx) = oneshot::channel();
+    let effects = core.on_event(Event::Command(OrderPlantCommand::Login {
+        config: LoginConfig::default(),
+        response_sender,
+    }));
+    let login_id = sent_ids(&effects).remove(0);
+
+    let effects = core.on_event(Event::Frame(frame(&login_reply(vec![login_id], &["0"]))));
+    let ids = sent_ids(&effects);
+    assert_eq!(
+        ids.len(),
+        2,
+        "an accepted login loads the login info and the trade routes"
+    );
+
+    (rx, ids[0].clone(), ids[1].clone())
+}
+
+/// The login info reply to request `id`, with `fcm_id`.
+fn login_info_frame(id: &str, fcm_id: &str) -> RithmicResponse {
+    frame(&crate::rti::ResponseLoginInfo {
+        user_msg: vec![id.to_string()],
+        rp_code: vec!["0".to_string()],
+        fcm_id: Some(fcm_id.to_string()),
+        ..login_info()
+    })
+}
+
+/// The trade routes reply to request `id`: one route for `exchange`, then the
+/// frame that ends the list.
+fn trade_route_frames(id: &str, exchange: &str, trade_route: &str) -> [RithmicResponse; 2] {
+    [
+        frame(&crate::rti::ResponseTradeRoutes {
+            template_id: 311,
+            user_msg: vec![id.to_string()],
+            rq_handler_rp_code: vec!["0".to_string()],
+            exchange: Some(exchange.to_string()),
+            trade_route: Some(trade_route.to_string()),
+            is_default: Some(true),
+            ..Default::default()
+        }),
+        frame(&crate::rti::ResponseTradeRoutes {
+            template_id: 311,
+            user_msg: vec![id.to_string()],
+            rp_code: vec!["0".to_string()],
+            ..Default::default()
+        }),
+    ]
+}
+
+/// The login a caller waits on is answered by the event that settles the last
+/// of the login info and the trade routes, in either order, and not before.
+#[test]
+fn the_core_answers_a_login_once_the_login_info_and_trade_routes_are_answered() {
+    for login_info_first in [true, false] {
+        let mut core = order_core();
+        let (mut rx, login_info_id, trade_routes_id) = accepted_login(&mut core);
+        assert_eq!(answer(&mut rx), None, "nothing is loaded yet");
+
+        let [route, end] = trade_route_frames(&trade_routes_id, "CME", "globex");
+        let mut frames = vec![login_info_frame(&login_info_id, "FCM_LOGIN"), route, end];
+        if !login_info_first {
+            frames.rotate_left(1);
+        }
+
+        let last = frames.pop().unwrap();
+        for frame in frames {
+            core.on_event(Event::Frame(frame));
+            assert_eq!(answer(&mut rx), None, "a load is still outstanding");
+        }
+
+        core.on_event(Event::Frame(last));
+        assert!(matches!(answer(&mut rx), Some(Ok(_))));
+        assert!(matches!(core.session, Session::Ready { .. }));
+    }
+}
+
+/// A load that fails is settled too: the login still succeeds, unscoped and
+/// with no routes.
+#[test]
+fn the_core_answers_a_login_whose_login_info_and_trade_routes_failed() {
+    let mut core = order_core();
+    let (mut rx, login_info_id, trade_routes_id) = accepted_login(&mut core);
+
+    core.on_event(Event::SendFailed(login_info_id));
+    assert_eq!(answer(&mut rx), None, "the trade routes are outstanding");
+
+    core.on_event(Event::Frame(frame(&crate::rti::Reject {
+        template_id: 75,
+        user_msg: vec![trade_routes_id],
+        rp_code: rejected(),
+    })));
+
+    let login = answer(&mut rx).expect("both loads are settled");
+    assert!(matches!(login, Ok(frames) if frames[0].error.is_none()));
+    assert!(core.kind.login_scope.is_none());
+    assert!(core.kind.trade_routes.resolve(None, "CME").is_err());
+}
+
+/// A write that times out while the login info and trade routes load poisons
+/// the sink, so the login fails rather than completing on a dead connection.
+#[test]
+fn the_core_fails_a_preparing_login_whose_write_timed_out() {
+    let mut core = order_core();
+    let (mut rx, login_info_id, _trade_routes_id) = accepted_login(&mut core);
+
+    core.on_event(Event::SendTimedOut(login_info_id));
+
+    assert_eq!(answer(&mut rx), Some(Err(RithmicError::ConnectionClosed)));
+    assert!(matches!(core.session, Session::Connected));
+}
+
+/// A caller that stops waiting once the login reply is in changes nothing:
+/// the plant still loads its scope and routes and finishes the login.
+#[test]
+fn the_core_loads_the_scope_and_routes_for_a_login_nobody_waits_for() {
+    let mut core = order_core();
+    let (rx, login_info_id, trade_routes_id) = accepted_login(&mut core);
+    drop(rx);
+
+    core.on_event(Event::Frame(login_info_frame(&login_info_id, "FCM_LOGIN")));
+    for part in trade_route_frames(&trade_routes_id, "CME", "globex") {
+        core.on_event(Event::Frame(part));
+    }
+
+    let scope = core.kind.login_scope.as_ref().expect("the login scoped it");
+    assert_eq!(scope.fcm_id.as_deref(), Some("FCM_LOGIN"));
+    assert_eq!(
+        core.kind.trade_routes.resolve(None, "CME").unwrap(),
+        "globex"
+    );
+    assert!(matches!(core.session, Session::Ready { .. }));
+}
+
+/// The scope and routes are the plant's own. A login loads them and
+/// `record_trade_route` updates a route; a caller's own `get_login_info` or
+/// `get_trade_routes` reads them without replacing either.
+#[test]
+fn only_the_plant_writes_its_scope_and_routes() {
+    let mut core = order_core();
+    let (_rx, login_info_id, trade_routes_id) = accepted_login(&mut core);
+    core.on_event(Event::Frame(login_info_frame(&login_info_id, "FCM_LOGIN")));
+    for part in trade_route_frames(&trade_routes_id, "CME", "globex") {
+        core.on_event(Event::Frame(part));
+    }
+
+    let (response_sender, mut info) = oneshot::channel();
+    let effects = core.on_event(Event::Command(OrderPlantCommand::GetLoginInfo {
+        response_sender,
+    }));
+    let id = sent_ids(&effects).remove(0);
+    core.on_event(Event::Frame(login_info_frame(&id, "FCM_LATER")));
+    assert!(matches!(answer(&mut info), Some(Ok(_))));
+
+    let (response_sender, mut routes) = oneshot::channel();
+    let effects = core.on_event(Event::Command(OrderPlantCommand::GetTradeRoutes {
+        subscribe_for_updates: false,
+        response_sender,
+    }));
+    let id = sent_ids(&effects).remove(0);
+    for part in trade_route_frames(&id, "CME", "other") {
+        core.on_event(Event::Frame(part));
+    }
+    assert!(matches!(answer(&mut routes), Some(Ok(_))));
+
+    let scope = core.kind.login_scope.as_ref().unwrap();
+    assert_eq!(scope.fcm_id.as_deref(), Some("FCM_LOGIN"));
+    assert_eq!(
+        core.kind.trade_routes.resolve(None, "CME").unwrap(),
+        "globex"
+    );
+
+    let effects = core.on_event(Event::Command(OrderPlantCommand::RecordTradeRouteUpdate(
+        Box::new(crate::rti::TradeRoute {
+            template_id: 350,
+            exchange: Some("CME".to_string()),
+            trade_route: Some("globex-2".to_string()),
+            is_default: Some(true),
+            ..Default::default()
+        }),
+    )));
+    assert!(effects.is_empty(), "applying a route update sends nothing");
+    assert_eq!(
+        core.kind.trade_routes.resolve(None, "CME").unwrap(),
+        "globex-2"
+    );
 }
 
 /// Record the route the server would have published for `exchange`, as a login on
 /// this connection would have left it.
-fn cache_route(plant: &mut OrderPlant, exchange: &str, trade_route: &str) {
+fn cache_route(plant: &mut Plant<OrderPlant>, exchange: &str, trade_route: &str) {
     plant
+        .core
+        .kind
         .trade_routes
         .record(Some(exchange), Some(trade_route), None);
 }
 
 /// A plant actor whose connection has logged in, as `login()` would leave it.
-async fn scoped_plant_with_wire() -> (OrderPlant, mpsc::Sender<OrderPlantCommand>, TcpStream) {
+async fn scoped_plant_with_wire() -> (
+    Plant<OrderPlant>,
+    mpsc::Sender<OrderPlantCommand>,
+    TcpStream,
+) {
     let (mut plant, sender, client) = plant_with_wire().await;
 
     cache_route(&mut plant, "CME", "globex");
 
-    plant
-        .login_scope
-        .set(LoginScope::from_login_info(&login_info()).expect("an IB login is expressible"))
-        .expect("a fresh cell is empty");
+    plant.core.kind.login_scope =
+        Some(LoginScope::from_login_info(&login_info()).expect("an IB login is expressible"));
 
     (plant, sender, client)
 }
 
 /// Feeds one command to the actor and decodes the request it put on the wire.
 async fn sent_request<M: prost::Message + Default>(
-    plant: &mut OrderPlant,
+    plant: &mut Plant<OrderPlant>,
     client: &mut TcpStream,
     build: impl FnOnce(Responder) -> OrderPlantCommand,
 ) -> M {
     let (response_sender, _rx) = oneshot::channel();
-    plant.handle_command(build(response_sender)).await;
+    plant.handle(Event::Command(build(response_sender))).await;
 
     M::decode(&*read_wire_request(client).await).expect("the actor serialized this request")
 }
@@ -894,7 +1260,7 @@ async fn an_unroutable_order_is_refused_before_the_wire() {
         let (mut plant, _sender, mut client) = plant_with_wire().await;
 
         let (response_sender, rx) = oneshot::channel();
-        plant.handle_command(build(response_sender)).await;
+        plant.handle(Event::Command(build(response_sender))).await;
 
         assert!(matches!(
             awaited_caller_outcome(rx).await,
@@ -904,190 +1270,79 @@ async fn an_unroutable_order_is_refused_before_the_wire() {
     }
 }
 
-/// The preflight check answers from the cache and sends nothing, so it is safe to
-/// call before trading opens.
+/// The preflight answers from the cache and sends nothing, so it is safe to call
+/// before trading opens. An exchange with no route fails as its order would.
 #[tokio::test]
-async fn trade_route_for_reports_the_route_an_order_would_take() {
+async fn trade_route_for_answers_from_the_cache_without_sending() {
     let (mut plant, _sender, mut client) = plant_with_wire().await;
-
     cache_route(&mut plant, "CME", "globex");
 
-    let (response_sender, rx) = oneshot::channel();
+    for (exchange, expected) in [("CME", Some("globex")), ("CBOT", None)] {
+        let (response_sender, rx) = oneshot::channel();
+        plant
+            .handle(Event::Command(OrderPlantCommand::TradeRouteFor {
+                exchange: exchange.to_string(),
+                response_sender,
+            }))
+            .await;
 
-    plant
-        .handle_command(OrderPlantCommand::TradeRouteFor {
-            exchange: "CME".to_string(),
-            response_sender,
-        })
-        .await;
-
-    assert_eq!(
-        rx.await
-            .expect("the caller must be answered")
-            .expect("CME is cached"),
-        "globex"
-    );
-    assert_wire_silent(&mut client).await;
-}
-
-/// The server moves a route mid-session and a subscriber hands it back, so the
-/// orders that follow have to take the new one. Applying it sends nothing.
-#[tokio::test]
-async fn a_route_update_handed_back_moves_where_orders_go() {
-    let (mut plant, _sender, mut client) = plant_with_wire().await;
-
-    cache_route(&mut plant, "CME", "globex");
-
-    plant
-        .handle_command(OrderPlantCommand::RecordTradeRouteUpdate(Box::new(
-            crate::rti::TradeRoute {
-                template_id: 350,
-                exchange: Some("CME".to_string()),
-                trade_route: Some("globex-2".to_string()),
-                is_default: Some(true),
-                ..Default::default()
-            },
-        )))
-        .await;
-
-    let (response_sender, rx) = oneshot::channel();
-
-    plant
-        .handle_command(OrderPlantCommand::TradeRouteFor {
-            exchange: "CME".to_string(),
-            response_sender,
-        })
-        .await;
-
-    assert_eq!(
-        rx.await
-            .expect("the caller must be answered")
-            .expect("CME is cached"),
-        "globex-2"
-    );
-    assert_wire_silent(&mut client).await;
-}
-
-/// An exchange with no route fails the preflight the same way placing the order
-/// would, so a caller can gate on it.
-#[tokio::test]
-async fn trade_route_for_fails_where_an_order_would() {
-    let (mut plant, _sender, _client) = plant_with_wire().await;
-
-    cache_route(&mut plant, "CME", "globex");
-
-    let (response_sender, rx) = oneshot::channel();
-
-    plant
-        .handle_command(OrderPlantCommand::TradeRouteFor {
-            exchange: "CBOT".to_string(),
-            response_sender,
-        })
-        .await;
-
-    assert!(matches!(
-        rx.await.expect("the caller must be answered"),
-        Err(RithmicError::NoTradeRoute { .. })
-    ));
-}
-
-/// The command login queues once it has read the routes off the wire. Applying
-/// it is what fills the cache orders resolve against.
-#[tokio::test]
-async fn record_trade_routes_populates_the_cache() {
-    let (mut plant, _sender, _client) = plant_with_wire().await;
-
-    plant
-        .handle_command(OrderPlantCommand::RecordTradeRoutes(vec![
-            trade_route_response("CME", "globex"),
-        ]))
-        .await;
-
-    assert_eq!(plant.trade_routes.resolve(None, "CME").unwrap(), "globex");
-}
-
-/// A rejected route request must not fail the login, and must not leave orders
-/// a route to send on.
-#[tokio::test]
-async fn login_does_not_cache_a_rejected_trade_route() {
-    let (handle, mut command_receiver) = test_handle();
-
-    let driver = async {
-        drive_login_to_login_info(&mut command_receiver).await;
-        answer_login_info(&mut command_receiver, Ok(vec![login_info_response(None)])).await;
-
-        answer_trade_routes(
-            &mut command_receiver,
-            Ok(vec![RithmicResponse {
-                error: Some(RithmicError::ProtocolError("denied".to_string())),
-                ..trade_route_response("CME", "globex")
-            }]),
-        )
-        .await;
-
-        match next_command(&mut command_receiver).await {
-            OrderPlantCommand::RecordTradeRoutes(responses) => responses,
-            _ => panic!("login must hand the routes it read to the plant"),
+        match (awaited_route(rx).await, expected) {
+            (Ok(route), Some(expected)) => assert_eq!(route, expected),
+            (Err(RithmicError::NoTradeRoute { .. }), None) => {}
+            (other, _) => panic!("{exchange}: unexpected answer {other:?}"),
         }
-    };
-
-    let (login, recorded) = tokio::join!(handle.login(), driver);
-
-    assert!(
-        login.is_ok(),
-        "a rejected trade route must not fail the login"
-    );
-
-    let (mut plant, _sender, _client) = plant_with_wire().await;
-    plant
-        .handle_command(OrderPlantCommand::RecordTradeRoutes(recorded))
-        .await;
-
-    assert!(matches!(
-        plant.trade_routes.resolve(None, "CME"),
-        Err(RithmicError::NoTradeRoute { .. })
-    ));
-}
-
-/// Querying the server's routes is a read: it must not change what an order
-/// placed right now would route on.
-#[tokio::test]
-async fn get_trade_routes_does_not_touch_the_cache() {
-    let (mut plant, _sender, _client) = plant_with_wire().await;
-    cache_route(&mut plant, "CME", "globex");
-
-    let (response_sender, _rx) = oneshot::channel();
-
-    plant
-        .handle_command(OrderPlantCommand::GetTradeRoutes {
-            subscribe_for_updates: true,
-            response_sender,
-        })
-        .await;
-
-    assert_eq!(plant.trade_routes.resolve(None, "CME").unwrap(), "globex");
-}
-
-/// The handle-level wrapper: it has to ask the actor and hand back whatever
-/// the actor answers, not just queue the command.
-#[tokio::test]
-async fn trade_route_for_asks_the_actor_and_returns_its_answer() {
-    let (handle, mut command_receiver) = test_handle();
-
-    let call = tokio::spawn(async move { handle.trade_route_for("CME").await });
-
-    match command_receiver.recv().await {
-        Some(OrderPlantCommand::TradeRouteFor {
-            exchange,
-            response_sender,
-        }) => {
-            assert_eq!(exchange, "CME");
-            let _ = response_sender.send(Ok("globex".to_string()));
-        }
-        _ => panic!("expected TradeRouteFor to be queued"),
     }
 
-    assert_eq!(call.await.expect("call task panicked").unwrap(), "globex");
+    assert_wire_silent(&mut client).await;
+}
+
+async fn awaited_route(
+    rx: oneshot::Receiver<Result<String, RithmicError>>,
+) -> Result<String, RithmicError> {
+    rx.await.expect("the caller must be answered")
+}
+
+/// A route request the server refuses, outright or with an error code, must not
+/// fail the login, and must not leave orders a route to send on.
+#[tokio::test]
+async fn login_succeeds_with_no_route_when_the_trade_routes_are_refused() {
+    for refused_outright in [false, true] {
+        let (plant, mut client) = running_plant().await;
+        let handle = plant.get_handle(&test_account());
+
+        let server = async {
+            answer_login(&mut client, &["0"]).await;
+
+            let requests = read_post_login_requests(&mut client).await;
+            answer_login_info(&mut client, &requests.login_info).await;
+
+            if refused_outright {
+                reject(&mut client, &requests.trade_routes.user_msg).await;
+            } else {
+                let refused = crate::rti::ResponseTradeRoutes {
+                    template_id: 311,
+                    user_msg: requests.trade_routes.user_msg.clone(),
+                    rp_code: rejected(),
+                    exchange: Some("CME".to_string()),
+                    trade_route: Some("globex".to_string()),
+                    ..Default::default()
+                };
+
+                write_wire_response(&mut client, &refused).await;
+            }
+        };
+
+        let (login, ()) = tokio::join!(handle.login(), server);
+
+        assert!(
+            login.is_ok(),
+            "a refused trade route must not fail the login"
+        );
+        assert!(matches!(
+            handle.trade_route_for("CME").await,
+            Err(RithmicError::NoTradeRoute { .. })
+        ));
+    }
 }
 
 #[tokio::test]
@@ -1196,58 +1451,32 @@ async fn cancel_all_orders_encodes_auto_placement_by_default() {
     );
 }
 
-/// Validation is the caller's to run: the plant encodes and sends what it is
-/// given. Rithmic is the authority on what it accepts, so an unpriced limit
-/// order goes out and comes back rejected rather than being refused locally.
+/// The plant sends what it is given and Rithmic judges it: an unpriced limit
+/// order goes out rather than being refused here. A market order has no price
+/// by design. Either way an unset price is omitted, not sent as zero.
 #[tokio::test]
-async fn an_unpriced_limit_order_is_still_sent() {
+async fn an_unset_price_is_omitted_on_the_wire() {
     let (mut plant, _sender, mut client) = plant_with_wire().await;
     cache_route(&mut plant, "CME", "globex");
 
-    let request: crate::rti::RequestNewOrder =
-        sent_request(&mut plant, &mut client, |response_sender| {
-            OrderPlantCommand::PlaceOrder {
-                order: RithmicOrder {
-                    exchange: "CME".to_string(),
-                    price_type: OrderType::Limit,
-                    price: None,
-                    ..RithmicOrder::default()
-                },
-                account: test_account(),
-                response_sender,
-            }
-        })
-        .await;
+    for price_type in [OrderType::Limit, OrderType::Market] {
+        let request: crate::rti::RequestNewOrder =
+            sent_request(&mut plant, &mut client, |response_sender| {
+                OrderPlantCommand::PlaceOrder {
+                    order: RithmicOrder {
+                        exchange: "CME".to_string(),
+                        price_type,
+                        price: None,
+                        ..RithmicOrder::default()
+                    },
+                    account: test_account(),
+                    response_sender,
+                }
+            })
+            .await;
 
-    assert_eq!(
-        request.price, None,
-        "an unset price must be omitted, not sent as zero"
-    );
-}
-
-/// A market order carries no price by design — Rithmic's own reference client
-/// places one without ever setting the field.
-#[tokio::test]
-async fn a_market_order_omits_price_on_the_wire() {
-    let (mut plant, _sender, mut client) = plant_with_wire().await;
-    cache_route(&mut plant, "CME", "globex");
-
-    let request: crate::rti::RequestNewOrder =
-        sent_request(&mut plant, &mut client, |response_sender| {
-            OrderPlantCommand::PlaceOrder {
-                order: RithmicOrder {
-                    exchange: "CME".to_string(),
-                    price_type: OrderType::Market,
-                    price: None,
-                    ..RithmicOrder::default()
-                },
-                account: test_account(),
-                response_sender,
-            }
-        })
-        .await;
-
-    assert_eq!(request.price, None);
+        assert_eq!(request.price, None, "{price_type:?}");
+    }
 }
 
 /// The `Auto` attribution for an exit lives in the command's default, and the
@@ -1315,7 +1544,6 @@ async fn subscribe_all_retains_every_account() {
         sender,
         subscription_sender,
         connection_handle: tokio::spawn(async {}),
-        login_scope: Arc::new(OnceLock::new()),
     };
     let mut receiver = plant.subscribe_all();
     for account in ["account-a", "account-b"] {

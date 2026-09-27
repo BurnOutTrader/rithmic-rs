@@ -3,21 +3,25 @@ use tokio::net::TcpStream;
 
 use super::*;
 use crate::{
-    plants::test_support::{
-        self, Responder, assert_close_still_sent, assert_rejected_after_close,
-        assert_sent_while_open, assert_wire_silent, read_wire_request, write_wire_response,
+    plants::{
+        core::Event,
+        session::Session,
+        test_support::{
+            self, Responder, assert_close_still_sent, assert_wire_silent, read_wire_request,
+            write_wire_response,
+        },
     },
     rti::{
         RequestTickBarReplay, RequestTimeBarReplay, ResponseTickBarReplay, ResponseTimeBarReplay,
     },
 };
 
-async fn plant_with_wire() -> (HistoryPlant, mpsc::Sender<HistoryPlantCommand>, TcpStream) {
-    test_support::plant_with_wire("history_plant", |core, request_receiver| HistoryPlant {
-        core,
-        request_receiver,
-    })
-    .await
+async fn plant_with_wire() -> (
+    Plant<HistoryPlant>,
+    mpsc::Sender<HistoryPlantCommand>,
+    TcpStream,
+) {
+    test_support::plant_with_wire().await
 }
 
 fn load_ticks(response_sender: Responder) -> HistoryPlantCommand {
@@ -41,28 +45,19 @@ fn abandoned_load() -> HistoryPlantCommand {
 }
 
 #[tokio::test]
-async fn load_ticks_after_close_requested_is_not_sent() {
-    let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
-
-    assert_rejected_after_close(&mut plant, &mut client, load_ticks).await;
-}
-
-#[tokio::test]
 async fn close_still_reaches_the_wire_after_close_requested() {
     let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
+    plant.core.session = Session::Closing;
 
     assert_close_still_sent(&mut plant, HistoryPlantCommand::Close, &mut client).await;
 }
 
-/// The same contract end to end through the public handle.
 #[tokio::test]
 async fn load_ticks_through_the_handle_after_close_requested_reports_connection_closed() {
     let (mut plant, command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
+    plant.core.session = Session::Closing;
 
-    let subscription_sender = plant.core.subscription_sender.clone();
+    let subscription_sender = plant.subscription_sender.clone();
     let handle = RithmicHistoryPlantHandle {
         sender: command_sender,
         subscription_receiver: subscription_sender.subscribe(),
@@ -86,13 +81,6 @@ async fn load_ticks_through_the_handle_after_close_requested_reports_connection_
     let _ = actor.await;
 }
 
-#[tokio::test]
-async fn load_ticks_is_sent_while_the_connection_is_open() {
-    let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-
-    assert_sent_while_open(&mut plant, &mut client, load_ticks).await;
-}
-
 /// A running plant actor on a live loopback wire, with the handle to drive it.
 async fn running_plant_with_handle() -> (
     RithmicHistoryPlantHandle,
@@ -101,7 +89,7 @@ async fn running_plant_with_handle() -> (
 ) {
     let (mut plant, command_sender, client) = plant_with_wire().await;
 
-    let subscription_sender = plant.core.subscription_sender.clone();
+    let subscription_sender = plant.subscription_sender.clone();
     let handle = RithmicHistoryPlantHandle {
         sender: command_sender,
         subscription_receiver: subscription_sender.subscribe(),
@@ -289,14 +277,19 @@ async fn load_time_bars_all_asks_the_server_to_lift_the_record_cap() {
 
 #[tokio::test]
 async fn load_tick_bars_all_rejects_a_zero_bar_length() {
-    let (handle, _command_receiver) = test_handle();
+    let (handle, mut command_receiver) = test_handle();
 
-    let err = handle
-        .load_tick_bars_all("ESH6".to_string(), "CME".to_string(), 0, 1, 1000)
-        .await
-        .expect_err("a zero bar length must be refused");
+    // No actor is running, so a missing guard fails the timeout, not the suite.
+    let err = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        handle.load_tick_bars_all("ESH6".to_string(), "CME".to_string(), 0, 1, 1000),
+    )
+    .await
+    .expect("must be refused without reaching the actor")
+    .expect_err("a zero bar length must be refused");
 
     assert!(matches!(err, RithmicError::InvalidArgument(_)));
+    assert!(command_receiver.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -450,10 +443,10 @@ async fn disconnect_sends_close_even_when_logout_fails() {
 }
 
 fn handle_for(
-    plant: &HistoryPlant,
+    plant: &Plant<HistoryPlant>,
     command_sender: mpsc::Sender<HistoryPlantCommand>,
 ) -> RithmicHistoryPlantHandle {
-    let subscription_sender = plant.core.subscription_sender.clone();
+    let subscription_sender = plant.subscription_sender.clone();
 
     RithmicHistoryPlantHandle {
         sender: command_sender,
@@ -539,7 +532,7 @@ async fn a_load_dropped_before_the_plant_sends_it_is_never_sent() {
     drop(load);
 
     let command = plant.request_receiver.recv().await.unwrap();
-    plant.handle_command(command).await;
+    plant.handle(Event::Command(command)).await;
 
     assert_wire_silent(&mut client).await;
 }
@@ -697,7 +690,7 @@ async fn a_load_dropped_mid_replay_is_released_without_another_frame() {
     assert!(load.as_mut().now_or_never().is_none());
 
     let command = plant.request_receiver.recv().await.unwrap();
-    plant.handle_command(command).await;
+    plant.handle(Event::Command(command)).await;
     let (_, id) = read_tick_replay(&mut client).await;
 
     // Give the replay a collected part, then fill the command queue.
@@ -746,7 +739,7 @@ async fn a_load_dropped_while_waiting_for_room_in_the_queue_is_never_sent() {
 
     for _ in 0..4 {
         let command = plant.request_receiver.recv().await.unwrap();
-        plant.handle_command(command).await;
+        plant.handle(Event::Command(command)).await;
     }
 
     assert!(plant.request_receiver.try_recv().is_err());

@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 use crate::{
     ConnectStrategy,
@@ -8,10 +8,12 @@ use crate::{
     config::{LoginConfig, RithmicAccount, RithmicConfig},
     error::RithmicError,
     plants::{
+        actor::Plant,
         await_first_response,
-        core::{PlantActor, PlantCore, SelectResult},
+        kind::{Cx, PlantCommand, PlantKind},
         subscription::SubscriptionFilter,
     },
+    request_handler::RequestResult,
     rti::{messages::RithmicMessage, request_login::SysInfraType, request_pn_l_position_updates},
 };
 
@@ -137,7 +139,7 @@ impl RithmicPnlPlant {
             .subscription_capacity
             .unwrap_or(DEFAULT_SUBSCRIPTION_CAPACITY);
         let (sub_tx, _sub_rx) = broadcast::channel(capacity);
-        let mut pnl_plant = PnlPlant::new(req_rx, sub_tx.clone(), config, strategy).await?;
+        let mut pnl_plant = Plant::new(PnlPlant, req_rx, sub_tx.clone(), config, strategy).await?;
 
         let connection_handle = tokio::spawn(async move {
             pnl_plant.run().await;
@@ -185,129 +187,83 @@ impl RithmicPnlPlant {
     }
 }
 
-#[derive(Debug)]
-struct PnlPlant {
-    core: PlantCore,
-    request_receiver: mpsc::Receiver<PnlPlantCommand>,
-}
+/// The PnL plant's commands. It loads nothing after login.
+#[derive(Debug, Default)]
+struct PnlPlant;
 
-impl PnlPlant {
-    async fn new(
-        request_receiver: mpsc::Receiver<PnlPlantCommand>,
-        subscription_sender: broadcast::Sender<RithmicResponse>,
-        config: &RithmicConfig,
-        strategy: ConnectStrategy,
-    ) -> Result<PnlPlant, RithmicError> {
-        let core = PlantCore::new(subscription_sender, config, strategy, "pnl_plant").await?;
-
-        Ok(PnlPlant {
-            core,
-            request_receiver,
-        })
-    }
-}
-
-impl PlantActor for PnlPlant {
+impl PlantKind for PnlPlant {
     type Command = PnlPlantCommand;
+    type Tag = Infallible;
 
-    async fn run(&mut self) {
-        loop {
-            let result = self.core.next_event(&mut self.request_receiver).await;
-            let stop = match result {
-                SelectResult::HeartbeatFired => self.core.send_heartbeat().await,
-                SelectResult::PingFired => self.core.send_ping().await,
-                SelectResult::PingTimeout => self.core.handle_ping_timeout(),
-                SelectResult::Command(cmd) => {
-                    if matches!(cmd, PnlPlantCommand::Abort) {
-                        self.core.handle_abort()
-                    } else {
-                        self.handle_command(cmd).await;
-                        false
-                    }
-                }
-                SelectResult::RithmicMessage(msg) => self.core.handle_rithmic_message(msg).await,
-                SelectResult::StreamClosed => self.core.handle_stream_closed(),
-            };
+    const SOURCE: &'static str = "pnl_plant";
+    const INFRA: SysInfraType = SysInfraType::PnlPlant;
 
-            if stop {
-                break;
-            }
-        }
-    }
-
-    async fn handle_command(&mut self, command: PnlPlantCommand) {
-        // Disconnect race guard — see `TickerPlant::handle_command`.
-        if self.core.close_requested
-            && !matches!(command, PnlPlantCommand::Close | PnlPlantCommand::Abort)
-        {
-            debug!("pnl_plant: dropping a command queued after close was requested");
-
-            return;
-        }
-
+    fn shared(command: PnlPlantCommand) -> Result<PlantCommand, PnlPlantCommand> {
         match command {
-            PnlPlantCommand::Close => {
-                self.core.handle_close().await;
-            }
+            PnlPlantCommand::Close => Ok(PlantCommand::Close),
+            PnlPlantCommand::Abort => Ok(PlantCommand::Abort),
             PnlPlantCommand::GetSystemInfo { response_sender } => {
-                self.core.handle_get_system_info(response_sender).await;
+                Ok(PlantCommand::GetSystemInfo { response_sender })
             }
             PnlPlantCommand::Login {
                 config,
                 response_sender,
-            } => {
-                self.core
-                    .handle_login(config, SysInfraType::PnlPlant, response_sender)
-                    .await;
-            }
+            } => Ok(PlantCommand::Login {
+                config,
+                response_sender,
+            }),
             PnlPlantCommand::Logout { response_sender } => {
-                self.core.handle_logout(response_sender).await;
+                Ok(PlantCommand::Logout { response_sender })
             }
+            command => Err(command),
+        }
+    }
+
+    fn on_command(&mut self, command: PnlPlantCommand, cx: &mut Cx<'_, Infallible>) {
+        match command {
             PnlPlantCommand::SubscribePnlUpdates {
                 account,
                 response_sender,
-            } => {
-                let (subscribe_buf, id) =
-                    self.core.rithmic_sender_api.request_pnl_position_updates(
+            } => cx.send_for(
+                |api| {
+                    api.request_pnl_position_updates(
                         request_pn_l_position_updates::Request::Subscribe,
                         &account,
-                    );
-
-                self.core
-                    .register_and_send(subscribe_buf, id, response_sender)
-                    .await;
-            }
+                    )
+                },
+                response_sender,
+            ),
             PnlPlantCommand::GetPnlPositionSnapshot {
                 account,
                 response_sender,
-            } => {
-                let (snapshot_buf, id) = self
-                    .core
-                    .rithmic_sender_api
-                    .request_pnl_position_snapshot(&account);
-
-                self.core
-                    .register_and_send(snapshot_buf, id, response_sender)
-                    .await;
-            }
+            } => cx.send_for(
+                |api| api.request_pnl_position_snapshot(&account),
+                response_sender,
+            ),
             PnlPlantCommand::UnsubscribePnlUpdates {
                 account,
                 response_sender,
-            } => {
-                let (unsubscribe_buf, id) =
-                    self.core.rithmic_sender_api.request_pnl_position_updates(
+            } => cx.send_for(
+                |api| {
+                    api.request_pnl_position_updates(
                         request_pn_l_position_updates::Request::Unsubscribe,
                         &account,
-                    );
-
-                self.core
-                    .register_and_send(unsubscribe_buf, id, response_sender)
-                    .await;
-            }
-            PnlPlantCommand::Abort => {
-                unreachable!("Abort is handled in run() before handle_command");
+                    )
+                },
+                response_sender,
+            ),
+            PnlPlantCommand::Close
+            | PnlPlantCommand::Abort
+            | PnlPlantCommand::GetSystemInfo { .. }
+            | PnlPlantCommand::Login { .. }
+            | PnlPlantCommand::Logout { .. } => {
+                unreachable!("the plant handles the commands every plant shares")
             }
         }
+    }
+
+    fn on_reply(&mut self, tag: Infallible, _reply: RequestResult) {
+        match tag {}
     }
 }
 
@@ -351,10 +307,22 @@ impl RithmicPnlPlantHandle {
 
     /// Log in to the Rithmic PnL plant
     ///
-    /// This must be called before subscribing to any PnL data
+    /// This must be called before subscribing to any PnL data.
+    ///
+    /// The plant logs in once per connection. A call with the same config made
+    /// while that login is in progress waits for it, and one made after it
+    /// returns its response at once. Neither sends anything.
     ///
     /// # Returns
-    /// The login response or an error message
+    /// The login response, once the server accepts the login.
+    ///
+    /// # Errors
+    /// * The error the server's refusal carries, usually
+    ///   [`RithmicError::RequestRejected`]. You can log in again.
+    /// * [`RithmicError::LoginConflict`] if this plant is logging in, or is
+    ///   logged in, with a different [`LoginConfig`].
+    /// * [`RithmicError::ConnectionClosed`] if the plant disconnects before
+    ///   the login is done, or has disconnected.
     pub async fn login(&self) -> Result<RithmicResponse, RithmicError> {
         self.login_with_config(LoginConfig::default()).await
     }
@@ -362,12 +330,18 @@ impl RithmicPnlPlantHandle {
     /// Log in to the Rithmic PnL plant with custom configuration
     ///
     /// This must be called before subscribing to any PnL data.
+    /// `aggregated_quotes` does not apply to this plant and is ignored.
     ///
     /// # Arguments
     /// * `config` - Login configuration options. See [`LoginConfig`] for details.
     ///
     /// # Returns
-    /// The login response or an error message
+    /// The login response, once the server accepts the login.
+    ///
+    /// # Errors
+    /// As for [`login`](Self::login). [`RithmicError::LoginConflict`] means
+    /// this plant logged in, or is logging in, with a config other than
+    /// `config`.
     pub async fn login_with_config(
         &self,
         config: LoginConfig,
@@ -393,8 +367,8 @@ impl RithmicPnlPlantHandle {
             return Err(err);
         }
 
-        // The actor marks itself logged in and adopts the server's heartbeat
-        // period when it sees this reply, so nothing here needs to reach it.
+        // The actor owns the session: it heartbeats before this reply reaches
+        // us, whether or not anyone is still waiting for it.
         if let RithmicMessage::ResponseLogin(resp) = &response.message {
             if let Some(session_id) = &resp.unique_user_id {
                 info!("pnl_plant: session id: {}", session_id);

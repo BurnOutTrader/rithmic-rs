@@ -1,20 +1,28 @@
+use prost::Message as _;
 use tokio::net::TcpStream;
 
 use super::*;
 use crate::{
-    plants::test_support::{
-        self, Responder, assert_close_still_sent, assert_rejected_after_close,
-        assert_sent_while_open, assert_wire_silent, read_wire_request, write_wire_response,
+    plants::{
+        core::Event,
+        session::Session,
+        test_support::{
+            self, Responder, assert_close_still_sent, assert_wire_silent, read_wire_request,
+            write_wire_response,
+        },
     },
-    rti::request_market_data_update::{Request, UpdateBits},
+    rti::{
+        RequestMarketDataUpdate,
+        request_market_data_update::{Request, UpdateBits},
+    },
 };
 
-async fn plant_with_wire() -> (TickerPlant, mpsc::Sender<TickerPlantCommand>, TcpStream) {
-    test_support::plant_with_wire("ticker_plant", |core, request_receiver| TickerPlant {
-        core,
-        request_receiver,
-    })
-    .await
+async fn plant_with_wire() -> (
+    Plant<TickerPlant>,
+    mpsc::Sender<TickerPlantCommand>,
+    TcpStream,
+) {
+    test_support::plant_with_wire().await
 }
 
 fn subscribe(response_sender: Responder) -> TickerPlantCommand {
@@ -28,28 +36,19 @@ fn subscribe(response_sender: Responder) -> TickerPlantCommand {
 }
 
 #[tokio::test]
-async fn subscribe_after_close_requested_is_not_sent() {
-    let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
-
-    assert_rejected_after_close(&mut plant, &mut client, subscribe).await;
-}
-
-#[tokio::test]
 async fn close_still_reaches_the_wire_after_close_requested() {
     let (mut plant, _command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
+    plant.core.session = Session::Closing;
 
     assert_close_still_sent(&mut plant, TickerPlantCommand::Close, &mut client).await;
 }
 
-/// The same contract end to end through the public handle.
 #[tokio::test]
 async fn subscribe_through_the_handle_after_close_requested_reports_connection_closed() {
     let (mut plant, command_sender, mut client) = plant_with_wire().await;
-    plant.core.close_requested = true;
+    plant.core.session = Session::Closing;
 
-    let subscription_sender = plant.core.subscription_sender.clone();
+    let subscription_sender = plant.subscription_sender.clone();
     let handle = RithmicTickerPlantHandle {
         sender: command_sender,
         subscription_receiver: subscription_sender.subscribe(),
@@ -73,11 +72,21 @@ async fn subscribe_through_the_handle_after_close_requested_reports_connection_c
     let _ = actor.await;
 }
 
+/// Also the control for the silent wire above: an open plant does write.
 #[tokio::test]
-async fn subscribe_is_sent_while_the_connection_is_open() {
+async fn subscribe_sends_the_symbol_and_fields_while_the_connection_is_open() {
     let (mut plant, _command_sender, mut client) = plant_with_wire().await;
+    plant
+        .handle(Event::Command(subscribe(oneshot::channel().0)))
+        .await;
 
-    assert_sent_while_open(&mut plant, &mut client, subscribe).await;
+    let request =
+        RequestMarketDataUpdate::decode(read_wire_request(&mut client).await.as_slice()).unwrap();
+    assert_eq!(request.template_id, 100);
+    assert_eq!(request.symbol.as_deref(), Some("ESH6"));
+    assert_eq!(request.exchange.as_deref(), Some("CME"));
+    assert_eq!(request.request, Some(Request::Subscribe as i32));
+    assert_eq!(request.update_bits, Some(UpdateBits::LastTrade as u32));
 }
 
 fn test_handle() -> (RithmicTickerPlantHandle, mpsc::Receiver<TickerPlantCommand>) {
@@ -120,12 +129,11 @@ async fn disconnect_sends_close_even_when_logout_fails() {
 #[tokio::test]
 async fn a_login_whose_caller_stops_waiting_still_heartbeats() {
     use crate::rti::{RequestHeartbeat, RequestLogin, ResponseLogin};
-    use prost::Message as _;
 
     let (mut plant, command_sender, mut client) = plant_with_wire().await;
-    plant.core.logged_in = false;
+    plant.core.session = Session::Connected;
 
-    let subscription_sender = plant.core.subscription_sender.clone();
+    let subscription_sender = plant.subscription_sender.clone();
     let handle = RithmicTickerPlantHandle {
         sender: command_sender,
         subscription_receiver: subscription_sender.subscribe(),

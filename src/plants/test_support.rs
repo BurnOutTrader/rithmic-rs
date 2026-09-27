@@ -1,7 +1,7 @@
 //! Scaffolding shared by the plant actor tests. Compiled only under `cfg(test)`.
 
 use futures_util::StreamExt;
-use std::{sync::Arc, time::Duration};
+use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::protocol::Role};
 
 use tokio::{
@@ -11,31 +11,129 @@ use tokio::{
 };
 
 use crate::{
-    api::{
-        receiver_api::{RithmicReceiverApi, RithmicResponse},
-        sender_api::RithmicSenderApi,
-    },
-    config::{RithmicAccount, RithmicConfig, RithmicEnv},
+    api::receiver_api::{RithmicReceiverApi, RithmicResponse},
+    config::{LoginConfig, RithmicAccount, RithmicConfig, RithmicEnv},
     error::RithmicError,
-    ping_manager::PingManager,
-    plants::core::{PlantActor, PlantCore},
-    request_handler::RithmicRequestHandler,
-    ws::{PING_TIMEOUT_SECS, get_heartbeat_interval, get_ping_interval},
+    plants::{
+        actor::Plant,
+        core::{Event, PlantCore},
+        kind::{Cx, PlantCommand, PlantKind},
+        session::Session,
+    },
+    request_handler::RequestResult,
+    rti::{ResponseLogin, messages::RithmicMessage, request_login::SysInfraType},
 };
 
 const WIRE_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const WIRE_SILENCE_WINDOW: Duration = Duration::from_millis(200);
 
 /// The response channel every request-bearing plant command carries.
-pub(crate) type Responder = oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>;
+pub(crate) use crate::request_handler::Responder;
+
+/// A plant with nothing of its own: every command it takes is one every plant
+/// shares, and it loads nothing after login.
+#[derive(Debug, Default)]
+pub(crate) struct Bare;
+
+impl PlantKind for Bare {
+    type Command = PlantCommand;
+    type Tag = Infallible;
+
+    const SOURCE: &'static str = "test";
+    const INFRA: SysInfraType = SysInfraType::TickerPlant;
+
+    fn shared(command: PlantCommand) -> Result<PlantCommand, PlantCommand> {
+        Ok(command)
+    }
+
+    fn on_command(&mut self, _command: PlantCommand, _cx: &mut Cx<'_, Infallible>) {
+        unreachable!("every command a bare plant takes is shared")
+    }
+
+    fn on_reply(&mut self, tag: Infallible, _reply: RequestResult) {
+        match tag {}
+    }
+}
+
+pub(crate) fn test_config() -> RithmicConfig {
+    RithmicConfig::builder(RithmicEnv::Demo)
+        .user("test_user")
+        .password("test_password")
+        .url("ws://localhost:9999")
+        .beta_url("ws://localhost:9998")
+        .app_name("test_app")
+        .app_version("1.0")
+        .build()
+        .unwrap()
+}
+
+/// A plant core of kind `K`, connected and not logged in.
+pub(crate) fn plant_core<K: PlantKind + Default>() -> PlantCore<K> {
+    PlantCore::new(K::default(), &test_config())
+}
+
+/// What a caller waiting on `rx` has been told so far, read the way every
+/// handle reads it: a dropped responder is `ConnectionClosed`. `None` while it
+/// is still waiting.
+pub(crate) fn answer(
+    rx: &mut oneshot::Receiver<Result<Vec<RithmicResponse>, RithmicError>>,
+) -> Option<RequestResult> {
+    match rx.try_recv() {
+        Ok(reply) => Some(reply),
+        Err(oneshot::error::TryRecvError::Closed) => Some(Err(RithmicError::ConnectionClosed)),
+        Err(oneshot::error::TryRecvError::Empty) => None,
+    }
+}
+
+/// `message` as the plant reads it off the wire.
+pub(crate) fn frame(message: &impl prost::Message) -> RithmicResponse {
+    let payload = message.encode_to_vec();
+    let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
+    framed.extend(payload);
+
+    let receiver_api = RithmicReceiverApi {
+        source: "test".to_string(),
+    };
+
+    receiver_api
+        .buf_to_message(framed.into())
+        .expect("a test frame decodes")
+}
 
 pub(crate) fn test_account() -> Arc<RithmicAccount> {
     Arc::new(RithmicAccount::new("FCM_A", "IB_A", "ACCOUNT_A"))
 }
 
-/// A logged-in `PlantCore` writing to the server half of a live loopback
-/// connection, returned with the client half so a test can watch the wire.
-pub(crate) async fn core_with_wire(source: &str) -> (PlantCore, TcpStream) {
+/// A session logged in with the default [`LoginConfig`], as a finished
+/// `login()` leaves it.
+pub(crate) fn logged_in_session() -> Session {
+    Session::Ready {
+        config: LoginConfig::default(),
+        login: RithmicResponse {
+            request_id: "1".to_string(),
+            message: RithmicMessage::ResponseLogin(ResponseLogin {
+                template_id: 11,
+                user_msg: vec!["1".to_string()],
+                rp_code: vec!["0".to_string()],
+                ..ResponseLogin::default()
+            }),
+            is_update: false,
+            has_more: false,
+            multi_response: false,
+            error: None,
+            source: "test".to_string(),
+        },
+    }
+}
+
+/// A logged-in plant actor writing to the server half of a live loopback
+/// connection, returned with its command sender and the client half so a test
+/// can watch the wire.
+///
+/// A test that needs the plant as `connect` leaves it sets its core's
+/// `session` to [`Session::Connected`].
+pub(crate) async fn plant_with_wire<K: PlantKind + Default>()
+-> (Plant<K>, mpsc::Sender<K::Command>, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (client, server) =
@@ -47,84 +145,37 @@ pub(crate) async fn core_with_wire(source: &str) -> (PlantCore, TcpStream) {
         WebSocketStream::from_raw_socket(MaybeTlsStream::Plain(server), Role::Server, None).await;
     let (rithmic_sender, rithmic_reader) = server_ws.split();
 
-    let config = RithmicConfig::builder(RithmicEnv::Demo)
-        .user("test_user")
-        .password("test_password")
-        .url("ws://localhost:9999")
-        .beta_url("ws://localhost:9998")
-        .app_name("test_app")
-        .app_version("1.0")
-        .build()
-        .unwrap();
-
-    let (subscription_sender, _sub_rx) = broadcast::channel(16);
-    let rithmic_sender_api = RithmicSenderApi::new(&config);
-
-    let request_handler = RithmicRequestHandler::new();
-
-    let core = PlantCore {
-        config,
-        close_requested: false,
-        interval: get_heartbeat_interval(None),
-        logged_in: true,
-        ping_interval: get_ping_interval(),
-        ping_manager: PingManager::new(PING_TIMEOUT_SECS),
-        request_handler,
-        rithmic_reader,
-        rithmic_receiver_api: RithmicReceiverApi {
-            source: source.to_string(),
-        },
-        rithmic_sender,
-        rithmic_sender_api,
-        subscription_sender,
-    };
-
-    (core, client)
-}
-
-/// A plant actor built on `core_with_wire`, returned with its command sender and
-/// the client half of the socket.
-pub(crate) async fn plant_with_wire<P, C>(
-    source: &str,
-    build: impl FnOnce(PlantCore, mpsc::Receiver<C>) -> P,
-) -> (P, mpsc::Sender<C>, TcpStream) {
-    let (core, client) = core_with_wire(source).await;
     let (command_sender, request_receiver) = mpsc::channel(4);
+    let (subscription_sender, _sub_rx) = broadcast::channel(16);
 
-    (build(core, request_receiver), command_sender, client)
+    let mut core = plant_core::<K>();
+    core.session = logged_in_session();
+
+    let plant = Plant::with_connection(
+        core,
+        request_receiver,
+        subscription_sender,
+        rithmic_sender,
+        rithmic_reader,
+    );
+
+    (plant, command_sender, client)
 }
 
-/// Feeds a request to a plant whose close is already requested: it must put no
-/// bytes on the wire, and its caller must be answered `ConnectionClosed`.
-pub(crate) async fn assert_rejected_after_close<P: PlantActor>(
-    plant: &mut P,
-    client: &mut TcpStream,
-    build: impl FnOnce(Responder) -> P::Command,
-) {
-    let (tx, rx) = oneshot::channel();
-    plant.handle_command(build(tx)).await;
-
-    assert_wire_silent(client).await;
-    assert!(matches!(
-        awaited_caller_outcome(rx).await,
-        Err(RithmicError::ConnectionClosed)
-    ));
-}
-
-/// `Close` carries no responder and must still reach `handle_close()`.
-pub(crate) async fn assert_close_still_sent<P: PlantActor>(
-    plant: &mut P,
-    close: P::Command,
+/// `Close` carries no responder and must still send the close frame.
+pub(crate) async fn assert_close_still_sent<K: PlantKind>(
+    plant: &mut Plant<K>,
+    close: K::Command,
     client: &mut TcpStream,
 ) {
-    plant.handle_command(close).await;
+    plant.handle(Event::Command(close)).await;
 
     assert_wire_wrote(client, "Close must still send the WebSocket Close frame").await;
 }
 
 /// Fails the `Logout` a `disconnect()` queued, then asserts it still queues
-/// `Close`. Without that `Close` the actor is left with `close_requested`
-/// already set: no heartbeats, every later command dropped, pending requests
+/// `Close`. Without that `Close` the actor is left with its session already
+/// closing: no heartbeats, every later command dropped, pending requests
 /// never drained.
 pub(crate) async fn assert_close_follows_failed_logout<C>(
     command_receiver: &mut mpsc::Receiver<C>,
@@ -147,23 +198,6 @@ pub(crate) async fn assert_close_follows_failed_logout<C>(
         is_close(&next),
         "disconnect must send Close even when logout fails"
     );
-}
-
-/// Positive control — the same request on an open connection does reach the
-/// wire, so a silent wire above is evidence rather than a blind harness.
-pub(crate) async fn assert_sent_while_open<P: PlantActor>(
-    plant: &mut P,
-    client: &mut TcpStream,
-    build: impl FnOnce(Responder) -> P::Command,
-) {
-    let (tx, _rx) = oneshot::channel();
-    plant.handle_command(build(tx)).await;
-
-    assert_wire_wrote(
-        client,
-        "an open connection must still serialize the request",
-    )
-    .await;
 }
 
 /// Fails if anything is written to `client` within the silence window.
