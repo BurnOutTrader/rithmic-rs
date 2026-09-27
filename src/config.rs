@@ -213,7 +213,9 @@ impl RithmicAccount {
 /// # Example
 ///
 /// ```no_run
-/// use rithmic_rs::{ConnectStrategy, LoginConfig, RithmicConfig, RithmicEnv, RithmicTickerPlant};
+/// use rithmic_rs::{
+///     ConnectStrategy, LoginConfig, RithmicConfig, RithmicEnv, RithmicTickerPlant,
+/// };
 ///
 /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let config = RithmicConfig::from_env(RithmicEnv::Demo)?;
@@ -600,6 +602,10 @@ impl RithmicConfigBuilder {
     /// The timeout covers the whole retry loop, every attempt and backoff
     /// together, not a single attempt.
     ///
+    /// It bounds only `connect()`. `login()` and requests never time out; wrap
+    /// them in `tokio::time::timeout` (see `examples/request_timeout.rs`).
+    /// Each `connect()` call starts its own clock.
+    ///
     /// Applies to [`ConnectStrategy::Retry`](crate::ConnectStrategy::Retry)
     /// and [`ConnectStrategy::AlternateWithRetry`](crate::ConnectStrategy::AlternateWithRetry),
     /// which keep their usual backoff but cap each attempt's timeout at the
@@ -612,6 +618,7 @@ impl RithmicConfigBuilder {
     ///
     /// ```no_run
     /// use std::time::Duration;
+    ///
     /// use rithmic_rs::{
     ///     ConnectStrategy, RithmicConfigBuilder, RithmicEnv, RithmicTickerPlant,
     /// };
