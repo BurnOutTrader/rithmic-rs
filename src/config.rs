@@ -109,8 +109,9 @@ impl FromStr for RithmicEnv {
 pub enum ConfigError {
     /// Parsing a [`RithmicEnv`] from a string failed. Holds the string.
     InvalidEnvironment(String),
-    /// A configuration value was present but invalid. Today only
-    /// `RITHMIC_REQUEST_TIMEOUT_SECS` is checked this way.
+    /// A configuration value was present but invalid. Nothing returns it
+    /// today: a malformed `RITHMIC_REQUEST_TIMEOUT_SECS`, the one value it
+    /// used to report, is now logged and ignored.
     #[non_exhaustive]
     InvalidValue {
         /// The variable or field name.
@@ -301,9 +302,9 @@ pub struct RithmicConfig {
     pub app_name: String,
     /// Application version string.
     pub app_version: String,
-    /// No longer used. The library does not time out requests; wrap the call
-    /// in [`tokio::time::timeout`] to set a deadline of your own. Still
-    /// readable so existing code keeps compiling; removed in 4.0.0.
+    /// Deprecated and has no effect: the library does not time out requests.
+    /// Wrap the call in [`tokio::time::timeout`] to set a deadline of your
+    /// own. Kept, and still readable, so existing code keeps compiling.
     #[deprecated(
         since = "3.1.0",
         note = "the library no longer times out requests; wrap the call in tokio::time::timeout"
@@ -380,8 +381,9 @@ impl RithmicConfig {
     ///   to. Defaults to "Rithmic Paper Trading" (Demo), "Rithmic 01" (Live),
     ///   or "Rithmic Test" (Test). Set it on Live to select another provider,
     ///   e.g. Thrive Trading.
-    /// - `RITHMIC_REQUEST_TIMEOUT_SECS`: no longer used. Still read and still
-    ///   rejected if it is not plain digits, then ignored.
+    /// - `RITHMIC_REQUEST_TIMEOUT_SECS`: no longer used. A value that is not
+    ///   whole seconds written as plain digits, such as `30s` or `007`, is
+    ///   logged as a warning; any value is ignored.
     ///
     /// # Example
     /// ```no_run
@@ -411,14 +413,19 @@ impl RithmicConfig {
         let app_name = require_env("RITHMIC_APP_NAME")?;
         let app_version = require_env("RITHMIC_APP_VERSION")?;
 
+        // The library ignores this value, so a malformed one is only worth a
+        // warning, not a failed config.
         let request_timeout = match env::var(REQUEST_TIMEOUT_VAR) {
             Err(env::VarError::NotPresent) => DEFAULT_REQUEST_TIMEOUT,
 
-            Err(env::VarError::NotUnicode(_)) => {
-                return Err(ConfigError::InvalidValue {
-                    var: REQUEST_TIMEOUT_VAR.to_string(),
-                    reason: "expected whole seconds, got a non-unicode value".to_string(),
-                });
+            Err(env::VarError::NotUnicode(value)) => {
+                tracing::warn!(
+                    "ignoring {}: the value is not valid unicode ({:?})",
+                    REQUEST_TIMEOUT_VAR,
+                    value
+                );
+
+                DEFAULT_REQUEST_TIMEOUT
             }
 
             Ok(value) => match parse_whole_seconds(value.trim()) {
@@ -427,10 +434,13 @@ impl RithmicConfig {
                 Some(secs) => Duration::from_secs(secs),
 
                 None => {
-                    return Err(ConfigError::InvalidValue {
-                        var: REQUEST_TIMEOUT_VAR.to_string(),
-                        reason: format!("expected whole seconds (digits only), got {value:?}"),
-                    });
+                    tracing::warn!(
+                        "ignoring {}: expected whole seconds (digits only), got {:?}",
+                        REQUEST_TIMEOUT_VAR,
+                        value
+                    );
+
+                    DEFAULT_REQUEST_TIMEOUT
                 }
             },
         };
@@ -586,9 +596,10 @@ impl RithmicConfigBuilder {
         self
     }
 
-    /// No longer used. The library does not time out requests; wrap the call
-    /// in [`tokio::time::timeout`] to set a deadline of your own. The value is
-    /// still recorded on the config and still ignored; removed in 4.0.0.
+    /// Deprecated and has no effect: the library does not time out requests.
+    /// Wrap the call in [`tokio::time::timeout`] to set a deadline of your
+    /// own. The value is still recorded on the config and still ignored. Kept
+    /// so existing code keeps compiling.
     #[deprecated(
         since = "3.1.0",
         note = "the library no longer times out requests; wrap the call in tokio::time::timeout"
@@ -660,6 +671,11 @@ impl RithmicConfigBuilder {
     /// of 10,000 becomes 16,384 slots, about 22 MB per plant. Lower the
     /// capacity to save memory when you run many plants.
     ///
+    /// The memory grows with the capacity, so set it to what your consumer
+    /// needs. A capacity too large to allocate fails in the plant's
+    /// `connect`: the process aborts or is killed for lack of memory, or
+    /// panics for the very largest values.
+    ///
     /// A subscriber that falls more than `capacity` messages behind misses
     /// the oldest ones: its next `recv` returns
     /// [`RecvError::Lagged`](tokio::sync::broadcast::error::RecvError::Lagged)
@@ -712,6 +728,8 @@ impl RithmicConfigBuilder {
 mod tests {
 
     use super::*;
+
+    use crate::request_handler::log_capture::capture;
 
     fn demo_env_vars() -> Vec<(&'static str, Option<&'static str>)> {
         vec![
@@ -831,21 +849,46 @@ mod tests {
     }
 
     #[test]
-    fn from_env_rejects_an_unusable_request_timeout() {
+    fn from_env_warns_about_and_ignores_an_unusable_request_timeout() {
         for value in ["soon", "+30", "-30", "007", "30.5", "30s", ""] {
             let mut vars = demo_env_vars();
             vars.push((REQUEST_TIMEOUT_VAR, Some(value)));
 
             temp_env::with_vars(vars, || {
+                let (config, logged) = capture(|| RithmicConfig::from_env(RithmicEnv::Demo));
+
+                let config = config.unwrap_or_else(|e| panic!("{value:?} failed from_env: {e}"));
+
+                assert_eq!(config.request_timeout, DEFAULT_REQUEST_TIMEOUT, "{value:?}");
                 assert!(
-                    matches!(
-                        RithmicConfig::from_env(RithmicEnv::Demo),
-                        Err(ConfigError::InvalidValue { .. })
-                    ),
-                    "{value:?} should have been rejected"
+                    logged.contains(REQUEST_TIMEOUT_VAR) && logged.contains(&format!("{value:?}")),
+                    "{value:?} should have been logged, got {logged:?}"
                 );
             });
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_env_warns_about_and_ignores_a_non_unicode_request_timeout() {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+
+        let mut vars: Vec<(&str, Option<&OsStr>)> = demo_env_vars()
+            .into_iter()
+            .map(|(var, value)| (var, value.map(OsStr::new)))
+            .collect();
+
+        vars.push((REQUEST_TIMEOUT_VAR, Some(OsStr::from_bytes(b"3\xff0"))));
+
+        temp_env::with_vars(vars, || {
+            let (config, logged) = capture(|| RithmicConfig::from_env(RithmicEnv::Demo));
+
+            assert_eq!(config.unwrap().request_timeout, DEFAULT_REQUEST_TIMEOUT);
+            assert!(
+                logged.contains(REQUEST_TIMEOUT_VAR) && logged.contains("not valid unicode"),
+                "the non-unicode value should have been logged, got {logged:?}"
+            );
+        });
     }
 
     #[test]
