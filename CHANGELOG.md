@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0]
+
 No API breaks. Three behavior changes to check when upgrading:
 
 - A `load_*` replay the server refuses to continue now returns
@@ -25,6 +27,8 @@ No API breaks. Three behavior changes to check when upgrading:
 - `load_time_bar_replay()` and `load_tick_bar_replay()`, which take a full
   request struct.
 - `examples/backfill.rs`: backfill large windows and check you got all of them.
+- `RithmicError::LoginConflict`, returned by a `login()` whose `LoginConfig`
+  differs from the one the plant logged in with.
 
 ### Changed
 
@@ -1236,6 +1240,8 @@ Previous stable release. See git history for earlier changes.
 
 ## Version History Summary
 
+- **3.2.0**: Truncated history replays resume automatically, one login per connection with `LoginConflict`, `subscribe_all()` on the order and PnL plants, configurable subscription capacity and connect retry timeout, request-struct replay loaders, `resume_bars()` deprecated
+- **3.1.0**: The library no longer times out requests; `request_timeout` and `RequestTimeout` deprecated
 - **3.0.0** (2026-08-09): Breaking changes - order commands built with `new()` + setters, crate-owned enums replace fourteen generated re-exports, every order call takes a command struct, prices are `Option<f64>`, seven handle methods renamed, required `request_timeout`; orders route off the exchange's published trade route, uncapped replay loaders, protos at 0.89.0.0
 - **2.0.0**: Breaking changes - typed `RithmicError::RequestRejected`/`ProtocolError` replace `ServerError`, `RithmicResponse::rp_code_error` removed, `RithmicAccount` split from `RithmicConfig`, account-scoped `get_handle()`, `SubscriptionFilter`; advanced bracket orders, semantic ticker subscriptions, bounded WebSocket sends
 - **1.0.0**: Breaking changes - typed `RithmicError` enum, prost 0.14, async-trait removed, `LoginConfig` for advanced login, `await_shutdown()`, non_exhaustive annotations, MSRV 1.85
@@ -1251,7 +1257,8 @@ Previous stable release. See git history for earlier changes.
 - **0.5.0** (2025-11-16): Major stability and API improvements - Connection strategies, unified config, panic fixes, connection health monitoring
 - **0.4.2** (2025-11-15): Previous stable release
 
-[Unreleased]: https://github.com/pbeets/rithmic-rs/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/pbeets/rithmic-rs/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/pbeets/rithmic-rs/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/pbeets/rithmic-rs/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/pbeets/rithmic-rs/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/pbeets/rithmic-rs/compare/v1.0.0...v2.0.0
