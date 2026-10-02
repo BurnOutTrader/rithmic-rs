@@ -217,7 +217,13 @@ where
                 }
 
                 Effect::SendClose => {
-                    self.send_close_best_effort().await;
+                    if self.send_close_best_effort().await {
+                        // Close already drained its callers in the core. A
+                        // timeout still poisons the split slot: finish passive
+                        // effects and drop the owner without another flush.
+                        sink_poisoned = true;
+                        stop = true;
+                    }
 
                     None
                 }
@@ -394,7 +400,10 @@ where
         }
     }
 
-    async fn send_close_best_effort(&mut self) {
+    /// True only if the close write timed out and poisoned the sink. False
+    /// retains best-effort handling, including a logged transport failure;
+    /// it does not establish successful delivery.
+    async fn send_close_best_effort(&mut self) -> bool {
         match send_with_timeout(
             &mut self.rithmic_sender,
             Message::Close(None).into(),
@@ -402,15 +411,17 @@ where
         )
         .await
         {
-            Ok(()) => {}
+            Ok(()) => false,
             Err(WebSocketSendError::Transport(error)) => {
                 warn!(
                     "{}: close send failed: {}",
                     self.rithmic_receiver_api.source, error
                 );
+                false
             }
             Err(WebSocketSendError::Timeout) => {
                 warn!("{}: close send timed out", self.rithmic_receiver_api.source);
+                true
             }
         }
     }
@@ -1143,17 +1154,20 @@ mod tests {
         ));
     }
 
-    /// The close is best effort: a write that fails or times out is logged,
-    /// and the loop still waits for the echo or the ping timeout.
+    /// Transport failure retains best-effort logging. A timeout poisons the
+    /// sink and stops the owner; intentional close remains a silent drain.
     #[tokio::test(start_paused = true)]
-    async fn a_close_write_that_fails_or_times_out_only_logs() {
-        for sink in [MockMessageSink::error(), MockMessageSink::pending()] {
+    async fn close_transport_failure_only_logs_but_timeout_stops_owner() {
+        for (sink, expected_stop) in [
+            (MockMessageSink::error(), false),
+            (MockMessageSink::pending(), true),
+        ] {
             let reader = make_dormant_ws_reader().await;
             let (mut plant, mut sub_rx) = make_test_plant(sink, reader);
 
             let stop = plant.handle(Event::Command(PlantCommand::Close)).await;
 
-            assert!(!stop);
+            assert_eq!(stop, expected_stop);
             assert!(sub_rx.try_recv().is_err(), "nothing is broadcast");
         }
     }

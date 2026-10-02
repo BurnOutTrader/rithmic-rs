@@ -2128,3 +2128,132 @@ async fn handoff_actor_timeout_before_claim_drops_slot_and_never_writes_queued_w
         assert!(matches!(second.await, Err(RithmicError::ConnectionClosed)));
     }
 }
+
+async fn disconnect_close_owner_case(close_times_out: bool) {
+    use crate::ws::handoff::{
+        GuardedSocket,
+        tests::{Controls, Peer},
+    };
+    use futures_util::{StreamExt, poll};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::AsyncWriteExt;
+
+    let (plant, sender, mut wire) = scoped_plant_with_wire().await;
+    let handle = handoff_handle(&plant, sender.clone(), test_account());
+    let queued_handle = handoff_handle(&plant, sender, test_account());
+    let controls = Arc::new(Controls::default());
+    controls.ready.store(true, Ordering::SeqCst);
+    controls.flush_ready.store(true, Ordering::SeqCst);
+    let (logout_observed, logout_readiness) = oneshot::channel();
+    *controls.ready_observed.lock().unwrap() = Some(logout_observed);
+    let (sink, _reader) = GuardedSocket::new(Peer(controls.clone())).split();
+    let mut owner = Plant::with_connection(
+        plant.core,
+        plant.request_receiver,
+        plant.subscription_sender,
+        sink,
+        plant.rithmic_reader,
+    );
+    owner.interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(60),
+    );
+    owner.ping_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+        std::time::Duration::from_secs(60),
+    );
+    let disconnect = tokio::spawn(async move { handle.disconnect().await });
+    let actor = tokio::spawn(async move { owner.run().await });
+    logout_readiness.await.unwrap();
+    let messages = controls.messages.lock().unwrap().clone();
+    assert_eq!(messages.len(), 1);
+    let tokio_tungstenite::tungstenite::Message::Binary(payload) = &messages[0] else {
+        panic!("public disconnect must send Logout first")
+    };
+    let logout = crate::rti::RequestLogout::decode(&payload[4..]).unwrap();
+    assert_eq!(logout.template_id, 12);
+
+    // Hold only the real Close generated after the public method receives its
+    // Logout response. Nothing fabricates an Effect::SendClose or request ID.
+    controls.ready.store(false, Ordering::SeqCst);
+    let (close_observed, close_readiness) = oneshot::channel();
+    *controls.ready_observed.lock().unwrap() = Some(close_observed);
+    write_wire_response(
+        &mut wire,
+        &crate::rti::ResponseLogout {
+            template_id: 13,
+            user_msg: logout.user_msg,
+            rp_code: vec!["0".into()],
+            ..Default::default()
+        },
+    )
+    .await;
+    close_readiness.await.unwrap();
+    assert_eq!(controls.messages.lock().unwrap().len(), 1);
+    assert!(disconnect.await.unwrap().unwrap().error.is_none());
+    let claims = Arc::new(AtomicUsize::new(0));
+    let count = claims.clone();
+    let mut queued = Box::pin(queued_handle.cancel_order_with_handoff(
+        RithmicCancelOrder::new().id("queued-after-close"),
+        MutationHandoff::new(move || {
+            count
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        }),
+    ));
+    assert!(poll!(&mut queued).is_pending());
+
+    if close_times_out {
+        // A real masked Ping is ready on the native reader while Close is
+        // waiting below SplitSink. It must never cause a late Close/Pong flush.
+        wire.write_all(&[0x89, 0x81, 0, 0, 0, 0, 42]).await.unwrap();
+        tokio::time::advance(std::time::Duration::from_secs(10)).await;
+        tokio::task::yield_now().await;
+    }
+    controls.ready.store(true, Ordering::SeqCst);
+    if let Some(waker) = controls.waker.lock().unwrap().take() {
+        waker.wake();
+    }
+    tokio::task::yield_now().await;
+
+    if close_times_out {
+        assert_eq!(
+            *controls.messages.lock().unwrap(),
+            messages,
+            "timed-out Close must not be flushed by a later Ping or queued mutation"
+        );
+        assert!(
+            actor.is_finished(),
+            "real Close timeout must terminate the production run loop"
+        );
+    } else {
+        let sent = controls.messages.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            sent[1],
+            tokio_tungstenite::tungstenite::Message::Close(None)
+        );
+        assert!(
+            !actor.is_finished(),
+            "healthy Close still waits for its peer echo"
+        );
+        // Genuine peer close echo, retaining the preexisting healthy lifecycle.
+        wire.write_all(&[0x88, 0x80, 0, 0, 0, 0]).await.unwrap();
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(5), actor)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(queued.await, Err(RithmicError::ConnectionClosed)));
+    assert_eq!(claims.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn close_send_timeout_stops_actual_disconnect_owner_before_later_ping() {
+    disconnect_close_owner_case(true).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn successful_close_waits_for_echo_and_retains_control_behavior() {
+    disconnect_close_owner_case(false).await;
+}
