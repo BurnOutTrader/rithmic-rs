@@ -119,6 +119,9 @@ pub enum RithmicError {
     /// as a dead connection instead: every pending call, this one included,
     /// fails with [`ConnectionClosed`](Self::ConnectionClosed).
     SendFailed,
+    /// The caller refused this mutation at its one-use native handoff.
+    /// Nothing was sent for this mutation; the connection stays usable.
+    MutationHandoffRefused,
     /// The plant answered with no response at all where one was expected. A
     /// defensive case; you should not see it.
     EmptyResponse,
@@ -206,6 +209,7 @@ impl fmt::Display for RithmicError {
             RithmicError::ConnectionFailed(msg) => write!(f, "connection failed: {msg}"),
             RithmicError::ConnectionClosed => write!(f, "connection closed"),
             RithmicError::SendFailed => write!(f, "WebSocket send failed"),
+            RithmicError::MutationHandoffRefused => write!(f, "mutation handoff refused"),
             RithmicError::EmptyResponse => write!(f, "empty response"),
             RithmicError::RequestTimeout => write!(f, "request timed out"),
 

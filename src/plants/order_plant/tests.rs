@@ -1028,6 +1028,7 @@ async fn a_logged_in_actor_scopes_every_request_that_carries_a_user_type() {
             OrderPlantCommand::PlaceBracketOrder {
                 bracket_order: Box::new(bracket_order()),
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1045,6 +1046,7 @@ async fn a_logged_in_actor_scopes_every_request_that_carries_a_user_type() {
             OrderPlantCommand::CancelAllOrders {
                 command: RithmicCancelAllOrders::default(),
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1143,6 +1145,7 @@ async fn every_order_command_sends_the_route_cached_for_its_exchange() {
                     ..RithmicOrder::default()
                 },
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1155,6 +1158,7 @@ async fn every_order_command_sends_the_route_cached_for_its_exchange() {
             OrderPlantCommand::PlaceBracketOrder {
                 bracket_order: Box::new(bracket_order()),
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1167,6 +1171,7 @@ async fn every_order_command_sends_the_route_cached_for_its_exchange() {
             OrderPlantCommand::PlaceBracketOrder {
                 bracket_order: Box::new(bracket_order_on("NYMEX", None)),
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1224,6 +1229,7 @@ async fn a_per_order_route_overrides_the_cached_one() {
                     ..RithmicOrder::default()
                 },
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1236,6 +1242,7 @@ async fn a_per_order_route_overrides_the_cached_one() {
             OrderPlantCommand::PlaceBracketOrder {
                 bracket_order: Box::new(bracket_order_on("CBOT", Some("cbot-route"))),
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1267,16 +1274,19 @@ async fn an_unroutable_order_is_refused_before_the_wire() {
                 ..RithmicOrder::default()
             },
             account: test_account(),
+            handoff: None,
             response_sender,
         }),
         Box::new(|response_sender| OrderPlantCommand::PlaceBracketOrder {
             bracket_order: Box::new(bracket_order()),
             account: test_account(),
+            handoff: None,
             response_sender,
         }),
         Box::new(|response_sender| OrderPlantCommand::PlaceBracketOrder {
             bracket_order: Box::new(bracket_order_on("CBOT", None)),
             account: test_account(),
+            handoff: None,
             response_sender,
         }),
         // Second leg only: the first resolves, so the whole group must still fail.
@@ -1477,6 +1487,7 @@ async fn cancel_all_orders_encodes_auto_placement_by_default() {
             OrderPlantCommand::CancelAllOrders {
                 command: queued,
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1507,6 +1518,7 @@ async fn an_unset_price_is_omitted_on_the_wire() {
                         ..RithmicOrder::default()
                     },
                     account: test_account(),
+                    handoff: None,
                     response_sender,
                 }
             })
@@ -1566,6 +1578,7 @@ async fn exit_position_encodes_auto_placement_by_default() {
             OrderPlantCommand::ExitPosition {
                 command: queued,
                 account: test_account(),
+                handoff: None,
                 response_sender,
             }
         })
@@ -1619,4 +1632,499 @@ async fn subscribe_all_retains_every_account() {
     }
 
     plant.connection_handle.await.unwrap();
+}
+
+// These fixtures carry only synthetic public-client account and request data.
+#[derive(Clone, Copy, Debug)]
+enum HandoffOperation {
+    Place,
+    Bracket,
+    Modify,
+    Cancel,
+    CancelAll,
+    Exit,
+    Link,
+}
+
+impl HandoffOperation {
+    const ALL: [Self; 7] = [
+        Self::Place,
+        Self::Bracket,
+        Self::Modify,
+        Self::Cancel,
+        Self::CancelAll,
+        Self::Exit,
+        Self::Link,
+    ];
+
+    async fn call(
+        self,
+        handle: RithmicOrderPlantHandle,
+        handoff: MutationHandoff,
+    ) -> Result<(), RithmicError> {
+        match self {
+            Self::Place => handle
+                .place_order_with_handoff(
+                    RithmicOrder::new()
+                        .symbol("ESZ6")
+                        .exchange("CME")
+                        .quantity(1)
+                        .price_type(OrderType::Market),
+                    handoff,
+                )
+                .await
+                .map(|_| ()),
+            Self::Bracket => handle
+                .place_bracket_order_with_handoff(bracket_order(), handoff)
+                .await
+                .map(|_| ()),
+            Self::Modify => handle
+                .modify_order_with_handoff(
+                    RithmicModifyOrder::new()
+                        .id("basket-original")
+                        .symbol("ESZ6")
+                        .exchange("CME")
+                        .quantity(1)
+                        .price_type(OrderType::Market),
+                    handoff,
+                )
+                .await
+                .map(|_| ()),
+            Self::Cancel => handle
+                .cancel_order_with_handoff(RithmicCancelOrder::new().id("basket-original"), handoff)
+                .await
+                .map(|_| ()),
+            Self::CancelAll => handle
+                .cancel_all_orders_with_handoff(RithmicCancelAllOrders::default(), handoff)
+                .await
+                .map(|_| ()),
+            Self::Exit => handle
+                .exit_position_with_handoff(
+                    RithmicExitPosition::new().symbol("ESZ6").exchange("CME"),
+                    handoff,
+                )
+                .await
+                .map(|_| ()),
+            Self::Link => handle
+                .link_orders_with_handoff(
+                    RithmicLinkOrders::new().basket_ids(["basket-original", "basket-other"]),
+                    handoff,
+                )
+                .await
+                .map(|_| ()),
+        }
+    }
+}
+
+fn handoff_handle(
+    plant: &Plant<OrderPlant>,
+    sender: mpsc::Sender<OrderPlantCommand>,
+    account: Arc<RithmicAccount>,
+) -> RithmicOrderPlantHandle {
+    RithmicOrderPlantHandle {
+        account: account.clone(),
+        sender,
+        subscription_receiver: SubscriptionFilter::new(
+            account,
+            plant.subscription_sender.subscribe(),
+        ),
+    }
+}
+
+#[tokio::test]
+async fn handoff_all_seven_public_mutations_refuse_and_leave_peer_healthy() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    for operation in HandoffOperation::ALL {
+        let (mut plant, sender, mut peer) = scoped_plant_with_wire().await;
+        let handle = handoff_handle(&plant, sender, test_account());
+        let available = Arc::new(AtomicBool::new(true));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let flag = available.clone();
+        let count = calls.clone();
+        let handoff = MutationHandoff::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            flag.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        });
+        let call = tokio::spawn(operation.call(handle, handoff));
+        let command = plant.request_receiver.recv().await.unwrap();
+        // Actual public call is queued; revoke before the native actor takes it.
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "{operation:?}");
+        available.store(false, Ordering::SeqCst);
+        plant.handle(Event::Command(command)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{operation:?}");
+        assert_eq!(
+            call.await.unwrap(),
+            Err(RithmicError::MutationHandoffRefused),
+            "{operation:?}"
+        );
+        assert!(!RithmicError::MutationHandoffRefused.is_connection_issue());
+        // The first peer frame must be the subsequent sentinel, never the refused mutation.
+        let sentinel: crate::rti::RequestCancelOrder =
+            sent_request(&mut plant, &mut peer, |response_sender| {
+                OrderPlantCommand::CancelOrder {
+                    order: RithmicCancelOrder::new().id("sentinel"),
+                    account: test_account(),
+                    handoff: None,
+                    response_sender,
+                }
+            })
+            .await;
+        assert_eq!(sentinel.template_id, 316);
+        assert_eq!(sentinel.basket_id.as_deref(), Some("sentinel"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{operation:?}");
+    }
+}
+
+impl HandoffOperation {
+    fn decoded_original_request(self, payload: &[u8]) -> Vec<String> {
+        macro_rules! decoded {
+            ($kind:ident, $template:expr) => {{
+                let request = crate::rti::$kind::decode(payload).unwrap();
+                assert_eq!(request.template_id, $template, "{self:?}");
+                assert_eq!(request.fcm_id.as_deref(), Some("FCM_A"));
+                assert_eq!(request.ib_id.as_deref(), Some("IB_A"));
+                assert_eq!(request.account_id.as_deref(), Some("ACCOUNT_A"));
+                request
+            }};
+        }
+        match self {
+            Self::Place => {
+                let request = decoded!(RequestNewOrder, 312);
+                assert_eq!(request.trade_route.as_deref(), Some("globex"));
+                assert_eq!(request.symbol.as_deref(), Some("ESZ6"));
+                request.user_msg
+            }
+            Self::Bracket => {
+                let request = decoded!(RequestBracketOrder, 330);
+                assert_eq!(request.trade_route.as_deref(), Some("globex"));
+                assert_eq!(request.symbol.as_deref(), Some("ESZ6"));
+                request.user_msg
+            }
+            Self::Modify => {
+                let request = decoded!(RequestModifyOrder, 314);
+                assert_eq!(request.basket_id.as_deref(), Some("basket-original"));
+                request.user_msg
+            }
+            Self::Cancel => {
+                let request = decoded!(RequestCancelOrder, 316);
+                assert_eq!(request.basket_id.as_deref(), Some("basket-original"));
+                request.user_msg
+            }
+            Self::CancelAll => decoded!(RequestCancelAllOrders, 346).user_msg,
+            Self::Exit => {
+                let request = decoded!(RequestExitPosition, 3504);
+                assert_eq!(request.symbol.as_deref(), Some("ESZ6"));
+                assert_eq!(request.exchange.as_deref(), Some("CME"));
+                request.user_msg
+            }
+            Self::Link => {
+                let request = crate::rti::RequestLinkOrders::decode(payload).unwrap();
+                assert_eq!(request.template_id, 344);
+                assert_eq!(request.fcm_id, vec!["FCM_A", "FCM_A"]);
+                assert_eq!(request.ib_id, vec!["IB_A", "IB_A"]);
+                assert_eq!(request.account_id, vec!["ACCOUNT_A", "ACCOUNT_A"]);
+                assert_eq!(request.basket_id, vec!["basket-original", "basket-other"]);
+                request.user_msg
+            }
+        }
+    }
+
+    async fn answer(self, peer: &mut TcpStream, user_msg: Vec<String>) {
+        macro_rules! reply {
+            ($kind:ident, $template:expr) => {
+                write_wire_response(
+                    peer,
+                    &crate::rti::$kind {
+                        template_id: $template,
+                        user_msg,
+                        rp_code: vec!["0".into()],
+                        ..Default::default()
+                    },
+                )
+                .await
+            };
+        }
+        match self {
+            Self::Place => reply!(ResponseNewOrder, 313),
+            Self::Bracket => reply!(ResponseBracketOrder, 331),
+            Self::Modify => reply!(ResponseModifyOrder, 315),
+            Self::Cancel => reply!(ResponseCancelOrder, 317),
+            Self::CancelAll => reply!(ResponseCancelAllOrders, 347),
+            Self::Exit => reply!(ResponseExitPosition, 3505),
+            Self::Link => reply!(ResponseLinkOrders, 345),
+        }
+    }
+}
+
+#[tokio::test]
+async fn handoff_all_seven_claim_once_on_original_account_and_wait_for_original_reply() {
+    use futures_util::StreamExt;
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+    for operation in HandoffOperation::ALL {
+        let (mut plant, sender, mut peer) = scoped_plant_with_wire().await;
+        let handle = handoff_handle(&plant, sender.clone(), test_account());
+        let state = Arc::new(AtomicU8::new(1));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let flag = state.clone();
+        let count = calls.clone();
+        let call = tokio::spawn(operation.call(
+            handle,
+            MutationHandoff::new(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                flag.compare_exchange(1, 2, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            }),
+        ));
+        let command = plant.request_receiver.recv().await.unwrap();
+        // Creating another handle cannot replace the account captured in the queued command.
+        let successor = handoff_handle(
+            &plant,
+            sender,
+            Arc::new(RithmicAccount::new("FCM_B", "IB_B", "ACCOUNT_B")),
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        plant.handle(Event::Command(command)).await;
+        let payload = read_wire_request(&mut peer).await;
+        let original_id = operation.decoded_original_request(&payload);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{operation:?}");
+        assert_eq!(
+            state.compare_exchange(1, 3, Ordering::SeqCst, Ordering::SeqCst),
+            Err(2)
+        );
+        assert!(
+            !call.is_finished(),
+            "handoff is not acknowledgement: {operation:?}"
+        );
+        let other = tokio::spawn(async move {
+            successor
+                .cancel_order(RithmicCancelOrder::new().id("other-account"))
+                .await
+        });
+        let other_command = plant.request_receiver.recv().await.unwrap();
+        plant.handle(Event::Command(other_command)).await;
+        let second =
+            crate::rti::RequestCancelOrder::decode(&*read_wire_request(&mut peer).await).unwrap();
+        assert_eq!(second.template_id, 316);
+        assert_eq!(second.account_id.as_deref(), Some("ACCOUNT_B"));
+        assert_eq!(second.basket_id.as_deref(), Some("other-account"));
+        assert_ne!(original_id, second.user_msg);
+        operation.answer(&mut peer, original_id).await;
+        let message = plant.rithmic_reader.next().await.unwrap();
+        plant.handle_rithmic_message(message).await;
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), call)
+                .await
+                .unwrap()
+                .unwrap(),
+            Ok(()),
+            "{operation:?}"
+        );
+        assert!(
+            !other.is_finished(),
+            "original reply must not settle another account"
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        plant.handle(Event::StreamEnded).await;
+        assert!(matches!(
+            other.await.unwrap(),
+            Err(RithmicError::ConnectionClosed)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn handoff_aborting_queued_caller_does_not_prove_native_mutation_unsent() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (mut plant, sender, mut peer) = scoped_plant_with_wire().await;
+    let handle = handoff_handle(&plant, sender, test_account());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let call = tokio::spawn(HandoffOperation::Cancel.call(
+        handle,
+        MutationHandoff::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            true
+        }),
+    ));
+    let command = plant.request_receiver.recv().await.unwrap();
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    plant.handle(Event::Command(command)).await;
+    HandoffOperation::Cancel.decoded_original_request(&read_wire_request(&mut peer).await);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn handoff_unroutable_public_order_never_claims() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (mut plant, sender, mut peer) = scoped_plant_with_wire().await;
+    let handle = handoff_handle(&plant, sender, test_account());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let call = tokio::spawn(async move {
+        handle
+            .place_order_with_handoff(
+                RithmicOrder::new()
+                    .symbol("UNKNOWN")
+                    .exchange("OTHER")
+                    .quantity(1)
+                    .price_type(OrderType::Market),
+                MutationHandoff::new(move || {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    true
+                }),
+            )
+            .await
+    });
+    let command = plant.request_receiver.recv().await.unwrap();
+    plant.handle(Event::Command(command)).await;
+    assert!(matches!(
+        call.await.unwrap(),
+        Err(RithmicError::NoTradeRoute { .. })
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let sentinel: crate::rti::RequestCancelOrder =
+        sent_request(&mut plant, &mut peer, |response_sender| {
+            OrderPlantCommand::CancelOrder {
+                order: RithmicCancelOrder::new().id("sentinel"),
+                account: test_account(),
+                handoff: None,
+                response_sender,
+            }
+        })
+        .await;
+    assert_eq!(sentinel.basket_id.as_deref(), Some("sentinel"));
+}
+
+#[tokio::test]
+async fn handoff_peer_loss_after_claim_keeps_original_call_unknown_without_replay() {
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+    let (mut plant, sender, mut peer) = scoped_plant_with_wire().await;
+    let handle = handoff_handle(&plant, sender, test_account());
+    let state = Arc::new(AtomicU8::new(1));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let flag = state.clone();
+    let count = calls.clone();
+    let call = tokio::spawn(HandoffOperation::Cancel.call(
+        handle,
+        MutationHandoff::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+            flag.compare_exchange(1, 2, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        }),
+    ));
+    let command = plant.request_receiver.recv().await.unwrap();
+    plant.handle(Event::Command(command)).await;
+    HandoffOperation::Cancel.decoded_original_request(&read_wire_request(&mut peer).await);
+    assert!(!call.is_finished());
+    assert_eq!(
+        state.compare_exchange(1, 3, Ordering::SeqCst, Ordering::SeqCst),
+        Err(2)
+    );
+    drop(peer);
+    plant.handle(Event::StreamEnded).await;
+    assert_eq!(call.await.unwrap(), Err(RithmicError::ConnectionClosed));
+    assert_eq!(state.load(Ordering::SeqCst), 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn handoff_actor_timeout_before_claim_drops_slot_and_never_writes_queued_work() {
+    for claimed_before_timeout in [false, true] {
+        use crate::ws::handoff::{
+            GuardedSocket,
+            tests::{Controls, Peer},
+        };
+        use futures_util::{StreamExt, poll};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (plant, sender, _wire) = scoped_plant_with_wire().await;
+        let first_handle = handoff_handle(&plant, sender.clone(), test_account());
+        let second_handle = handoff_handle(&plant, sender, test_account());
+        let first_calls = Arc::new(AtomicUsize::new(0));
+        let second_calls = Arc::new(AtomicUsize::new(0));
+        let first_count = first_calls.clone();
+        let second_count = second_calls.clone();
+        let mut first = Box::pin(first_handle.cancel_order_with_handoff(
+            RithmicCancelOrder::new().id("first"),
+            MutationHandoff::new(move || {
+                first_count.fetch_add(1, Ordering::SeqCst);
+                true
+            }),
+        ));
+        let mut second = Box::pin(second_handle.cancel_order_with_handoff(
+            RithmicCancelOrder::new().id("second"),
+            MutationHandoff::new(move || {
+                second_count.fetch_add(1, Ordering::SeqCst);
+                true
+            }),
+        ));
+        // Both real public methods have placed their commands in the native queue.
+        assert!(poll!(&mut first).is_pending());
+        assert!(poll!(&mut second).is_pending());
+        let controls = Arc::new(Controls::default());
+        controls
+            .ready
+            .store(claimed_before_timeout, Ordering::SeqCst);
+        controls
+            .flush_ready
+            .store(!claimed_before_timeout, Ordering::SeqCst);
+        let (observed, readiness) = oneshot::channel();
+        *controls.ready_observed.lock().unwrap() = Some(observed);
+        let (sink, _reader) = GuardedSocket::new(Peer(controls.clone())).split();
+        let mut blocked = Plant::with_connection(
+            plant.core,
+            plant.request_receiver,
+            plant.subscription_sender,
+            sink,
+            plant.rithmic_reader,
+        );
+        // Protocol timers become eligible during the ten-second mutation write.
+        blocked.interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(60),
+        );
+        blocked.ping_interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(60),
+        );
+        let actor = tokio::spawn(async move { blocked.run().await });
+        readiness.await.unwrap();
+        assert_eq!(
+            first_calls.load(Ordering::SeqCst),
+            usize::from(claimed_before_timeout)
+        );
+        tokio::time::advance(std::time::Duration::from_secs(10)).await;
+        tokio::task::yield_now().await;
+        // Readiness now permits a write, but the poisoned actor must already have stopped.
+        controls.ready.store(true, Ordering::SeqCst);
+        controls.flush_ready.store(true, Ordering::SeqCst);
+        if let Some(waker) = controls.waker.lock().unwrap().take() {
+            waker.wake();
+        }
+        tokio::task::yield_now().await;
+        assert_eq!(
+            first_calls.load(Ordering::SeqCst),
+            usize::from(claimed_before_timeout),
+            "timed-out split slot must never claim later"
+        );
+        assert_eq!(
+            second_calls.load(Ordering::SeqCst),
+            0,
+            "queued mutation must never claim on a poisoned writer"
+        );
+        assert_eq!(
+            controls.messages.lock().unwrap().len(),
+            usize::from(claimed_before_timeout),
+            "no late mutation, heartbeat, ping or close frame"
+        );
+        assert!(
+            actor.is_finished(),
+            "actual run loop must terminate after its poisoned write"
+        );
+        actor.await.unwrap();
+        assert!(matches!(first.await, Err(RithmicError::ConnectionClosed)));
+        assert!(matches!(second.await, Err(RithmicError::ConnectionClosed)));
+    }
 }

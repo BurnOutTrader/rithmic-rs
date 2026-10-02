@@ -349,7 +349,9 @@ pub mod types;
 /// Utility types for working with Rithmic data.
 pub mod util;
 
+mod mutation_handoff;
 mod ws;
+pub use mutation_handoff::MutationHandoff;
 
 /// The `prost` these types are generated against, so downstream decoding uses
 /// the same version.

@@ -1,3 +1,4 @@
+use crate::MutationHandoff;
 use std::fmt;
 
 use crate::{
@@ -73,6 +74,7 @@ pub(crate) enum Outgoing<T> {
         buf: Vec<u8>,
         id: String,
         tag: Tag<T>,
+        handoff: Option<MutationHandoff>,
     },
     /// Register the replay under `id`, then send `buf` unless its caller
     /// stopped waiting.
@@ -120,6 +122,22 @@ impl<'a, T> Cx<'a, T> {
         self.queue(build, Tag::Caller(responder));
     }
 
+    /// Keep a caller's one-use handoff with the request it built.
+    pub(crate) fn send_for_with_handoff(
+        &mut self,
+        build: impl FnOnce(&mut RithmicSenderApi) -> (Vec<u8>, String),
+        responder: Responder,
+        handoff: Option<MutationHandoff>,
+    ) {
+        let (buf, id) = build(self.api);
+        self.outgoing.push(Outgoing::Request {
+            buf,
+            id,
+            tag: Tag::Caller(responder),
+            handoff,
+        });
+    }
+
     /// Like [`Self::send_for`], for a request that can fail to build. The
     /// error goes to `responder` and nothing is sent.
     pub(crate) fn try_send_for(
@@ -132,6 +150,7 @@ impl<'a, T> Cx<'a, T> {
                 buf,
                 id,
                 tag: Tag::Caller(responder),
+                handoff: None,
             }),
             Err(err) => {
                 let _ = responder.send(Err(err));
@@ -163,6 +182,11 @@ impl<'a, T> Cx<'a, T> {
     ) {
         let (buf, id) = build(self.api);
 
-        self.outgoing.push(Outgoing::Request { buf, id, tag });
+        self.outgoing.push(Outgoing::Request {
+            buf,
+            id,
+            tag,
+            handoff: None,
+        });
     }
 }

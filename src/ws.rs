@@ -1,4 +1,5 @@
 use futures_util::{Sink, SinkExt};
+pub(crate) mod handoff;
 use std::time::Duration;
 use tracing::{info, warn};
 
@@ -8,8 +9,7 @@ use tokio::{
 };
 
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async_with_config,
-    tungstenite::{Error, Message},
+    MaybeTlsStream, WebSocketStream, connect_async_with_config, tungstenite::Error,
 };
 
 /// Number of seconds between heartbeats sent to the server when the login
@@ -64,9 +64,9 @@ pub enum ConnectStrategy {
 
 /// Error returned when a bounded WebSocket send does not complete.
 #[derive(Debug)]
-pub(crate) enum WebSocketSendError {
+pub(crate) enum WebSocketSendError<E = Error> {
     /// The underlying sink returned an error before the timeout elapsed.
-    Transport(Error),
+    Transport(E),
     /// The send future did not complete within the configured timeout.
     Timeout,
 }
@@ -76,13 +76,13 @@ pub(crate) enum WebSocketSendError {
 ///
 /// On `Timeout` the message may still sit in the sink's buffer, so treat the
 /// sink as poisoned and do not write to it again.
-pub(crate) async fn send_with_timeout<S>(
+pub(crate) async fn send_with_timeout<S, Item>(
     sink: &mut S,
-    msg: Message,
+    msg: Item,
     timeout_duration: Duration,
-) -> Result<(), WebSocketSendError>
+) -> Result<(), WebSocketSendError<S::Error>>
 where
-    S: Sink<Message, Error = Error> + Unpin,
+    S: Sink<Item> + Unpin,
 {
     match timeout(timeout_duration, sink.send(msg)).await {
         Ok(Ok(())) => Ok(()),
@@ -267,6 +267,7 @@ pub(crate) async fn connect_with_strategy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio_tungstenite::tungstenite::Message;
 
     use std::{
         pin::Pin,

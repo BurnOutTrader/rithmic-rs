@@ -26,6 +26,7 @@
 //! as a [`PendingReplay`](crate::request_handler::PendingReplay), since the
 //! server can cut them short and continue them.
 
+use crate::MutationHandoff;
 use std::{mem, time::Duration};
 use tracing::{debug, error, info, warn};
 
@@ -67,6 +68,8 @@ pub(crate) enum Event<C> {
     Sent(String),
     /// The write of request `id` failed. The connection may still be up.
     SendFailed(String),
+    /// This request was refused before its native start_send.
+    MutationHandoffRefused(String),
     /// The write of request `id` timed out, so the sink is poisoned.
     SendTimedOut(String),
     /// The connection is dead. `error` is reported to subscribers under `id`.
@@ -81,7 +84,11 @@ pub(crate) enum Event<C> {
 pub(crate) enum Effect {
     /// Write request `id`, and report how it went with [`Event::Sent`],
     /// [`Event::SendFailed`] or [`Event::SendTimedOut`].
-    Send { id: String, frame: Vec<u8> },
+    Send {
+        id: String,
+        frame: Vec<u8>,
+        handoff: Option<MutationHandoff>,
+    },
     /// Write a heartbeat. Nothing waits on its reply.
     Heartbeat(Vec<u8>),
     /// Write a WebSocket ping.
@@ -149,6 +156,14 @@ impl<K: PlantKind> PlantCore<K> {
             Event::StreamEnded => self.on_stream_ended(),
             Event::Sent(id) => self.request_handler.mark_sent(&id),
             Event::SendFailed(id) => self.on_send_failed(&id),
+            Event::MutationHandoffRefused(id) => {
+                if let Some((tag, reply)) = self
+                    .request_handler
+                    .fail_request(&id, RithmicError::MutationHandoffRefused)
+                {
+                    self.dispatch(tag, reply);
+                }
+            }
             Event::SendTimedOut(id) => self.on_send_timed_out(&id),
 
             Event::ConnectionLost { id, error } => {
@@ -189,7 +204,7 @@ impl<K: PlantKind> PlantCore<K> {
 
             Ok(PlantCommand::GetSystemInfo { response_sender }) => {
                 let (buf, id) = self.sender_api.request_rithmic_system_info();
-                self.register_and_send(buf, id, Tag::Caller(response_sender));
+                self.register_and_send(buf, id, Tag::Caller(response_sender), None);
             }
 
             Ok(PlantCommand::Login {
@@ -212,13 +227,22 @@ impl<K: PlantKind> PlantCore<K> {
     fn send_outgoing(&mut self, outgoing: Vec<Outgoing<K::Tag>>) {
         for request in outgoing {
             match request {
-                Outgoing::Request { buf, id, tag } => self.register_and_send(buf, id, tag),
+                Outgoing::Request {
+                    buf,
+                    id,
+                    tag,
+                    handoff,
+                } => self.register_and_send(buf, id, tag, handoff),
 
                 Outgoing::Replay { buf, id, replay } => {
                     // Nothing is sent for a replay whose caller stopped
                     // waiting while it was queued.
                     if self.request_handler.register_replay(id.clone(), replay) {
-                        self.effects.push(Effect::Send { id, frame: buf });
+                        self.effects.push(Effect::Send {
+                            id,
+                            frame: buf,
+                            handoff: None,
+                        });
                     }
                 }
             }
@@ -226,9 +250,19 @@ impl<K: PlantKind> PlantCore<K> {
     }
 
     /// Register `tag` under `id`, then send `buf`.
-    fn register_and_send(&mut self, buf: Vec<u8>, id: String, tag: Tag<K::Tag>) {
+    fn register_and_send(
+        &mut self,
+        buf: Vec<u8>,
+        id: String,
+        tag: Tag<K::Tag>,
+        handoff: Option<MutationHandoff>,
+    ) {
         self.request_handler.register_request(id.clone(), tag);
-        self.effects.push(Effect::Send { id, frame: buf });
+        self.effects.push(Effect::Send {
+            id,
+            frame: buf,
+            handoff,
+        });
     }
 
     fn emit_connection_health_event(&mut self, request_id: &str, error: RithmicError) {
@@ -296,9 +330,9 @@ impl<K: PlantKind> PlantCore<K> {
     /// poisoned: broadcast `ConnectionError` and fail every pending request
     /// now, since a half-open TCP connection may never show up on the reader.
     ///
-    /// The session is not closed: the loop stops when the next ping fails to
-    /// go out, and a closed session would skip that ping. A preparing login
-    /// fails first, so its loads failing below cannot complete it.
+    /// The actor stops after delivering these failures and health effects;
+    /// it never flushes the poisoned sink with a later protocol write. A
+    /// preparing login fails first, so its loads cannot complete it.
     fn on_send_timed_out(&mut self, request_id: &str) {
         self.emit_connection_health_event(
             request_id,
@@ -480,6 +514,7 @@ impl<K: PlantKind> PlantCore<K> {
         self.effects.push(Effect::Send {
             id: resume.request_id,
             frame: buf,
+            handoff: None,
         });
     }
 
@@ -621,7 +656,7 @@ impl<K: PlantKind> PlantCore<K> {
             requesters: vec![response_sender],
         };
 
-        self.register_and_send(login_buf, id, Tag::Login);
+        self.register_and_send(login_buf, id, Tag::Login, None);
     }
 
     fn logout(&mut self, response_sender: Responder) {
@@ -632,7 +667,7 @@ impl<K: PlantKind> PlantCore<K> {
         self.session.close(Session::Closing);
 
         let (logout_buf, id) = self.sender_api.request_logout();
-        self.register_and_send(logout_buf, id, Tag::Caller(response_sender));
+        self.register_and_send(logout_buf, id, Tag::Caller(response_sender), None);
     }
 }
 

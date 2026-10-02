@@ -1,5 +1,7 @@
 //! Scaffolding shared by the plant actor tests. Compiled only under `cfg(test)`.
 
+use crate::ws::handoff::GuardedSocket;
+
 use futures_util::StreamExt;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::protocol::Role};
@@ -143,7 +145,7 @@ pub(crate) async fn plant_with_wire<K: PlantKind + Default>()
 
     let server_ws =
         WebSocketStream::from_raw_socket(MaybeTlsStream::Plain(server), Role::Server, None).await;
-    let (rithmic_sender, rithmic_reader) = server_ws.split();
+    let (rithmic_sender, rithmic_reader) = GuardedSocket::new(server_ws).split();
 
     let (command_sender, request_receiver) = mpsc::channel(4);
     let (subscription_sender, _sub_rx) = broadcast::channel(16);

@@ -2,6 +2,10 @@
 //! [`PlantCore`] asks for. The [`core`](crate::plants::core) module docs walk
 //! a request from a handle call to the wire and back.
 
+use crate::{
+    MutationHandoff,
+    ws::handoff::{GuardedSocket, NativeMessage, NativeSendError},
+};
 use std::{collections::VecDeque, time::Duration};
 use tracing::{debug, error, info, warn};
 
@@ -37,8 +41,8 @@ use crate::{
     },
 };
 
-pub(crate) type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
-pub(crate) type WsSink = SplitSink<WsStream, Message>;
+pub(crate) type WsStream = GuardedSocket<WebSocketStream<MaybeTlsStream<TcpStream>>>;
+pub(crate) type WsSink = SplitSink<WsStream, NativeMessage>;
 pub(crate) type WsReader = SplitStream<WsStream>;
 
 /// Result of a single iteration of the plant's `select!` loop.
@@ -94,7 +98,7 @@ impl<K: PlantKind> Plant<K> {
         .await
         .map_err(|e| RithmicError::ConnectionFailed(e.to_string()))?;
 
-        let (rithmic_sender, rithmic_reader) = ws_stream.split();
+        let (rithmic_sender, rithmic_reader) = GuardedSocket::new(ws_stream).split();
 
         Ok(Plant::with_connection(
             PlantCore::new(kind, config),
@@ -109,7 +113,7 @@ impl<K: PlantKind> Plant<K> {
 impl<K, S> Plant<K, S>
 where
     K: PlantKind,
-    S: Sink<Message, Error = Error> + Unpin,
+    S: Sink<NativeMessage, Error = NativeSendError> + Unpin,
 {
     /// The actor for `core`, over a connection that is already open.
     pub(crate) fn with_connection(
@@ -166,10 +170,24 @@ where
     async fn perform(&mut self, effects: Vec<Effect>) -> bool {
         let mut effects = VecDeque::from(effects);
         let mut stop = false;
+        let mut sink_poisoned = false;
 
         while let Some(effect) = effects.pop_front() {
+            // A timed-out sink can still hold an unclaimed split slot or a
+            // partially written frame. Never flush it with another protocol write.
+            // Passive effects still deliver the original failures and health.
+            if sink_poisoned
+                && matches!(
+                    effect,
+                    Effect::Send { .. } | Effect::Heartbeat(_) | Effect::Ping | Effect::SendClose
+                )
+            {
+                continue;
+            }
             let outcome = match effect {
-                Effect::Send { id, frame } => Some(self.send_request(id, frame).await),
+                Effect::Send { id, frame, handoff } => {
+                    Some(self.send_request(id, frame, handoff).await)
+                }
                 Effect::Heartbeat(frame) => self.send_heartbeat(frame).await,
                 Effect::Ping => self.send_ping().await,
 
@@ -212,11 +230,12 @@ where
             };
 
             if let Some(event) = outcome {
-                // A timed-out write poisons the sink, and the core has already
-                // failed every pending request: writing the rest would only
-                // block the loop for another timeout each.
+                // The core fails pending requests and publishes health below.
+                // Exit the owner loop after those passive effects so its split
+                // halves and any unsent slot are dropped, without a close flush.
                 if matches!(event, Event::SendTimedOut(_)) {
-                    effects.retain(|effect| !matches!(effect, Effect::Send { .. }));
+                    sink_poisoned = true;
+                    stop = true;
                 }
 
                 for effect in self.core.on_event(event).into_iter().rev() {
@@ -229,15 +248,27 @@ where
     }
 
     /// Write request `id`, and say how it went.
-    async fn send_request(&mut self, id: String, frame: Vec<u8>) -> Event<K::Command> {
+    async fn send_request(
+        &mut self,
+        id: String,
+        frame: Vec<u8>,
+        handoff: Option<MutationHandoff>,
+    ) -> Event<K::Command> {
         match send_with_timeout(
             &mut self.rithmic_sender,
-            Message::Binary(frame.into()),
+            NativeMessage {
+                message: Message::Binary(frame.into()),
+                handoff,
+            },
             Duration::from_secs(SEND_TIMEOUT_SECS),
         )
         .await
         {
             Ok(()) => Event::Sent(id),
+
+            Err(WebSocketSendError::Transport(NativeSendError::MutationHandoffRefused)) => {
+                Event::MutationHandoffRefused(id)
+            }
 
             Err(WebSocketSendError::Transport(error)) => {
                 error!(
@@ -284,7 +315,7 @@ where
     async fn send_ping(&mut self) -> Option<Event<K::Command>> {
         match send_with_timeout(
             &mut self.rithmic_sender,
-            Message::Ping(vec![].into()),
+            Message::Ping(vec![].into()).into(),
             Duration::from_secs(SEND_TIMEOUT_SECS),
         )
         .await
@@ -328,7 +359,7 @@ where
     async fn send_heartbeat(&mut self, frame: Vec<u8>) -> Option<Event<K::Command>> {
         match send_with_timeout(
             &mut self.rithmic_sender,
-            Message::Binary(frame.into()),
+            Message::Binary(frame.into()).into(),
             Duration::from_secs(SEND_TIMEOUT_SECS),
         )
         .await
@@ -366,7 +397,7 @@ where
     async fn send_close_best_effort(&mut self) {
         match send_with_timeout(
             &mut self.rithmic_sender,
-            Message::Close(None),
+            Message::Close(None).into(),
             Duration::from_secs(SEND_TIMEOUT_SECS),
         )
         .await
@@ -421,7 +452,7 @@ where
                 // is polled, so send it here.
                 match send_with_timeout(
                     &mut self.rithmic_sender,
-                    Message::Pong(data),
+                    Message::Pong(data).into(),
                     Duration::from_secs(SEND_TIMEOUT_SECS),
                 )
                 .await
@@ -577,8 +608,8 @@ mod tests {
         }
     }
 
-    impl Sink<Message> for MockMessageSink {
-        type Error = Error;
+    impl Sink<NativeMessage> for MockMessageSink {
+        type Error = NativeSendError;
 
         fn poll_ready(
             self: Pin<&mut Self>,
@@ -586,13 +617,15 @@ mod tests {
         ) -> Poll<Result<(), Self::Error>> {
             match self.behavior {
                 MockSinkBehavior::Ready => Poll::Ready(Ok(())),
-                MockSinkBehavior::Error => Poll::Ready(Err(Error::ConnectionClosed)),
+                MockSinkBehavior::Error => {
+                    Poll::Ready(Err(NativeSendError::Transport(Error::ConnectionClosed)))
+                }
                 MockSinkBehavior::Pending => Poll::Pending,
             }
         }
 
-        fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-            self.get_mut().sent_messages.push(item);
+        fn start_send(self: Pin<&mut Self>, item: NativeMessage) -> Result<(), Self::Error> {
+            self.get_mut().sent_messages.push(item.message);
             Ok(())
         }
 
@@ -602,7 +635,9 @@ mod tests {
         ) -> Poll<Result<(), Self::Error>> {
             match self.behavior {
                 MockSinkBehavior::Ready => Poll::Ready(Ok(())),
-                MockSinkBehavior::Error => Poll::Ready(Err(Error::ConnectionClosed)),
+                MockSinkBehavior::Error => {
+                    Poll::Ready(Err(NativeSendError::Transport(Error::ConnectionClosed)))
+                }
                 MockSinkBehavior::Pending => Poll::Pending,
             }
         }
@@ -613,7 +648,9 @@ mod tests {
         ) -> Poll<Result<(), Self::Error>> {
             match self.behavior {
                 MockSinkBehavior::Ready => Poll::Ready(Ok(())),
-                MockSinkBehavior::Error => Poll::Ready(Err(Error::ConnectionClosed)),
+                MockSinkBehavior::Error => {
+                    Poll::Ready(Err(NativeSendError::Transport(Error::ConnectionClosed)))
+                }
                 MockSinkBehavior::Pending => Poll::Pending,
             }
         }
@@ -645,7 +682,7 @@ mod tests {
         // Drop the client TCP so the server stream sits idle; split and return
         // only the reader half.
         drop(client_tcp);
-        let (_, reader) = server_ws.split();
+        let (_, reader) = GuardedSocket::new(server_ws).split();
         reader
     }
 
@@ -668,7 +705,7 @@ mod tests {
             WebSocketStream::from_raw_socket(MaybeTlsStream::Plain(server_tcp), Role::Server, None)
                 .await;
 
-        let (_, reader) = server_ws.split();
+        let (_, reader) = GuardedSocket::new(server_ws).split();
 
         (reader, client_tcp)
     }
@@ -714,6 +751,7 @@ mod tests {
         Effect::Send {
             id: id.to_string(),
             frame: Vec::new(),
+            handoff: None,
         }
     }
 

@@ -1,3 +1,4 @@
+use crate::MutationHandoff;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -64,11 +65,13 @@ pub(crate) enum OrderPlantCommand {
     PlaceBracketOrder {
         bracket_order: Box<RithmicBracketOrder>,
         account: Arc<RithmicAccount>,
+        handoff: Option<MutationHandoff>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ModifyOrder {
         order: RithmicModifyOrder,
         account: Arc<RithmicAccount>,
+        handoff: Option<MutationHandoff>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ModifyStop {
@@ -84,6 +87,7 @@ pub(crate) enum OrderPlantCommand {
     CancelOrder {
         order: RithmicCancelOrder,
         account: Arc<RithmicAccount>,
+        handoff: Option<MutationHandoff>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     ShowOrders {
@@ -93,6 +97,7 @@ pub(crate) enum OrderPlantCommand {
     CancelAllOrders {
         command: RithmicCancelAllOrders,
         account: Arc<RithmicAccount>,
+        handoff: Option<MutationHandoff>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetAccountRmsInfo {
@@ -136,6 +141,7 @@ pub(crate) enum OrderPlantCommand {
     PlaceOrder {
         order: RithmicOrder,
         account: Arc<RithmicAccount>,
+        handoff: Option<MutationHandoff>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     PlaceOcoOrder {
@@ -154,11 +160,13 @@ pub(crate) enum OrderPlantCommand {
     ExitPosition {
         command: RithmicExitPosition,
         account: Arc<RithmicAccount>,
+        handoff: Option<MutationHandoff>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     LinkOrders {
         command: RithmicLinkOrders,
         account: Arc<RithmicAccount>,
+        handoff: Option<MutationHandoff>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
     GetEasyToBorrowList {
@@ -589,6 +597,7 @@ impl PlantKind for OrderPlant {
             OrderPlantCommand::PlaceBracketOrder {
                 bracket_order,
                 account,
+                handoff,
                 response_sender,
             } => {
                 let trade_route = match self.trade_routes.resolve(
@@ -602,7 +611,7 @@ impl PlantKind for OrderPlant {
                     }
                 };
 
-                cx.send_for(
+                cx.send_for_with_handoff(
                     |api| {
                         api.request_bracket_order(
                             *bracket_order,
@@ -612,25 +621,30 @@ impl PlantKind for OrderPlant {
                         )
                     },
                     response_sender,
+                    handoff,
                 );
             }
 
             OrderPlantCommand::ModifyOrder {
                 order,
                 account,
+                handoff,
                 response_sender,
-            } => cx.send_for(
+            } => cx.send_for_with_handoff(
                 |api| api.request_modify_order(&order, &account),
                 response_sender,
+                handoff,
             ),
 
             OrderPlantCommand::CancelOrder {
                 order,
                 account,
+                handoff,
                 response_sender,
-            } => cx.send_for(
+            } => cx.send_for_with_handoff(
                 |api| api.request_cancel_order(&order, &account),
                 response_sender,
+                handoff,
             ),
 
             OrderPlantCommand::ModifyStop {
@@ -659,10 +673,12 @@ impl PlantKind for OrderPlant {
             OrderPlantCommand::CancelAllOrders {
                 command,
                 account,
+                handoff,
                 response_sender,
-            } => cx.send_for(
+            } => cx.send_for_with_handoff(
                 |api| api.request_cancel_all_orders(&command, &account, self.login_scope.as_ref()),
                 response_sender,
+                handoff,
             ),
 
             OrderPlantCommand::GetAccountRmsInfo {
@@ -736,6 +752,7 @@ impl PlantKind for OrderPlant {
             OrderPlantCommand::PlaceOrder {
                 order,
                 account,
+                handoff,
                 response_sender,
             } => {
                 let trade_route = match self
@@ -749,9 +766,10 @@ impl PlantKind for OrderPlant {
                     }
                 };
 
-                cx.send_for(
+                cx.send_for_with_handoff(
                     |api| api.request_order(&order, &account, &trade_route),
                     response_sender,
+                    handoff,
                 );
             }
 
@@ -792,19 +810,23 @@ impl PlantKind for OrderPlant {
             OrderPlantCommand::ExitPosition {
                 command,
                 account,
+                handoff,
                 response_sender,
-            } => cx.send_for(
+            } => cx.send_for_with_handoff(
                 |api| api.request_exit_position(&command, &account),
                 response_sender,
+                handoff,
             ),
 
             OrderPlantCommand::LinkOrders {
                 command,
                 account,
+                handoff,
                 response_sender,
-            } => cx.send_for(
+            } => cx.send_for_with_handoff(
                 |api| api.request_link_orders(command, &account),
                 response_sender,
+                handoff,
             ),
 
             OrderPlantCommand::GetEasyToBorrowList {
@@ -1307,11 +1329,35 @@ impl RithmicOrderPlantHandle {
         &self,
         bracket_order: RithmicBracketOrder,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.place_bracket_order_inner(bracket_order, None).await
+    }
+
+    /// Like [`Self::place_bracket_order`], with a caller-owned one-use native handoff.
+    ///
+    /// # Errors
+    /// In addition to the original method's errors, returns
+    /// [`RithmicError::MutationHandoffRefused`] if the claim returns false.
+    /// Refusal starts no native write and does not close the connection.
+    pub async fn place_bracket_order_with_handoff(
+        &self,
+        bracket_order: RithmicBracketOrder,
+        handoff: MutationHandoff,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.place_bracket_order_inner(bracket_order, Some(handoff))
+            .await
+    }
+
+    async fn place_bracket_order_inner(
+        &self,
+        bracket_order: RithmicBracketOrder,
+        handoff: Option<MutationHandoff>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::PlaceBracketOrder {
             bracket_order: Box::new(bracket_order),
             account: self.account.clone(),
+            handoff,
             response_sender: tx,
         };
 
@@ -1332,11 +1378,34 @@ impl RithmicOrderPlantHandle {
         &self,
         order: RithmicModifyOrder,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.modify_order_inner(order, None).await
+    }
+
+    /// Like [`Self::modify_order`], with a caller-owned one-use native handoff.
+    ///
+    /// # Errors
+    /// In addition to the original method's errors, returns
+    /// [`RithmicError::MutationHandoffRefused`] if the claim returns false.
+    /// Refusal starts no native write and does not close the connection.
+    pub async fn modify_order_with_handoff(
+        &self,
+        order: RithmicModifyOrder,
+        handoff: MutationHandoff,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.modify_order_inner(order, Some(handoff)).await
+    }
+
+    async fn modify_order_inner(
+        &self,
+        order: RithmicModifyOrder,
+        handoff: Option<MutationHandoff>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::ModifyOrder {
             order,
             account: self.account.clone(),
+            handoff,
             response_sender: tx,
         };
 
@@ -1373,11 +1442,34 @@ impl RithmicOrderPlantHandle {
         &self,
         order: RithmicCancelOrder,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.cancel_order_inner(order, None).await
+    }
+
+    /// Like [`Self::cancel_order`], with a caller-owned one-use native handoff.
+    ///
+    /// # Errors
+    /// In addition to the original method's errors, returns
+    /// [`RithmicError::MutationHandoffRefused`] if the claim returns false.
+    /// Refusal starts no native write and does not close the connection.
+    pub async fn cancel_order_with_handoff(
+        &self,
+        order: RithmicCancelOrder,
+        handoff: MutationHandoff,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.cancel_order_inner(order, Some(handoff)).await
+    }
+
+    async fn cancel_order_inner(
+        &self,
+        order: RithmicCancelOrder,
+        handoff: Option<MutationHandoff>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::CancelOrder {
             order,
             account: self.account.clone(),
+            handoff,
             response_sender: tx,
         };
 
@@ -1477,11 +1569,34 @@ impl RithmicOrderPlantHandle {
         &self,
         command: RithmicCancelAllOrders,
     ) -> Result<RithmicResponse, RithmicError> {
+        self.cancel_all_orders_inner(command, None).await
+    }
+
+    /// Like [`Self::cancel_all_orders`], with a caller-owned one-use native handoff.
+    ///
+    /// # Errors
+    /// In addition to the original method's errors, returns
+    /// [`RithmicError::MutationHandoffRefused`] if the claim returns false.
+    /// Refusal starts no native write and does not close the connection.
+    pub async fn cancel_all_orders_with_handoff(
+        &self,
+        command: RithmicCancelAllOrders,
+        handoff: MutationHandoff,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.cancel_all_orders_inner(command, Some(handoff)).await
+    }
+
+    async fn cancel_all_orders_inner(
+        &self,
+        command: RithmicCancelAllOrders,
+        handoff: Option<MutationHandoff>,
+    ) -> Result<RithmicResponse, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::CancelAllOrders {
             command,
             account: self.account.clone(),
+            handoff,
             response_sender: tx,
         };
 
@@ -1747,11 +1862,34 @@ impl RithmicOrderPlantHandle {
         &self,
         order: RithmicOrder,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.place_order_inner(order, None).await
+    }
+
+    /// Like [`Self::place_order`], with a caller-owned one-use native handoff.
+    ///
+    /// # Errors
+    /// In addition to the original method's errors, returns
+    /// [`RithmicError::MutationHandoffRefused`] if the claim returns false.
+    /// Refusal starts no native write and does not close the connection.
+    pub async fn place_order_with_handoff(
+        &self,
+        order: RithmicOrder,
+        handoff: MutationHandoff,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.place_order_inner(order, Some(handoff)).await
+    }
+
+    async fn place_order_inner(
+        &self,
+        order: RithmicOrder,
+        handoff: Option<MutationHandoff>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::PlaceOrder {
             order,
             account: self.account.clone(),
+            handoff,
             response_sender: tx,
         };
 
@@ -1890,11 +2028,34 @@ impl RithmicOrderPlantHandle {
         &self,
         command: RithmicExitPosition,
     ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.exit_position_inner(command, None).await
+    }
+
+    /// Like [`Self::exit_position`], with a caller-owned one-use native handoff.
+    ///
+    /// # Errors
+    /// In addition to the original method's errors, returns
+    /// [`RithmicError::MutationHandoffRefused`] if the claim returns false.
+    /// Refusal starts no native write and does not close the connection.
+    pub async fn exit_position_with_handoff(
+        &self,
+        command: RithmicExitPosition,
+        handoff: MutationHandoff,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.exit_position_inner(command, Some(handoff)).await
+    }
+
+    async fn exit_position_inner(
+        &self,
+        command: RithmicExitPosition,
+        handoff: Option<MutationHandoff>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::ExitPosition {
             command,
             account: self.account.clone(),
+            handoff,
             response_sender: tx,
         };
 
@@ -1913,11 +2074,34 @@ impl RithmicOrderPlantHandle {
         &self,
         command: RithmicLinkOrders,
     ) -> Result<RithmicResponse, RithmicError> {
+        self.link_orders_inner(command, None).await
+    }
+
+    /// Like [`Self::link_orders`], with a caller-owned one-use native handoff.
+    ///
+    /// # Errors
+    /// In addition to the original method's errors, returns
+    /// [`RithmicError::MutationHandoffRefused`] if the claim returns false.
+    /// Refusal starts no native write and does not close the connection.
+    pub async fn link_orders_with_handoff(
+        &self,
+        command: RithmicLinkOrders,
+        handoff: MutationHandoff,
+    ) -> Result<RithmicResponse, RithmicError> {
+        self.link_orders_inner(command, Some(handoff)).await
+    }
+
+    async fn link_orders_inner(
+        &self,
+        command: RithmicLinkOrders,
+        handoff: Option<MutationHandoff>,
+    ) -> Result<RithmicResponse, RithmicError> {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::LinkOrders {
             command,
             account: self.account.clone(),
+            handoff,
             response_sender: tx,
         };
 
