@@ -14,6 +14,12 @@ pub const CANCELLED: &str = "cancelled";
 pub const PENDING: &str = "pending";
 /// Status string for working conditional orders awaiting their trigger.
 pub const TRIGGER_PENDING: &str = "trigger pending";
+/// Status string for orders awaiting acknowledgement that they are open.
+pub const OPEN_PENDING: &str = "open pending";
+/// Status string for orders with a pending modification.
+pub const MODIFY_PENDING: &str = "modify pending";
+/// Status string for orders with a pending cancellation.
+pub const CANCEL_PENDING: &str = "cancel pending";
 /// Status string for rejected orders.
 pub const REJECTED: &str = "rejected";
 /// Status string for partially filled orders.
@@ -58,6 +64,12 @@ pub enum OrderStatus {
     Unknown,
     /// Conditional order is working and awaiting its trigger.
     TriggerPending,
+    /// Order is awaiting acknowledgement that it is open.
+    OpenPending,
+    /// Order has a pending modification and remains active.
+    ModifyPending,
+    /// Order has a pending cancellation and remains active until confirmed.
+    CancelPending,
 }
 
 impl OrderStatus {
@@ -69,11 +81,18 @@ impl OrderStatus {
         )
     }
 
-    /// Returns true if this is an active status (Open, Pending, TriggerPending, Partial).
+    /// Returns true for open, partially filled, and pending orders, including
+    /// orders awaiting a trigger, modification, or cancellation.
     pub fn is_active(&self) -> bool {
         matches!(
             self,
-            Self::Open | Self::Pending | Self::TriggerPending | Self::Partial
+            Self::Open
+                | Self::Pending
+                | Self::TriggerPending
+                | Self::OpenPending
+                | Self::ModifyPending
+                | Self::CancelPending
+                | Self::Partial
         )
     }
 }
@@ -88,6 +107,9 @@ impl FromStr for OrderStatus {
             CANCELLED | "canceled" => Self::Cancelled,
             PENDING => Self::Pending,
             TRIGGER_PENDING => Self::TriggerPending,
+            OPEN_PENDING => Self::OpenPending,
+            MODIFY_PENDING => Self::ModifyPending,
+            CANCEL_PENDING => Self::CancelPending,
             REJECTED => Self::Rejected,
             PARTIAL | "partially_filled" | "partially filled" => Self::Partial,
             EXPIRED => Self::Expired,
@@ -106,6 +128,9 @@ impl fmt::Display for OrderStatus {
             Self::Cancelled => CANCELLED,
             Self::Pending => PENDING,
             Self::TriggerPending => TRIGGER_PENDING,
+            Self::OpenPending => OPEN_PENDING,
+            Self::ModifyPending => MODIFY_PENDING,
+            Self::CancelPending => CANCEL_PENDING,
             Self::Rejected => REJECTED,
             Self::Partial => PARTIAL,
             Self::Expired => EXPIRED,
@@ -119,6 +144,32 @@ impl fmt::Display for OrderStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_pending_operations_remain_active() {
+        for (value, expected) in [
+            ("open pending", OrderStatus::OpenPending),
+            ("modify pending", OrderStatus::ModifyPending),
+            ("cancel pending", OrderStatus::CancelPending),
+        ] {
+            let status: OrderStatus = value.parse().unwrap();
+            assert_eq!(status, expected);
+            assert!(status.is_active(), "{value} must remain active");
+            assert!(!status.is_terminal(), "{value} must remain nonterminal");
+            assert_eq!(status.to_string(), value);
+            assert_eq!(
+                value.to_uppercase().parse::<OrderStatus>().unwrap(),
+                expected
+            );
+            assert_eq!(
+                value
+                    .replace("pending", "Pending")
+                    .parse::<OrderStatus>()
+                    .unwrap(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn test_trigger_pending_is_active() {
@@ -212,6 +263,22 @@ mod tests {
     }
 
     #[test]
+    fn test_notification_events_are_not_order_statuses() {
+        for value in [
+            "modified",
+            "modification failed",
+            "cancellation failed",
+            "not modified",
+            "not cancelled",
+            "fill",
+            "reject",
+        ] {
+            let status: OrderStatus = value.parse().unwrap();
+            assert_eq!(status, OrderStatus::Unknown, "{value} is an event");
+        }
+    }
+
+    #[test]
     fn test_roundtrip() {
         for status in [
             OrderStatus::Open,
@@ -219,6 +286,9 @@ mod tests {
             OrderStatus::Cancelled,
             OrderStatus::Pending,
             OrderStatus::TriggerPending,
+            OrderStatus::OpenPending,
+            OrderStatus::ModifyPending,
+            OrderStatus::CancelPending,
             OrderStatus::Rejected,
             OrderStatus::Partial,
             OrderStatus::Expired,
