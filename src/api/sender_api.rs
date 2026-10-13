@@ -58,34 +58,47 @@ pub(crate) enum LoginUserType {
     Fcm,
     Ib,
     Trader,
+    Admin,
 }
 
-// Each request proto declares its own `UserType`. List every one here so no request is
-// left hardcoding a user type the login never granted.
-//
-// Mapped by name, not by cast. The numbers agree today, but a cast would keep
-// sending the old one if a proto were renumbered.
-macro_rules! login_user_type_accessors {
-    ($($accessor:ident => $request:ty),+ $(,)?) => {
-        impl LoginUserType {
-            $(
-                fn $accessor(self) -> $request {
-                    match self {
-                        LoginUserType::Fcm => <$request>::Fcm,
-                        LoginUserType::Ib => <$request>::Ib,
-                        LoginUserType::Trader => <$request>::Trader,
-                    }
-                }
-            )+
+impl LoginUserType {
+    // Templates 302 and 304 have no Admin variant. Leave their optional role
+    // field absent while retaining the login ids, rather than sending Trader.
+    fn account_list(self) -> Option<request_account_list::UserType> {
+        match self {
+            Self::Fcm => Some(request_account_list::UserType::Fcm),
+            Self::Ib => Some(request_account_list::UserType::Ib),
+            Self::Trader => Some(request_account_list::UserType::Trader),
+            Self::Admin => None,
         }
-    };
-}
+    }
 
-login_user_type_accessors! {
-    account_list => request_account_list::UserType,
-    account_rms_info => request_account_rms_info::UserType,
-    bracket_order => request_bracket_order::UserType,
-    cancel_all_orders => request_cancel_all_orders::UserType,
+    fn account_rms_info(self) -> Option<request_account_rms_info::UserType> {
+        match self {
+            Self::Fcm => Some(request_account_rms_info::UserType::Fcm),
+            Self::Ib => Some(request_account_rms_info::UserType::Ib),
+            Self::Trader => Some(request_account_rms_info::UserType::Trader),
+            Self::Admin => None,
+        }
+    }
+
+    fn bracket_order(self) -> request_bracket_order::UserType {
+        match self {
+            Self::Fcm => request_bracket_order::UserType::Fcm,
+            Self::Ib => request_bracket_order::UserType::Ib,
+            Self::Trader => request_bracket_order::UserType::Trader,
+            Self::Admin => request_bracket_order::UserType::Admin,
+        }
+    }
+
+    fn cancel_all_orders(self) -> request_cancel_all_orders::UserType {
+        match self {
+            Self::Fcm => request_cancel_all_orders::UserType::Fcm,
+            Self::Ib => request_cancel_all_orders::UserType::Ib,
+            Self::Trader => request_cancel_all_orders::UserType::Trader,
+            Self::Admin => request_cancel_all_orders::UserType::Admin,
+        }
+    }
 }
 
 /// What a login grants, used to scope requests by it.
@@ -97,9 +110,8 @@ pub(crate) struct LoginScope {
 }
 
 impl LoginScope {
-    /// The only constructor, so every scope is one all the requests can send.
-    /// `None` for a user type absent, out of range, or `Admin`, which the
-    /// account-list and RMS-info protos lack.
+    /// Retains every recognized login role and its ids, including Admin.
+    /// Returns `None` for an absent or unrecognized user type.
     pub(crate) fn from_login_info(info: &ResponseLoginInfo) -> Option<Self> {
         let user_type = match info
             .user_type
@@ -108,7 +120,7 @@ impl LoginScope {
             response_login_info::UserType::Fcm => LoginUserType::Fcm,
             response_login_info::UserType::Ib => LoginUserType::Ib,
             response_login_info::UserType::Trader => LoginUserType::Trader,
-            response_login_info::UserType::Admin => return None,
+            response_login_info::UserType::Admin => LoginUserType::Admin,
         };
 
         Some(LoginScope {
@@ -415,7 +427,8 @@ impl RithmicSenderApi {
     }
 
     /// The accounts the login can see. With no `scope` it sends no FCM or IB
-    /// id and user type `Trader`.
+    /// id and user type `Trader`. An Admin scope retains its ids and omits
+    /// the optional user type, which has no Admin variant in this template.
     pub fn request_account_list(&mut self, scope: Option<&LoginScope>) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
 
@@ -423,12 +436,10 @@ impl RithmicSenderApi {
             template_id: 302,
             fcm_id: scope.and_then(|s| s.fcm_id.clone()),
             ib_id: scope.and_then(|s| s.ib_id.clone()),
-            user_type: Some(
-                scope
-                    .map_or(LoginUserType::Trader, |s| s.user_type)
-                    .account_list()
-                    .into(),
-            ),
+            user_type: scope
+                .map_or(LoginUserType::Trader, |s| s.user_type)
+                .account_list()
+                .map(i32::from),
             user_msg: vec![id.clone()],
         };
 
@@ -1018,6 +1029,7 @@ impl RithmicSenderApi {
 
     /// Risk limits for every account the login reaches: template 304 has no
     /// `account_id`. FCM and IB ids come from `scope`, or from `account` without one.
+    /// An Admin scope omits the optional user type, which this template lacks.
     pub fn request_account_rms_info(
         &mut self,
         account: &RithmicAccount,
@@ -1036,12 +1048,10 @@ impl RithmicSenderApi {
                 Some(scope) => scope.ib_id.clone(),
                 None => Some(account.ib_id.clone()),
             },
-            user_type: Some(
-                scope
-                    .map_or(LoginUserType::Trader, |s| s.user_type)
-                    .account_rms_info()
-                    .into(),
-            ),
+            user_type: scope
+                .map_or(LoginUserType::Trader, |s| s.user_type)
+                .account_rms_info()
+                .map(i32::from),
         };
 
         self.request_to_buf(req, id)
@@ -2424,6 +2434,7 @@ mod tests {
             (response_login_info::UserType::Fcm, LoginUserType::Fcm),
             (response_login_info::UserType::Ib, LoginUserType::Ib),
             (response_login_info::UserType::Trader, LoginUserType::Trader),
+            (response_login_info::UserType::Admin, LoginUserType::Admin),
         ] {
             let scope = LoginScope::from_login_info(&test_login_info(from))
                 .unwrap_or_else(|| panic!("{from:?} is expressible"));
@@ -2435,11 +2446,8 @@ mod tests {
     }
 
     #[test]
-    fn login_scope_rejects_a_user_type_it_cannot_express() {
-        // Carrying the ids under a substituted `Trader` would narrow the query to a
-        // scope the login never granted, so there is no partial scope to build.
+    fn login_scope_rejects_unknown_or_missing_user_types() {
         for info in [
-            test_login_info(response_login_info::UserType::Admin),
             ResponseLoginInfo {
                 user_type: Some(99),
                 ..test_login_info(response_login_info::UserType::Ib)
@@ -2473,19 +2481,23 @@ mod tests {
         // Trader is included on purpose: those logins carry ids too, so their
         // bytes change as well.
         for (user_type, expected) in [
-            (LoginUserType::Fcm, request_account_list::UserType::Fcm),
-            (LoginUserType::Ib, request_account_list::UserType::Ib),
+            (
+                LoginUserType::Fcm,
+                Some(request_account_list::UserType::Fcm),
+            ),
+            (LoginUserType::Ib, Some(request_account_list::UserType::Ib)),
             (
                 LoginUserType::Trader,
-                request_account_list::UserType::Trader,
+                Some(request_account_list::UserType::Trader),
             ),
+            (LoginUserType::Admin, None),
         ] {
             let (buf, _) = api.request_account_list(Some(&test_scope(user_type)));
             let request: RequestAccountList = decode_request(&buf);
 
             assert_eq!(request.fcm_id.as_deref(), Some("FCM_LOGIN"));
             assert_eq!(request.ib_id.as_deref(), Some("IB_LOGIN"));
-            assert_eq!(request.user_type, Some(expected.into()));
+            assert_eq!(request.user_type, expected.map(i32::from));
         }
     }
 
@@ -2495,12 +2507,19 @@ mod tests {
         let mut api = RithmicSenderApi::new(&test_config());
 
         for (user_type, expected) in [
-            (LoginUserType::Fcm, request_account_rms_info::UserType::Fcm),
-            (LoginUserType::Ib, request_account_rms_info::UserType::Ib),
+            (
+                LoginUserType::Fcm,
+                Some(request_account_rms_info::UserType::Fcm),
+            ),
+            (
+                LoginUserType::Ib,
+                Some(request_account_rms_info::UserType::Ib),
+            ),
             (
                 LoginUserType::Trader,
-                request_account_rms_info::UserType::Trader,
+                Some(request_account_rms_info::UserType::Trader),
             ),
+            (LoginUserType::Admin, None),
         ] {
             let (buf, _) =
                 api.request_account_rms_info(&override_account(), Some(&test_scope(user_type)));
@@ -2508,7 +2527,7 @@ mod tests {
 
             assert_eq!(request.fcm_id.as_deref(), Some("FCM_LOGIN"));
             assert_eq!(request.ib_id.as_deref(), Some("IB_LOGIN"));
-            assert_eq!(request.user_type, Some(expected.into()));
+            assert_eq!(request.user_type, expected.map(i32::from));
         }
     }
 
@@ -2532,6 +2551,11 @@ mod tests {
                 LoginUserType::Trader,
                 request_bracket_order::UserType::Trader,
                 request_cancel_all_orders::UserType::Trader,
+            ),
+            (
+                LoginUserType::Admin,
+                request_bracket_order::UserType::Admin,
+                request_cancel_all_orders::UserType::Admin,
             ),
         ] {
             let scope = test_scope(user_type);
