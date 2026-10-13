@@ -12,6 +12,8 @@ pub const COMPLETE: &str = "complete";
 pub const CANCELLED: &str = "cancelled";
 /// Status string for pending orders.
 pub const PENDING: &str = "pending";
+/// Status string for working conditional orders awaiting their trigger.
+pub const TRIGGER_PENDING: &str = "trigger pending";
 /// Status string for rejected orders.
 pub const REJECTED: &str = "rejected";
 /// Status string for partially filled orders.
@@ -54,6 +56,8 @@ pub enum OrderStatus {
     /// Unknown or unrecognized status.
     #[default]
     Unknown,
+    /// Conditional order is working and awaiting its trigger.
+    TriggerPending,
 }
 
 impl OrderStatus {
@@ -65,9 +69,12 @@ impl OrderStatus {
         )
     }
 
-    /// Returns true if this is an active status (Open, Pending, Partial).
+    /// Returns true if this is an active status (Open, Pending, TriggerPending, Partial).
     pub fn is_active(&self) -> bool {
-        matches!(self, Self::Open | Self::Pending | Self::Partial)
+        matches!(
+            self,
+            Self::Open | Self::Pending | Self::TriggerPending | Self::Partial
+        )
     }
 }
 
@@ -80,6 +87,7 @@ impl FromStr for OrderStatus {
             COMPLETE | "filled" => Self::Complete,
             CANCELLED | "canceled" => Self::Cancelled,
             PENDING => Self::Pending,
+            TRIGGER_PENDING => Self::TriggerPending,
             REJECTED => Self::Rejected,
             PARTIAL | "partially_filled" | "partially filled" => Self::Partial,
             EXPIRED => Self::Expired,
@@ -97,6 +105,7 @@ impl fmt::Display for OrderStatus {
             Self::Complete => COMPLETE,
             Self::Cancelled => CANCELLED,
             Self::Pending => PENDING,
+            Self::TriggerPending => TRIGGER_PENDING,
             Self::Rejected => REJECTED,
             Self::Partial => PARTIAL,
             Self::Expired => EXPIRED,
@@ -110,6 +119,23 @@ impl fmt::Display for OrderStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_trigger_pending_is_active() {
+        let status: OrderStatus = "trigger pending".parse().unwrap();
+        assert_eq!(status, OrderStatus::TriggerPending);
+        assert!(status.is_active());
+        assert!(!status.is_terminal());
+        assert_eq!(status.to_string(), "trigger pending");
+        assert_eq!(
+            "TRIGGER PENDING".parse::<OrderStatus>().unwrap(),
+            OrderStatus::TriggerPending
+        );
+        assert_eq!(
+            "Trigger Pending".parse::<OrderStatus>().unwrap(),
+            OrderStatus::TriggerPending
+        );
+    }
 
     #[test]
     fn test_parse_case_insensitive() {
@@ -192,6 +218,7 @@ mod tests {
             OrderStatus::Complete,
             OrderStatus::Cancelled,
             OrderStatus::Pending,
+            OrderStatus::TriggerPending,
             OrderStatus::Rejected,
             OrderStatus::Partial,
             OrderStatus::Expired,
