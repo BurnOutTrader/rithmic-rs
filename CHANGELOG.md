@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `ReportedOrderSide` represents `BUY`, `SELL` and notification-only `SS`,
+  with explicit rejection of `SS` when converting to an order submission side
+  ([#128](https://github.com/pbeets/rithmic-rs/issues/128)).
+
 - Optional `RithmicRepositoryPlant` and handle for listing, reviewing and accepting
   agreements and setting market data self-certification. Uses the shared plant
   actor and opens no connection until explicitly requested.
@@ -47,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OrderStatus` recognizes `trigger pending`, `open pending`, `modify pending`
   and `cancel pending` as active, nonterminal states instead of `Unknown` and
   inactive ([#126](https://github.com/pbeets/rithmic-rs/issues/126)).
+- Admin login roles are retained for bracket and cancel-all requests. Account
+  list and RMS requests retain the login ids and omit their unsupported optional
+  Admin role instead of substituting Trader
+  ([#128](https://github.com/pbeets/rithmic-rs/issues/128)).
 
 ## [3.2.0]
 
