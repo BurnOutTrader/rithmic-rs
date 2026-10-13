@@ -42,6 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This removes public API, but is released as a minor version because the
   methods did not work against the order plant.
 
+### Fixed
+
+- `OrderStatus` recognizes `trigger pending`, `open pending`, `modify pending`
+  and `cancel pending` as active, nonterminal states instead of `Unknown` and
+  inactive ([#126](https://github.com/pbeets/rithmic-rs/issues/126)).
+
 ## [3.2.0]
 
 No API breaks. Three behavior changes to check when upgrading:
