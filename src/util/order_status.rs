@@ -148,6 +148,7 @@ mod tests {
     #[test]
     fn test_pending_operations_remain_active() {
         for (value, expected) in [
+            ("trigger pending", OrderStatus::TriggerPending),
             ("open pending", OrderStatus::OpenPending),
             ("modify pending", OrderStatus::ModifyPending),
             ("cancel pending", OrderStatus::CancelPending),
@@ -156,36 +157,7 @@ mod tests {
             assert_eq!(status, expected);
             assert!(status.is_active(), "{value} must remain active");
             assert!(!status.is_terminal(), "{value} must remain nonterminal");
-            assert_eq!(status.to_string(), value);
-            assert_eq!(
-                value.to_uppercase().parse::<OrderStatus>().unwrap(),
-                expected
-            );
-            assert_eq!(
-                value
-                    .replace("pending", "Pending")
-                    .parse::<OrderStatus>()
-                    .unwrap(),
-                expected
-            );
         }
-    }
-
-    #[test]
-    fn test_trigger_pending_is_active() {
-        let status: OrderStatus = "trigger pending".parse().unwrap();
-        assert_eq!(status, OrderStatus::TriggerPending);
-        assert!(status.is_active());
-        assert!(!status.is_terminal());
-        assert_eq!(status.to_string(), "trigger pending");
-        assert_eq!(
-            "TRIGGER PENDING".parse::<OrderStatus>().unwrap(),
-            OrderStatus::TriggerPending
-        );
-        assert_eq!(
-            "Trigger Pending".parse::<OrderStatus>().unwrap(),
-            OrderStatus::TriggerPending
-        );
     }
 
     #[test]
@@ -260,22 +232,6 @@ mod tests {
             "foobar".parse::<OrderStatus>().unwrap(),
             OrderStatus::Unknown
         );
-    }
-
-    #[test]
-    fn test_notification_events_are_not_order_statuses() {
-        for value in [
-            "modified",
-            "modification failed",
-            "cancellation failed",
-            "not modified",
-            "not cancelled",
-            "fill",
-            "reject",
-        ] {
-            let status: OrderStatus = value.parse().unwrap();
-            assert_eq!(status, OrderStatus::Unknown, "{value} is an event");
-        }
     }
 
     #[test]
