@@ -62,6 +62,7 @@ pub enum OrderStatus {
     /// Unknown or unrecognized status.
     #[default]
     Unknown,
+    // Append variants to preserve existing indices in index-based Serde formats.
     /// Conditional order is working and awaiting its trigger.
     TriggerPending,
     /// Order is awaiting acknowledgement that it is open.
