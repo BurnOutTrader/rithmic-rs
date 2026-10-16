@@ -119,7 +119,7 @@ the two can reach you in either order. A market order can fill, and report
 `complete`, before `place_order` returns. Match notifications to your order
 by `user_tag` and `basket_id`, never by arrival order.
 
-**Seen** (demo, 2026-10-16). A new-order request and a cancel request are each
+**Seen** (demo, 2026-10-16). A new-order, modify and cancel request are each
 answered by two frames of their reply template, sharing the request id. The
 first frame names the basket in `basket_id`, carries handler code `["0"]`, an
 empty response code and the venue time; the new-order one also echoes your
@@ -127,9 +127,41 @@ empty response code and the venue time; the new-order one also echoes your
 handler code or time. The SDK marks the first frame as having more to follow.
 So only the first frame names the basket, and the response code is empty on
 every frame but the last; a check that wants every frame to name the basket and
-carry `0` rejects a cancel that worked. The cancel shape was seen on four
-cancels, the new-order shape on one. A cancel reply is not the order's end: the
-order notifications report the cancellation separately.
+carry `0` rejects a cancel that worked. The cancel shape was seen on five
+cancels, the new-order shape on three and the modify shape on one. The reply
+templates have no window-name field. `user_msg` comes back as sent on every
+reply frame and never on a notification; the crate fills it with its own
+request id, so you cannot use it as your own identity. A cancel reply is not
+the order's end: the order notifications report the cancellation separately.
+
+### Order labels: `user_tag` and `window_name`
+
+**Seen** (demo, 2026-10-16, one MNQ limit placed, modified once and cancelled).
+
+- **`user_tag`** is sent on the new order only; modify and cancel have no such
+  field. It came back in full (101 ASCII characters, not cut short) on the
+  new-order reply's first frame and on every `RithmicOrderNotification` and
+  `ExchangeOrderNotification` for the order except `CANCEL_RCVD_FROM_CLNT`,
+  and on the reconnect replay.
+- **`window_name`** is sent on the new order, modify and cancel. It came back
+  only on `ORDER_RCVD_FROM_CLNT`, `MODIFY_RCVD_FROM_CLNT` and
+  `CANCEL_RCVD_FROM_CLNT`.
+- **`originator_window_name`** carried the new order's `window_name`,
+  unchanged through the modify and cancel, on every other notification. A
+  replayed (`is_snapshot`) row carried both window fields.
+
+`window_name` is free text naming the front end. An order placed from Rithmic's
+own website shows `Rithmic Web` there (reported by the account holder, not
+recorded). Each request produced six order-plant rows: received from client,
+pending, received by the exchange gateway, sent to the exchange, the exchange's
+own row, then the result (`open`, `modified` or `complete`). The cancel's reply
+frames arrived after its six rows.
+
+**Seen.** For a new order, the first live `ExchangeOrderNotification` (`STATUS`)
+has no `status` text and no quantity. The `RithmicOrderNotification` `OPEN`
+that follows (or `TRIGGER_PENDING` for stop and touch orders) has the status
+text and the full terms, so read an order as working from that row. The
+exchange's `MODIFY` and `CANCEL` rows have no status text either.
 
 **Seen.** A market order goes through these `status` values, each on its own
 `RithmicOrderNotification`:
@@ -327,6 +359,8 @@ What an integration has to handle, in the order it tends to bite:
   timings above, from short sessions.
 - **Exit echo.** Whether every native exit echoes `window_name`. It did each
   time we tried, but it is not documented.
+- **`user_tag` length.** The longest tag we sent, 101 characters, came back
+  whole; the limit was not searched for.
 - **Second login.** What a second login of the same user does to the first.
   We were told not to and did not try it.
 - **Trailing brackets.** The 0.89 bracket request has no field for a
