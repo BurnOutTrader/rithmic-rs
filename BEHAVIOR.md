@@ -160,6 +160,13 @@ from client`, `cancel pending`, `cancel received by exch gateway` and
   sent as manual reports `1`; the bracket children the server creates report
   `2` (auto); a manual cancel of a child reports `1`. Fill history spells it
   `M` instead of a number.
+- **Touch orders.** **Seen** (demo, 2026-10-16). Working market-if-touched
+  and limit-if-touched orders arrived, live and in replays, as exchange
+  order notifications with `quantity` 0, `total_fill_size` 0 and
+  `total_unfilled_size` 1. They carried the trigger price, and the limit
+  price for limit-if-touched, but no `price_type`. A reader that needs
+  `price_type` or a non-zero `quantity` drops them. Read the size from
+  `total_fill_size` plus `total_unfilled_size`.
 
 ### Replays and snapshots
 
@@ -174,6 +181,14 @@ rows with `is_snapshot` set. **Seen:**
   caused them. Each replay request pushes the same rows again.
 - Snapshot timestamps are rounded to the millisecond (`usecs` ends in
   `000`). Live rows normally carry full microseconds.
+- **Seen** (demo, 2026-10-16). An order that had been modified was replayed
+  after a reconnect as an exchange notification with notify type modify and
+  `status` `modified`. That row is the order's current working state. Skip
+  it and the order is missing from your snapshot.
+- **Seen** (demo, 2026-10-16). Live pushes can arrive while a snapshot read
+  (`show_orders` and the PnL position snapshot) is still running. Replayed
+  rows carry `is_snapshot` true and live pushes do not, so sort them by that
+  flag.
 
 A replayed fill is old news when you saw it live, and may be the only copy
 when you did not. See [When the connection drops](#when-the-connection-drops).
@@ -273,16 +288,19 @@ What an integration has to handle, in the order it tends to bite:
    `show_orders` and `show_fill_history`, then decide. Never resend blindly.
 4. **Reconcile after any gap.** A `Lagged` receiver or a dropped plant means
    fills may be missing. Only replays and fill history bring them back.
-5. **Expect PnL statements to trail fills.** A statement received after a
+5. **Read orders from the fields present.** Size touch orders from filled
+   plus unfilled, keep a replayed modify row as the order's working state,
+   and split snapshot rows from live pushes by `is_snapshot`.
+6. **Expect PnL statements to trail fills.** A statement received after a
    fill can still state the old position.
-6. **Keep missing apart from zero.** A missing row or field is unknown, not
+7. **Keep missing apart from zero.** A missing row or field is unknown, not
    flat.
-7. **Clean up bracket children** after any exit that did not come from the
+8. **Clean up bracket children** after any exit that did not come from the
    bracket itself.
-8. **Tag native exits** through `window_name`.
-9. **Read `completion_reason`.** A refusal can arrive as `complete` with no
-   fill.
-10. **Hold one session.** Share it rather than logging in again.
+9. **Tag native exits** through `window_name`.
+10. **Read `completion_reason`.** A refusal can arrive as `complete` with no
+    fill.
+11. **Hold one session.** Share it rather than logging in again.
 
 ## Known gaps and unproven
 
