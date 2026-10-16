@@ -119,6 +119,18 @@ the two can reach you in either order. A market order can fill, and report
 `complete`, before `place_order` returns. Match notifications to your order
 by `user_tag` and `basket_id`, never by arrival order.
 
+**Seen** (demo, 2026-10-16). A new-order request and a cancel request are each
+answered by two frames of their reply template, sharing the request id. The
+first frame names the basket in `basket_id`, carries handler code `["0"]`, an
+empty response code and the venue time; the new-order one also echoes your
+`user_tag`. The second, final frame carries response code `["0"]` and no basket,
+handler code or time. The SDK marks the first frame as having more to follow.
+So only the first frame names the basket, and the response code is empty on
+every frame but the last; a check that wants every frame to name the basket and
+carry `0` rejects a cancel that worked. The cancel shape was seen on four
+cancels, the new-order shape on one. A cancel reply is not the order's end: the
+order notifications report the cancellation separately.
+
 **Seen.** A market order goes through these `status` values, each on its own
 `RithmicOrderNotification`:
 
