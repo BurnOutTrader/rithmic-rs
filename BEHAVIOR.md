@@ -180,6 +180,11 @@ from client`, `cancel pending`, `cancel received by exch gateway` and
 `cancel sent to exch` before `complete`. The fill itself arrives on an
 `ExchangeOrderNotification` with `report_type` `fill`.
 
+**Seen** (demo, 2026-10-16). An order that fills in parts also gets progress
+rows: a `RithmicOrderNotification` with notify type `GENERIC` and status
+`partial`, arriving between the exchange's fill rows. The fills are on the fill
+rows, not on the `partial` one.
+
 | `completion_reason` | Seen on |
 | --- | --- |
 | `F` | A filled order |
@@ -246,6 +251,14 @@ when you did not. See [When the connection drops](#when-the-connection-drops).
 - **`cor_sequence_number` is set on normal fills.** **Seen:** it equals
   `orig_sequence_number`. Only a different value marks a correction, and we
   never saw one.
+- **A replayed order sums its partial fills.** **Seen** (demo, 2026-10-16).
+  `show_fill_history` lists each partial fill as its own row, with its own
+  `fill_id`, quantity and price. The order's terminal replayed snapshot (an
+  `ExchangeOrderNotification` with `is_snapshot` set and status `complete`)
+  names only the last fill's `fill_id` and price, but states the order's total
+  in `fill_size` and `total_fill_size`, and its average in `avg_fill_price`.
+  To check a replayed fill against fill history, sum the basket's partial
+  fills first; one history row alone will not match.
 - **No fill states a fee or a realized PnL.** **Seen** live and in history.
 - **Commission is only a running total** for the account:
   `rms_account_commission` on the account PnL row.
@@ -288,10 +301,16 @@ target and stop as separate orders, each with its own `basket_id`. **Seen:**
 
 - Children carry no `user_tag`. Link them by `original_basket_id`, the
   parent's basket id.
-- The children are one-cancels-other. When we cancelled the target, the
-  server cancelled the stop itself. The stop's rows started at `cancel
-  pending`, with no `Cancel received from client` row, and reported auto
-  mode `2`.
+- **One pair per fill.** **Seen** (demo, 2026-10-16). An entry that fills in
+  parts gets one target and one stop for each fill. A BUY 2 that filled 1 + 1
+  produced two target and stop pairs, each priced from its own fill and each
+  linked to the entry by `original_basket_id`.
+- Each pair is one-cancels-other. When we cancelled the target, the server
+  cancelled the stop itself. The stop's rows started at `cancel pending`, with
+  no `Cancel received from client` row, and reported auto mode `2`.
+- **Seen** (demo, 2026-10-16). With two pairs, cancelling one leg ended only
+  its own sibling, which the venue cancelled itself. The other fill's pair
+  stayed working. A later cancel of the already ended sibling was refused.
 - Bracket updates can report a tier's quantity before the children's own
   notifications arrive.
 - `adjust_target` and `adjust_stop` need `level`. Leaving it out, even for a
@@ -311,13 +330,30 @@ target and stop as separate orders, each with its own `basket_id`. **Seen:**
 account.
 
 - The reply only says the request was taken. It names no order or fill, and
-  it does not mean you are flat. **Seen:** two reply frames.
+  it does not mean you are flat.
+- **Seen** (demo, 2026-10-16). Sent for the whole account (no symbol), the
+  reply is two `ResponseExitPosition` frames sharing the request id. The first
+  has an empty response code and more to follow; the last has `["0"]`. That is
+  the same shape as new-order and cancel, and it held when the account was
+  already flat on the server, so a final `0` does not mean anything was exited.
+  The crate returns every frame for this call.
 - The exit's order and fill carry no `user_tag`, because the request has no
   field for one.
 - **Seen.** The request's `window_name` came back on the exit order's first
   row. Later rows and the live fill carried it as `originator_window_name`.
   Replayed snapshot rows carried both. Put your own id in `window_name` to
   find the exit's fill.
+
+### Native cancel-all
+
+`cancel_all_orders` asks the server to cancel every working order on the
+account.
+
+**Seen** (demo, 2026-10-16). The reply is a single `ResponseCancelAllOrders`
+frame with response code `["0"]`, not the two frames of new-order, cancel and
+exit. The cancellations arrive as order notifications. The crate returns only
+the first frame for this call, so it loses nothing here. As with any reply, the
+`0` says the request was taken, not which orders were cancelled.
 
 ## Wrapping the SDK
 
@@ -327,7 +363,8 @@ What an integration has to handle, in the order it tends to bite:
    `user_tag`, `basket_id` and `original_basket_id`. A fill may come before
    its reply.
 2. **Deduplicate fills by account and `fill_id`.** Replays repeat fills you
-   already have.
+   already have. A replayed order names only its last fill, so compare it with
+   fill history by summing the basket's fills.
 3. **Treat `ConnectionClosed` on a mutation as unknown.** Reconnect, read
    `show_orders` and `show_fill_history`, then decide. Never resend blindly.
 4. **Reconcile after any gap.** A `Lagged` receiver or a dropped plant means
@@ -340,7 +377,7 @@ What an integration has to handle, in the order it tends to bite:
 7. **Keep missing apart from zero.** A missing row or field is unknown, not
    flat.
 8. **Clean up bracket children** after any exit that did not come from the
-   bracket itself.
+   bracket itself. An entry that filled in parts has a pair per fill.
 9. **Tag native exits** through `window_name`.
 10. **Read `completion_reason`.** A refusal can arrive as `complete` with no
     fill.
