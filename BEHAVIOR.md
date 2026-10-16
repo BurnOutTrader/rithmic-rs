@@ -5,10 +5,10 @@
 
 ## Who this is for
 
-You are building a trading platform, a bot or a bridge on top of
-`rithmic-rs` and need to keep your own record of orders, fills and positions
-in step with Rithmic's. The crate docs say what each call does. This guide
-says what the server sends back, in what order, and where it surprised us.
+You are building on top of `rithmic-rs` and need to know what the server
+sends about your orders, fills and positions. The crate docs say what each
+call does. This guide says what the server sends back, in what order, and
+where it surprised us.
 
 **Seen** marks something we recorded and decoded. **Read** marks something
 taken only from the protocol definitions. Unmarked items come from everyday
@@ -91,9 +91,8 @@ can name an old contract, so trust one only when the same search also lists
 the contract it names. A product with no designated front month is answered
 with the no-data code `7`.
 
-**Seen.** CME contracts are spelled with a one-digit year, `MNQZ6` rather
-than `MNQZ26`. Work out the decade from a date the row itself carries, not
-from your clock.
+**Seen.** Rithmic spells a dated CME contract with a one-digit year, for
+example `MNQZ6`.
 
 ### Bars and ticks
 
@@ -205,14 +204,12 @@ fill the PnL plant restated the old net twice, then sent the new one:
 | Old net, twice | 0.5 to 0.7 ms before the fill | 1.0 to 9.5 ms |
 | New net | 0.6 to 0.8 ms after the fill | 2.8 to 11.5 ms |
 
-So the newest statement you hold can still describe the position before your
-latest fill. Comparing it with your own position as it arrives shows
-mismatches that are not real.
+So the newest statement can still describe the position before your latest
+fill.
 
 Every instrument PnL row carries `fill_buy_qty` and `fill_sell_qty`, running
-counts of the contracts bought and sold. They tell you which fills a
-statement includes: if your fills add up to the same counts, compare;
-otherwise wait.
+counts of the contracts bought and sold. They show which fills a statement
+already includes.
 
 - **Seen.** The counts do not reset when the position goes flat. A flat
   account read `4/4`, then `5/4` after one buy.
@@ -276,19 +273,16 @@ What an integration has to handle, in the order it tends to bite:
    `show_orders` and `show_fill_history`, then decide. Never resend blindly.
 4. **Reconcile after any gap.** A `Lagged` receiver or a dropped plant means
    fills may be missing. Only replays and fill history bring them back.
-5. **Place statements by their counts.** Use `fill_buy_qty` and
-   `fill_sell_qty`, not arrival time, before you compare a PnL statement
-   with your own position.
+5. **Expect PnL statements to trail fills.** A statement received after a
+   fill can still state the old position.
 6. **Keep missing apart from zero.** A missing row or field is unknown, not
    flat.
 7. **Clean up bracket children** after any exit that did not come from the
    bracket itself.
 8. **Tag native exits** through `window_name`.
-9. **Track fees at the account level.** No fill states one.
-10. **Read `completion_reason`.** A refusal can arrive as `complete` with no
-    fill.
-11. **Hold one session.** Share it between your features rather than logging
-    in again.
+9. **Read `completion_reason`.** A refusal can arrive as `complete` with no
+   fill.
+10. **Hold one session.** Share it rather than logging in again.
 
 ## Known gaps and unproven
 
