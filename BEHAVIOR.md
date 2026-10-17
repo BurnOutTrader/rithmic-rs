@@ -269,15 +269,17 @@ when you did not. See [When the connection drops](#when-the-connection-drops).
 ### Positions and PnL
 
 **Seen.** Position statements trail the fill that changes them. After each
-fill the PnL plant restated the old net twice, then sent the new one:
+fill the PnL plant restated the old net two or three times, then sent the new
+one, sometimes twice:
 
 | Statement | Server time | Received after the fill |
 | --- | --- | --- |
-| Old net, twice | 0.5 to 0.7 ms before the fill | 1.0 to 9.5 ms |
-| New net | 0.6 to 0.8 ms after the fill | 2.8 to 11.5 ms |
+| Old net | 0.5 to 1.0 ms before the fill | 1.0 to 9.5 ms |
+| New net | 0.6 to 0.9 ms after the fill | 2.8 to 11.5 ms |
 
 So the newest statement can still describe the position before your latest
-fill.
+fill. While the order plant was cut, the PnL plant still stated the new net
+0.7 ms after a fill the order plant never delivered live.
 
 Every instrument PnL row carries `fill_buy_qty` and `fill_sell_qty`, running
 counts of the contracts bought and sold. They show which fills a statement
@@ -285,6 +287,18 @@ already includes.
 
 - **Seen.** The counts do not reset when the position goes flat. A flat
   account read `4/4`, then `5/4` after one buy.
+- **Seen.** The counts carry across sessions within one trading day. A
+  session's first read stated `4/4`: every fill the `show_orders` replay listed
+  for that day, an earlier session's three buys and one sell of three
+  included.
+- **Seen.** A row can restate an unchanged position under a new timestamp,
+  beside a snapshot read or an order change. Seven rows restated a flat `5/5`
+  after the first. Compare the counts, net and average, not the timestamp, to
+  find a change.
+- **Seen.** A PnL snapshot row is stamped near the read, not at the position's
+  last change: a row read 3.5 s after the position went flat was stamped 3.5 s
+  after the flat row. Every snapshot row seen was stamped to the millisecond,
+  and so were a few live rows.
 - **Seen.** A contract not traded that day can have no instrument row at
   all. A missing row is not a stated zero. A contract traded and closed does
   get an explicit zero row.
@@ -337,6 +351,12 @@ account.
   the same shape as new-order and cancel, and it held when the account was
   already flat on the server, so a final `0` does not mean anything was exited.
   The crate returns every frame for this call.
+- No reply says the position was not there. **Read.** `ResponseExitPosition`
+  carries only its codes, symbol and exchange, and the reference guide names
+  no code for a missing position. **Seen.** The account-wide exit sent while
+  the server already held the account flat placed no order and was answered
+  `0`, like an exit of a real position. Learn that you were already flat from
+  the PnL plant, not from the reply.
 - The exit's order and fill carry no `user_tag`, because the request has no
   field for one.
 - **Seen.** The request's `window_name` came back on the exit order's first
@@ -386,7 +406,9 @@ What an integration has to handle, in the order it tends to bite:
 ## Known gaps and unproven
 
 - **Day reset.** Whether the fill counts reset when a trading day starts.
-  They do not reset when flat.
+  They do not reset when flat, and they carry across sessions within one day.
+- **Snapshot cut.** Whether a PnL snapshot can leave out a fill stamped before
+  the snapshot row's own timestamp.
 - **Fill history size.** How many fills come back with no cap set.
 - **Replay depth.** Whether `show_orders` replays more than the current
   trading day.
