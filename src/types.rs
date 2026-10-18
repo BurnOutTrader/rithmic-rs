@@ -75,7 +75,10 @@ impl FromStr for MarketDataUsageCapacity {
 
 /// Buy or sell. Defaults to `Buy`.
 ///
-/// Parses from `"BUY"`, `"B"`, `"SELL"` or `"S"`, in any case.
+/// Parses from `"BUY"`, `"B"`, `"SELL"` or `"S"`, in any case. Order notifications
+/// can also report a short sell, which has no variant here: see `TransactionType::Ss` in
+/// [`rithmic_order_notification`](crate::rti::rithmic_order_notification::TransactionType::Ss)
+/// and [`exchange_order_notification`](crate::rti::exchange_order_notification::TransactionType::Ss).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[non_exhaustive]
