@@ -7,52 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0]
+
+The order plant's agreement methods are gone. They moved to the new repository
+plant (see Removed). Also check these behavior changes when upgrading:
+
+- Connecting can take longer to fail. Each attempt now waits up to 5 seconds
+  instead of 2, so `AlternateWithRetry` also takes longer to fall back to `beta_url`.
+- `connect_total_timeout` now applies to `ConnectStrategy::Simple` too.
+- Setting the `RithmicConfig::retry_timeout` field directly does nothing now. The
+  builder's `retry_timeout()` still works.
+- `OrderStatus::is_active()` is `true` for six statuses that used to parse as
+  `Unknown`.
+- `get_account_list` and `get_account_rms_info` may return fewer accounts for
+  Admin logins.
+
 ### Added
 
-- Optional `RithmicRepositoryPlant` and handle for listing, reviewing and accepting
-  agreements and setting market data self-certification. Uses the shared plant
-  actor and opens no connection until explicitly requested.
-- `MarketDataUsageCapacity` for Professional/Non-Professional agreement requests.
-- `examples/repository_agreements.rs` for first-use agreement onboarding.
-- `RithmicConfigBuilder::connect_attempt_timeout()` to set how long one
-  connection attempt may take ([#124](https://github.com/pbeets/rithmic-rs/issues/124)).
-- `RithmicConfigBuilder::connect_total_timeout()`, the new name for
-  `retry_timeout()`.
+- `RithmicRepositoryPlant`, an optional plant for listing, reading and accepting
+  agreements and setting market data self-certification. You only need it to
+  accept agreements; trading doesn't use it.
+- `MarketDataUsageCapacity`, the Professional or Non-Professional choice some
+  agreements ask for.
+- `examples/repository_agreements.rs`, which walks through accepting agreements.
+- `RithmicConfigBuilder::connect_attempt_timeout()` and the matching
+  `RithmicConfig` field, to set how long one connection attempt may take
+  ([#124](https://github.com/pbeets/rithmic-rs/issues/124)).
+- `RithmicConfigBuilder::connect_total_timeout()` and the matching
+  `RithmicConfig` field, which replace `retry_timeout`.
+- `OrderStatus` variants and `util::order_status` constants for the six statuses
+  under Fixed.
 
 ### Changed
 
-- A connection attempt times out after 5 seconds, up from 2. Distant servers,
-  such as Chicago from Australia, could not finish the handshake in time.
-- `connect_total_timeout` (formerly `retry_timeout`) also cuts the single
-  attempt of `ConnectStrategy::Simple`, which used to ignore it.
+- A connection attempt times out after 5 seconds instead of 2. Distant servers,
+  like Chicago from Australia, couldn't always finish the handshake in 2 seconds.
+  `connect_attempt_timeout(Duration::from_secs(2))` gets the old limit back.
+- `connect_total_timeout` also limits `ConnectStrategy::Simple`, which used to
+  ignore it.
 
 ### Deprecated
 
 - `RithmicConfigBuilder::retry_timeout()`: use `connect_total_timeout()`, which
   it now calls.
-- `RithmicConfig::retry_timeout`: no longer read or set; use
+- `RithmicConfig::retry_timeout`: nothing reads it any more. Use
   `connect_total_timeout`.
 
 ### Removed
 
-- The order plant's agreement methods (`list_unaccepted_agreements`,
+- The agreement methods on `RithmicOrderPlantHandle`: `list_unaccepted_agreements`,
   `list_accepted_agreements`, `accept_agreement`, `show_agreement` and
-  `set_rithmic_mrkt_data_self_cert_status`). Rithmic serves agreement templates
-  only on the repository plant, so use `RithmicRepositoryPlantHandle` instead.
-  This removes public API, but is released as a minor version because the
-  methods did not work against the order plant.
+  `set_rithmic_mrkt_data_self_cert_status`. Rithmic's Reference Guide lists the
+  agreement templates under the repository plant only, so this ships as a minor
+  version.
+
+  To migrate, connect a `RithmicRepositoryPlant`, log in, and call the methods on
+  its handle. Two of them changed:
+  - `accept_agreement` takes `Option<MarketDataUsageCapacity>` instead of
+    `Option<&str>`.
+  - `set_rithmic_mrkt_data_self_cert_status(id, &str)` is now
+    `set_market_data_self_cert_status(id, MarketDataUsageCapacity)`.
 
 ### Fixed
 
-- `OrderStatus` recognizes `trigger pending`, `open pending`, `modify pending`
-  and `cancel pending` as active, nonterminal states instead of `Unknown` and
-  inactive ([#126](https://github.com/pbeets/rithmic-rs/issues/126)).
-- `OrderStatus` recognizes `modified` and `modified, trigger pending`, the
-  statuses a modified order is left in, as active instead of `Unknown`.
-- Admin logins now scope requests. Bracket and cancel-all send `Admin` instead
-  of `Trader`. `get_account_list` and `get_account_rms_info` send the login's FCM
-  and IB ids and leave off the user type, which those templates lack, so they may
-  return fewer accounts ([#128](https://github.com/pbeets/rithmic-rs/issues/128)).
+- `OrderStatus` treats `trigger pending`, `open pending`, `modify pending` and
+  `cancel pending` as active. They used to parse as `Unknown`
+  ([#126](https://github.com/pbeets/rithmic-rs/issues/126)).
+- `OrderStatus` treats `modified` and `modified, trigger pending` as active. A
+  modified order is left in one of these, and they used to parse as `Unknown`
+  ([#131](https://github.com/pbeets/rithmic-rs/pull/131)).
+- Admin logins send `Admin` on bracket and cancel-all orders instead of `Trader`.
+  `get_account_list` and `get_account_rms_info` now send the login's FCM and IB
+  ids with no user type, since those requests have no Admin option. They may
+  return fewer accounts as a result
+  ([#128](https://github.com/pbeets/rithmic-rs/issues/128)).
 
 ## [3.2.0]
 
@@ -1287,6 +1315,7 @@ Previous stable release. See git history for earlier changes.
 
 ## Version History Summary
 
+- **3.3.0**: Agreement methods move from the order plant to the new optional `RithmicRepositoryPlant`, `connect_attempt_timeout` with a 5 second default, `retry_timeout` renamed `connect_total_timeout`, pending and modified `OrderStatus` values count as active, Admin logins no longer send `Trader`
 - **3.2.0**: Truncated history replays resume automatically, one login per connection with `LoginConflict`, `subscribe_all()` on the order and PnL plants, configurable subscription capacity and connect retry timeout, request-struct replay loaders, `resume_bars()` deprecated
 - **3.1.0**: The library no longer times out requests; `request_timeout` and `RequestTimeout` deprecated
 - **3.0.0** (2026-08-09): Breaking changes - order commands built with `new()` + setters, crate-owned enums replace fourteen generated re-exports, every order call takes a command struct, prices are `Option<f64>`, seven handle methods renamed, required `request_timeout`; orders route off the exchange's published trade route, uncapped replay loaders, protos at 0.89.0.0
@@ -1304,7 +1333,8 @@ Previous stable release. See git history for earlier changes.
 - **0.5.0** (2025-11-16): Major stability and API improvements - Connection strategies, unified config, panic fixes, connection health monitoring
 - **0.4.2** (2025-11-15): Previous stable release
 
-[Unreleased]: https://github.com/pbeets/rithmic-rs/compare/v3.2.0...HEAD
+[Unreleased]: https://github.com/pbeets/rithmic-rs/compare/v3.3.0...HEAD
+[3.3.0]: https://github.com/pbeets/rithmic-rs/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/pbeets/rithmic-rs/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/pbeets/rithmic-rs/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/pbeets/rithmic-rs/compare/v2.0.0...v3.0.0
