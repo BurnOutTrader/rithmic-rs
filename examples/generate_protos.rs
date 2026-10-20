@@ -69,6 +69,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         detabbed.push('\n');
     }
 
+    let start = detabbed.find("#[non_exhaustive]\n#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]\npub struct RequestLogin {")
+        .ok_or("generated login definition is missing")?;
+    let end = detabbed[start..]
+        .find("/// Nested message and enum types in `RequestLogin`.")
+        .map(|offset| start + offset)
+        .ok_or("generated login enum boundary is missing")?;
+    detabbed.replace_range(start..end, "mod login;\npub use login::RequestLogin;\n\n");
     std::fs::write(&pool_path, detabbed)?;
 
     println!("Generated src/rti.rs. Run `cargo fmt` to format it.");

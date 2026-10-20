@@ -75,6 +75,22 @@ fn zero_fill_prices(prices: Vec<Option<f64>>) -> Vec<f64> {
         .collect()
 }
 
+/// Checks the native four-byte length and addressable capacity before allocating.
+///
+/// # Errors
+/// Refuses an unrepresentable wire length or capacity without retaining login fields.
+fn login_frame_layout(encoded_len: usize) -> Result<([u8; 4], usize), RithmicError> {
+    let length = u32::try_from(encoded_len).map_err(|_| {
+        RithmicError::InvalidArgument("login protobuf exceeds the four-byte wire length".to_owned())
+    })?;
+    let capacity = encoded_len.checked_add(4).ok_or_else(|| {
+        RithmicError::InvalidArgument(
+            "login frame exceeds the addressable buffer capacity".to_owned(),
+        )
+    })?;
+    Ok((length.to_be_bytes(), capacity))
+}
+
 /// Builds the request frames for one plant. Each `request_*` returns the frame
 /// (a 4-byte big-endian length, then the protobuf body) and the request id it
 /// put in `user_msg`, which the server echoes on every reply.
@@ -123,6 +139,11 @@ impl RithmicSenderApi {
         self.request_to_buf(req, id)
     }
 
+    /// Encodes a login into a protected frame and assigns its plant-local request ID.
+    ///
+    /// # Errors
+    /// Refuses a protobuf body exceeding the four-byte wire length, an overflowing
+    /// frame capacity, or an unavailable allocation. Errors contain no credential fields.
     pub fn request_login(
         &mut self,
         system_name: &str,
@@ -130,14 +151,14 @@ impl RithmicSenderApi {
         user: &str,
         password: &str,
         config: &LoginConfig,
-    ) -> (Vec<u8>, String) {
+    ) -> Result<(crate::secret::LoginFrame, String), RithmicError> {
         let id = self.get_next_message_id();
 
         let req = RequestLogin {
             template_id: 10,
             template_version: Some(TEMPLATE_VERSION.into()),
             user: Some(user.to_string()),
-            password: Some(password.to_string()),
+            password: Some(crate::secret::Password::new(password)),
             app_name: Some(self.app_name.clone()),
             app_version: Some(self.app_version.clone()),
             system_name: Some(system_name.to_string()),
@@ -149,7 +170,16 @@ impl RithmicSenderApi {
             os_platform: config.os_platform.clone(),
         };
 
-        self.request_to_buf(req, id)
+        let (header, capacity) = login_frame_layout(req.encoded_len())?;
+        let mut buf = zeroize::Zeroizing::new(Vec::new());
+        buf.try_reserve_exact(capacity).map_err(|_| {
+            RithmicError::InvalidArgument(
+                "login frame cannot fit in an available buffer".to_owned(),
+            )
+        })?;
+        buf.extend_from_slice(&header);
+        req.encode_raw(&mut *buf);
+        Ok((crate::secret::LoginFrame::new(buf), id))
     }
 
     pub fn request_logout(&mut self) -> (Vec<u8>, String) {
@@ -3217,17 +3247,17 @@ mod tests {
             .request_oco_order(vec![], OcoCancelTiming::default(), &account)
             .expect("an empty group encodes");
 
+        let (login, login_id) = api
+            .request_login(
+                "sys",
+                SysInfraType::TickerPlant,
+                "u",
+                "p",
+                &LoginConfig::default(),
+            )
+            .unwrap();
         let requests = [
-            (
-                10,
-                api.request_login(
-                    "sys",
-                    SysInfraType::TickerPlant,
-                    "u",
-                    "p",
-                    &LoginConfig::default(),
-                ),
-            ),
+            (10, (login.to_vec(), login_id)),
             (12, api.request_logout()),
             (14, api.request_reference_data("ESZ6", "CME")),
             (16, api.request_rithmic_system_info()),
@@ -3416,5 +3446,54 @@ mod tests {
                 "request expected as template {expected}"
             );
         }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn login_frame_maximum_wire_length_has_a_literal_header_and_checked_capacity() {
+        assert_eq!(
+            login_frame_layout(4_294_967_295),
+            Ok(([255, 255, 255, 255], 4_294_967_299))
+        );
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn login_frame_oversize_is_refused_without_allocating_the_claimed_body() {
+        assert_eq!(
+            login_frame_layout(4_294_967_296),
+            Err(RithmicError::InvalidArgument(
+                "login protobuf exceeds the four-byte wire length".to_owned()
+            ))
+        );
+        assert_eq!(
+            login_frame_layout(usize::MAX),
+            Err(RithmicError::InvalidArgument(
+                "login protobuf exceeds the four-byte wire length".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn login_frame_preserves_literal_native_fields_and_length_prefix() {
+        let mut api = RithmicSenderApi::new(&test_config());
+        let (frame, id) = api
+            .request_login(
+                "sys",
+                SysInfraType::TickerPlant,
+                "u",
+                "p",
+                &LoginConfig::default(),
+            )
+            .unwrap();
+        assert_eq!(id, "1");
+        assert_eq!(
+            &frame[..],
+            &[
+                0, 0, 0, 50, 152, 182, 75, 10, 146, 130, 75, 4, 53, 46, 52, 50, 194, 233, 64, 1,
+                49, 218, 251, 63, 1, 117, 162, 189, 63, 1, 112, 146, 189, 63, 3, 97, 112, 112, 218,
+                173, 64, 1, 49, 226, 129, 75, 3, 115, 121, 115, 168, 129, 75, 1
+            ]
+        );
     }
 }

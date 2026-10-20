@@ -81,7 +81,10 @@ pub(crate) enum Event<C> {
 pub(crate) enum Effect {
     /// Write request `id`, and report how it went with [`Event::Sent`],
     /// [`Event::SendFailed`] or [`Event::SendTimedOut`].
-    Send { id: String, frame: Vec<u8> },
+    Send {
+        id: String,
+        frame: crate::secret::OutboundFrame,
+    },
     /// Write a heartbeat. Nothing waits on its reply.
     Heartbeat(Vec<u8>),
     /// Write a WebSocket ping.
@@ -218,7 +221,10 @@ impl<K: PlantKind> PlantCore<K> {
                     // Nothing is sent for a replay whose caller stopped
                     // waiting while it was queued.
                     if self.request_handler.register_replay(id.clone(), replay) {
-                        self.effects.push(Effect::Send { id, frame: buf });
+                        self.effects.push(Effect::Send {
+                            id,
+                            frame: buf.into(),
+                        });
                     }
                 }
             }
@@ -226,9 +232,17 @@ impl<K: PlantKind> PlantCore<K> {
     }
 
     /// Register `tag` under `id`, then send `buf`.
-    fn register_and_send(&mut self, buf: Vec<u8>, id: String, tag: Tag<K::Tag>) {
+    fn register_and_send(
+        &mut self,
+        buf: impl Into<crate::secret::OutboundFrame>,
+        id: String,
+        tag: Tag<K::Tag>,
+    ) {
         self.request_handler.register_request(id.clone(), tag);
-        self.effects.push(Effect::Send { id, frame: buf });
+        self.effects.push(Effect::Send {
+            id,
+            frame: buf.into(),
+        });
     }
 
     fn emit_connection_health_event(&mut self, request_id: &str, error: RithmicError) {
@@ -479,7 +493,7 @@ impl<K: PlantKind> PlantCore<K> {
 
         self.effects.push(Effect::Send {
             id: resume.request_id,
-            frame: buf,
+            frame: buf.into(),
         });
     }
 
@@ -605,13 +619,32 @@ impl<K: PlantKind> PlantCore<K> {
             }
         }
 
-        let (login_buf, id) = self.sender_api.request_login(
+        let request = self.sender_api.request_login(
             &self.config.system_name,
             K::INFRA,
             &self.config.user,
-            &self.config.password,
+            self.config.password.expose(),
             &config,
         );
+
+        self.queue_login(config, response_sender, request);
+    }
+
+    /// Answers frame refusal unchanged, or registers the protected login before sending.
+    /// Failed encoding leaves the connection and its current session untouched.
+    fn queue_login(
+        &mut self,
+        config: LoginConfig,
+        response_sender: Responder,
+        request: Result<(crate::secret::LoginFrame, String), RithmicError>,
+    ) {
+        let (login_buf, id) = match request {
+            Ok(request) => request,
+            Err(error) => {
+                let _ = response_sender.send(Err(error));
+                return;
+            }
+        };
 
         info!("{}: sending login request {}", K::SOURCE, id);
 
@@ -638,6 +671,7 @@ impl<K: PlantKind> PlantCore<K> {
 
 #[cfg(test)]
 mod tests {
+    use prost::Message;
     use tokio::sync::oneshot;
 
     use super::*;
@@ -1159,5 +1193,53 @@ mod tests {
 
         assert!(sent(&effects).is_empty(), "no RequestResumeBars goes out");
         assert!(!core.request_handler.resuming());
+    }
+
+    #[test]
+    fn plant_config_clone_is_redacted_and_erased_when_the_core_drops() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let erased = Arc::new(AtomicUsize::new(0));
+        let mut config = test_support::test_config();
+        config.password = crate::secret::Password::observed("sdk-secret", &erased);
+        let mut core = PlantCore::new(Bare, &config);
+        drop(config);
+        assert_eq!(erased.load(Ordering::SeqCst), 1);
+        let (_reply, effects) = login(&mut core, LoginConfig::default());
+        let [Effect::Send { frame, .. }] = effects.as_slice() else {
+            panic!("expected login frame")
+        };
+        let request = crate::rti::RequestLogin::decode(&frame[4..]).unwrap();
+        assert_eq!(request.password.as_ref().unwrap().expose(), "sdk-secret");
+        assert!(!format!("{core:?}").contains("sdk-secret"));
+        assert!(!format!("{effects:?}").contains("sdk-secret"));
+        drop(core);
+        assert_eq!(erased.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_refused_login_frame_answers_its_exact_error_and_keeps_the_connection_available() {
+        let mut core = bare();
+        let (tx, mut rx) = oneshot::channel();
+        core.queue_login(
+            LoginConfig::default(),
+            tx,
+            Err(RithmicError::InvalidArgument(
+                "login protobuf exceeds the four-byte wire length".to_owned(),
+            )),
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Err(RithmicError::InvalidArgument(
+                "login protobuf exceeds the four-byte wire length".to_owned()
+            ))
+        );
+        assert!(matches!(core.session, Session::Connected));
+        assert!(core.effects.is_empty());
+        let (_reply, effects) = login(&mut core, LoginConfig::default());
+        assert_eq!(sent(&effects), vec!["1"]);
+        assert!(matches!(core.session, Session::LoggingIn { .. }));
     }
 }

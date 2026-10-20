@@ -91,6 +91,18 @@ fn require_env(var: &str) -> Result<String, ConfigError> {
     env::var(var).map_err(|_| ConfigError::MissingEnvVar(var.to_string()))
 }
 
+fn require_password(var: &str) -> Result<crate::secret::Password, ConfigError> {
+    let value = env::var_os(var).ok_or_else(|| ConfigError::MissingEnvVar(var.to_owned()))?;
+    password_from_env(value).ok_or_else(|| ConfigError::MissingEnvVar(var.to_owned()))
+}
+
+fn password_from_env(value: std::ffi::OsString) -> Option<crate::secret::Password> {
+    let bytes = zeroize::Zeroizing::new(value.into_encoded_bytes());
+    std::str::from_utf8(&bytes)
+        .ok()
+        .map(crate::secret::Password::new)
+}
+
 impl FromStr for RithmicEnv {
     type Err = ConfigError;
 
@@ -291,7 +303,7 @@ pub struct RithmicConfig {
     /// Login username.
     pub user: String,
     /// Login password.
-    pub password: String,
+    pub password: crate::secret::Password,
     /// Rithmic system to log in to (e.g. "Rithmic Paper Trading"). It must
     /// match a name the server offers; `get_system_info` on any plant handle
     /// lists them.
@@ -412,7 +424,7 @@ impl RithmicConfig {
         let url = require_env(&format!("{prefix}_URL"))?;
         let beta_url = require_env(&format!("{prefix}_ALT_URL"))?;
         let user = require_env(&format!("{prefix}_USER"))?;
-        let password = require_env(&format!("{prefix}_PW"))?;
+        let password = require_password(&format!("{prefix}_PW"))?;
 
         // The environment's usual system name is only a default: on Live in
         // particular, providers other than Rithmic 01 (Thrive Trading, etc.)
@@ -505,7 +517,7 @@ pub struct RithmicConfigBuilder {
     url: Option<String>,
     beta_url: Option<String>,
     user: Option<String>,
-    password: Option<String>,
+    password: Option<crate::secret::Password>,
     system_name: Option<String>,
     app_name: Option<String>,
     app_version: Option<String>,
@@ -594,7 +606,7 @@ impl RithmicConfigBuilder {
     /// Set the password. Required. [`RithmicConfig`]'s `Debug` output hides
     /// it.
     pub fn password(mut self, password: impl Into<String>) -> Self {
-        self.password = Some(password.into());
+        self.password = Some(crate::secret::Password::new(password));
         self
     }
 
@@ -1036,7 +1048,7 @@ mod tests {
             let config = RithmicConfig::from_env(RithmicEnv::Demo).unwrap();
 
             assert_eq!(config.user, "demo_user");
-            assert_eq!(config.password, "demo_password");
+            assert_eq!(config.password.expose(), "demo_password");
             assert_eq!(config.url, "wss://test-demo.example.com:443");
             assert_eq!(config.beta_url, "wss://test-demo-alt.example.com:443");
             assert_eq!(config.system_name, "Rithmic Paper Trading");
@@ -1050,7 +1062,7 @@ mod tests {
             let config = RithmicConfig::from_env(RithmicEnv::Live).unwrap();
 
             assert_eq!(config.user, "live_user");
-            assert_eq!(config.password, "live_password");
+            assert_eq!(config.password.expose(), "live_password");
             assert_eq!(config.system_name, "Rithmic 01");
             assert_eq!(config.env, RithmicEnv::Live);
         });
@@ -1075,7 +1087,7 @@ mod tests {
                 let config = RithmicConfig::from_env(RithmicEnv::Test).unwrap();
 
                 assert_eq!(config.user, "test_user");
-                assert_eq!(config.password, "test_password");
+                assert_eq!(config.password.expose(), "test_password");
                 assert_eq!(config.url, "wss://test-test.example.com:443");
                 assert_eq!(config.beta_url, "wss://test-test-alt.example.com:443");
                 assert_eq!(config.system_name, "Rithmic Test");
@@ -1231,5 +1243,81 @@ mod tests {
         );
         // Other fields should still be visible
         assert!(debug_output.contains("my_user"));
+    }
+
+    #[test]
+    fn failed_builds_erase_passwords_before_and_after_password_field_consumption() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        for missing in [
+            "url",
+            "beta_url",
+            "user",
+            "system_name",
+            "app_name",
+            "app_version",
+        ] {
+            let erased = Arc::new(AtomicUsize::new(0));
+            let mut builder = builder_with_required_fields();
+            builder.password = Some(crate::secret::Password::observed("sdk-secret", &erased));
+            match missing {
+                "url" => builder.url = None,
+                "beta_url" => builder.beta_url = None,
+                "user" => builder.user = None,
+                "system_name" => builder.system_name = None,
+                "app_name" => builder.app_name = None,
+                "app_version" => builder.app_version = None,
+                _ => panic!("unknown required field"),
+            }
+            assert_eq!(
+                builder.build().unwrap_err(),
+                ConfigError::MissingField(missing.to_owned())
+            );
+            assert_eq!(erased.load(Ordering::SeqCst), 1, "{missing}");
+        }
+    }
+
+    #[test]
+    fn replacing_or_abandoning_a_builder_erases_its_password() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let erased = Arc::new(AtomicUsize::new(0));
+        let mut builder = builder_with_required_fields();
+        builder.password = Some(crate::secret::Password::observed("sdk-secret", &erased));
+        let mut builder = builder.password("replacement");
+        assert_eq!(erased.load(Ordering::SeqCst), 1);
+        builder.password = Some(crate::secret::Password::observed("sdk-secret", &erased));
+        drop(builder);
+        assert_eq!(erased.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn successful_config_and_clone_erase_their_independent_password_owners() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let erased = Arc::new(AtomicUsize::new(0));
+        let mut builder = builder_with_required_fields();
+        builder.password = Some(crate::secret::Password::observed("sdk-secret", &erased));
+        let config = builder.build().unwrap();
+        let copy = config.clone();
+        assert_eq!(erased.load(Ordering::SeqCst), 0);
+        drop(config);
+        assert_eq!(erased.load(Ordering::SeqCst), 1);
+        assert_eq!(copy.password.expose(), "sdk-secret");
+        drop(copy);
+        assert_eq!(erased.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn an_owned_environment_password_is_protected_without_changing_its_bytes() {
+        let password = password_from_env(std::ffi::OsString::from("sdk-secret")).unwrap();
+        assert_eq!(password.expose(), "sdk-secret");
+        assert_eq!(format!("{password:?}"), "[REDACTED]");
     }
 }

@@ -63,7 +63,6 @@ pub(crate) enum SelectResult<C> {
 ///
 /// `S` is the WebSocket sink. It defaults to [`WsSink`], the write half of a
 /// real connection, and tests swap in a mock.
-#[derive(Debug)]
 pub(crate) struct Plant<K: PlantKind, S = WsSink> {
     pub(crate) core: PlantCore<K>,
     pub(crate) interval: Interval,
@@ -74,6 +73,21 @@ pub(crate) struct Plant<K: PlantKind, S = WsSink> {
     pub(crate) rithmic_receiver_api: RithmicReceiverApi,
     pub(crate) rithmic_sender: S,
     pub(crate) subscription_sender: broadcast::Sender<RithmicResponse>,
+}
+
+impl<K: PlantKind, S> std::fmt::Debug for Plant<K, S>
+where
+    PlantCore<K>: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // A split sink may retain the login Message while its flush is pending.
+        f.debug_struct("Plant")
+            .field("core", &self.core)
+            .field("transport", &"[REDACTED]")
+            .field("queued_commands", &self.request_receiver.len())
+            .field("subscribers", &self.subscription_sender.receiver_count())
+            .finish_non_exhaustive()
+    }
 }
 
 impl<K: PlantKind> Plant<K> {
@@ -230,10 +244,14 @@ where
     }
 
     /// Write request `id`, and say how it went.
-    async fn send_request(&mut self, id: String, frame: Vec<u8>) -> Event<K::Command> {
+    async fn send_request(
+        &mut self,
+        id: String,
+        frame: crate::secret::OutboundFrame,
+    ) -> Event<K::Command> {
         match send_with_timeout(
             &mut self.rithmic_sender,
-            Message::Binary(frame.into()),
+            Message::Binary(frame.into_bytes()),
             Duration::from_secs(SEND_TIMEOUT_SECS),
         )
         .await
@@ -620,6 +638,50 @@ mod tests {
         }
     }
 
+    impl futures_util::Stream for MockMessageSink {
+        type Item = Result<Message, Error>;
+
+        fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Poll::Pending
+        }
+    }
+
+    #[tokio::test]
+    async fn a_plant_diagnostic_redacts_a_login_retained_in_a_real_split_sink_slot() {
+        let config = test_support::test_config();
+        let mut api = crate::api::sender_api::RithmicSenderApi::new(&config);
+        let (login, _) = api
+            .request_login(
+                "sys",
+                crate::rti::request_login::SysInfraType::TickerPlant,
+                "user",
+                "sdk-secret",
+                &LoginConfig::default(),
+            )
+            .unwrap();
+        let (mut sink, _stream) = MockMessageSink::pending().split();
+        Pin::new(&mut sink)
+            .start_send(Message::Binary(login.into_bytes()))
+            .unwrap();
+        let waker = futures_util::task::noop_waker();
+        let mut context = Context::from_waker(&waker);
+        assert!(Pin::new(&mut sink).poll_flush(&mut context).is_pending());
+        assert!(format!("{sink:?}").contains("sdk-secret"));
+        let (sub_tx, _) = broadcast::channel(16);
+        let (_, commands) = mpsc::channel(1);
+        let plant = Plant::with_connection(
+            test_support::plant_core::<Bare>(),
+            commands,
+            sub_tx,
+            sink,
+            make_dormant_ws_reader().await,
+        );
+        let diagnostic = format!("{plant:?}");
+        assert!(diagnostic.contains("Plant"));
+        assert!(diagnostic.contains("core"));
+        assert!(!diagnostic.contains("sdk-secret"));
+    }
+
     /// Create a real-but-dormant `WsReader` by establishing a local WebSocket
     /// connection so the type is satisfied. The reader is never polled
     /// in any of the tests below.
@@ -714,7 +776,7 @@ mod tests {
     fn send(id: &str) -> Effect {
         Effect::Send {
             id: id.to_string(),
-            frame: Vec::new(),
+            frame: Vec::new().into(),
         }
     }
 

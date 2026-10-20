@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `RithmicConfig.password` now uses `secret::Password`; borrow plaintext explicitly
+  with `.expose()`. The builder's `.password(...)` setter is unchanged.
+  `rti::RequestLogin.password` also uses `Option<secret::Password>`.
+
+### Fixed
+
+- Password allocations are zeroized when builders fail or are abandoned, fields are
+  replaced, and configuration, plant or login message owners are dropped.
+- Login frames retain protected allocation ownership through shared transport byte
+  views; pending plant diagnostics redact the transport's login payload.
+- Login encoding checks the native length and capacity, returning argument errors
+  without credential contents before mutating login state. WebSocket and TLS internal
+  copies remain outside the SDK allocation-erasure guarantee.
+
 ## [3.3.0]
 
 The order plant's agreement methods are gone. They moved to the new repository

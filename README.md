@@ -355,3 +355,25 @@ dual licensed as below, without any additional terms or conditions.
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 [MIT license](LICENSE-MIT) at your option.
+
+
+## Credential ownership
+
+Passwords supplied to `RithmicConfigBuilder::password` are owned by `secret::Password`.
+The owner redacts `Debug` and zeroizes its allocation on replacement and drop,
+including an abandoned or failed builder. Configuration clones and each plant retain
+independent protected password owners. Use `config.password.expose()` when an explicit
+borrow of the plaintext is needed; the builder's `password(...)` setter is unchanged.
+Native `rti::RequestLogin.password` is now `Option<secret::Password>` as well.
+
+Login protobuf decoding, replacement and clearing preserve protected ownership. The
+encoder checks the four-byte frame length and capacity before allocation and returns
+an argument error without credential contents when the frame cannot be represented
+or allocated. A refused frame leaves the connected plant available for another login.
+Its serialized allocation remains protected through shared transport byte views until
+the last view drops. Plant diagnostics omit pending transport payloads.
+
+This guarantee covers the SDK's protected allocations. WebSocket framing and TLS may
+make their own internal copies; those libraries do not expose an erasure guarantee here.
+Explicit callers of protobuf encoding or plaintext accessors remain responsible for
+any additional buffers they choose to create.

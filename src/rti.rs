@@ -9,37 +9,9 @@ pub struct MessageType {
     #[prost(int32, required, tag = "154467")]
     pub template_id: i32,
 }
-#[non_exhaustive]
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct RequestLogin {
-    #[prost(int32, required, tag = "154467")]
-    pub template_id: i32,
-    #[prost(string, optional, tag = "153634")]
-    pub template_version: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, repeated, tag = "132760")]
-    pub user_msg: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "131003")]
-    pub user: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "130004")]
-    pub password: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "130002")]
-    pub app_name: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "131803")]
-    pub app_version: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "153628")]
-    pub system_name: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(enumeration = "request_login::SysInfraType", optional, tag = "153621")]
-    pub infra_type: ::core::option::Option<i32>,
-    #[prost(string, repeated, tag = "144108")]
-    pub mac_addr: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "144021")]
-    pub os_version: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "144020")]
-    pub os_platform: ::core::option::Option<::prost::alloc::string::String>,
-    /// applicable only for TICKER_PLANT infra_type
-    #[prost(bool, optional, tag = "153644")]
-    pub aggregated_quotes: ::core::option::Option<bool>,
-}
+mod login;
+pub use login::RequestLogin;
+
 /// Nested message and enum types in `RequestLogin`.
 pub mod request_login {
     #[non_exhaustive]

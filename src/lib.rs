@@ -316,6 +316,9 @@ pub mod api;
 /// Configuration API for connecting to Rithmic
 pub mod config;
 
+/// Redacted password and protected serialized login ownership.
+pub mod secret;
+
 /// Error types for plant handle methods.
 pub mod error;
 
