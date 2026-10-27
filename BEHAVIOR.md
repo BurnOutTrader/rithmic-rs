@@ -14,11 +14,25 @@ where it surprised us.
 taken only from the protocol definitions. Unmarked items come from everyday
 use of the crate. Nothing here is a Rithmic guarantee.
 
-- **Protocol:** R | Protocol 0.89.0.0 (template 5.42), as bundled here.
-- **Crate:** 3.2.0 and `main`, October 2026.
+The observations have two client-source scopes:
+
+| Sessions | Client | Source protocol / template |
+| --- | --- | --- |
+| Earlier October 2026 | 3.2.0 and then-current `main` | 0.89.0.0 / 5.42 |
+| 2026-10-26 | 3.3.0, fork `3ac0773` | 0.90.0.0 / 5.55 |
+
+The later round trip and read-only session used [this fork revision][later-source].
+
+These are client-source versions, not values proven by a captured login
+negotiation. The later fork's definitions do not describe the earlier recordings
+or change the protocol bundled on this repository's `main`.
+
 - **Environment:** a Rithmic demo (paper trading) system.
-- **Instruments:** CME equity index micro futures.
+- **Instruments:** CME micro futures; the later round trip traded MNQ only.
 - **Evidence:** order and PnL plant messages, recorded in receipt order.
+  The later captures contain decoded SDK DTOs re-encoded after receipt, not
+  original WebSocket frames. Two local observation paths can record the same
+  push, so a captured row count is not a distinct-delivery count.
 
 > [!NOTE]
 > These are a few short sessions on one environment. Timings are what we saw,
@@ -222,8 +236,9 @@ rows, not on the `partial` one.
 `show_orders`, `show_brackets` and `show_bracket_stops` make the server push
 rows with `is_snapshot` set. **Seen:**
 
-- `show_orders` replays every order of the trading day, finished ones
-  included, from earlier sessions too.
+- In the earlier bounded recordings, `show_orders` included finished
+  orders and orders from earlier sessions that trading day. This does not
+  establish a complete-day replay or retention beyond those recordings.
 - The call's reply can arrive in the middle of the replayed rows. It is not
   an end-of-list marker, and the crate has none.
 - Pushed rows carry an empty request id, so you cannot tell which request
@@ -248,9 +263,13 @@ when you did not. See [When the connection drops](#when-the-connection-drops).
   same `fill_id` for different fills. Key fills by account and `fill_id`.
 - **`fill_id` is not in time order.** **Seen:** later fills had lower ids.
   Do not use it as a cursor.
-- **`cor_sequence_number` is set on normal fills.** **Seen:** it equals
-  `orig_sequence_number`. Only a different value marks a correction, and we
-  never saw one.
+- **Sequence fields do not establish a fill correction.** **Seen** (demo,
+  2026-10-16): `orig_sequence_number` and `cor_sequence_number` followed the
+  order-message chain in a place/modify/cancel recording. The cancel after
+  the modify carried different values; that recording contained no fill.
+  The recorded fills came from never-modified orders. Neither equality nor
+  inequality alone establishes a corrected fill; no genuine correction
+  record has been captured.
 - **A replayed order sums its partial fills.** **Seen** (demo, 2026-10-16).
   `show_fill_history` lists each partial fill as its own row, with its own
   `fill_id`, quantity and price. The order's terminal replayed snapshot (an
@@ -265,6 +284,19 @@ when you did not. See [When the connection drops](#when-the-connection-drops).
 - **Fill history** takes up to 10,000 records per request. With
   `max_record_count` set to `None` the server picks the cap. **Seen:** it
   spells sides `B` and `S`, where notifications use numbers.
+
+**Seen** (demo, 2026-10-26): one MNQ short round trip with a 4.5-point
+adverse move gave a gross price result of -9 USD. The account's
+wallet fell by 10.02 USD and its cumulative commission was stated as 0.00,
+then 0.51, then 1.02. Neither live fill nor its fill-history row stated a
+per-fill fee or realized PnL. Those account totals do not supply missing
+per-fill fields or establish a complete daily PnL record.
+
+**Seen** (demo, later read-only session on 2026-10-26): a bounded
+`show_fill_history` read returned both earlier fills, while the order replay
+did not name their earlier basket. These reads need not expose the same
+history window. This observation establishes neither full retention nor a
+complete trading-day history.
 
 ### Positions and PnL
 
@@ -307,6 +339,16 @@ already includes.
   3), not as two legs to add.
 - **Seen.** Live and snapshot account rows can state different day figures
   for the same moment, and the snapshot row left out commission.
+- **Seen** (demo, read-only session, 2026-10-26). Instrument PnL rows
+  explicitly stated net zero for MNQ, MES and MGC contracts. These were
+  stated zeros, distinct from a missing instrument row.
+
+**Read** (fork revision `3ac0773`): `InstrumentPnLPositionUpdate` and
+`AccountPnLPositionUpdate` model `net_quantity` as optional `int32`.
+`ResponseShowFillHistory` models `fill_size`, `total_fill_size` and
+`total_unfilled_size` as optional `uint64`. Width belongs to the particular
+message field; it cannot be inferred from an observed zero or applied to
+all quantity fields.
 
 ### Native brackets
 
@@ -412,8 +454,9 @@ What an integration has to handle, in the order it tends to bite:
 - **Fill history size.** How many fills come back with no cap set.
 - **Replay depth.** Whether `show_orders` replays more than the current
   trading day.
-- **Corrections.** What a correction fill looks like. Every
-  `cor_sequence_number` we saw matched `orig_sequence_number`.
+- **Corrections.** What a correction fill looks like and how to distinguish
+  it from an ordinary fill. The order-chain sequence fields described above
+  do not establish correction semantics.
 - **Statement delay.** How late a statement can be. We have only the
   timings above, from short sessions.
 - **Exit echo.** Whether every native exit echoes `window_name`. It did each
@@ -427,3 +470,5 @@ What an integration has to handle, in the order it tends to bite:
   `trailing_stop_by_last_trade_price = false` selects.
 - **Trade matching.** Whether a depth-by-order row can be matched to a
   `LastTrade`.
+
+[later-source]: https://github.com/BurnOutTrader/rithmic-rs/commit/3ac077359a0ac8a2bf8ed77beedc35ee82cfc4d6
