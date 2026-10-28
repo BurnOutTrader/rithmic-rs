@@ -437,6 +437,12 @@ account.
   row. Later rows and the live fill carried it as `originator_window_name`.
   Replayed snapshot rows carried both. Put your own id in `window_name` to
   find the exit's fill.
+- **Seen** (demo, 2026-10-28). An instrument exit returned a connection-closed
+  error while its result was awaited. Later notifications carrying the exit's
+  `window_name` and independent fill history established the closing fill.
+  The failed wait did not prove the request was unsent or the position remained
+  open; retain the unknown result and reconcile before deciding whether another
+  exit is needed.
 
 ### Native cancel-all
 
@@ -501,6 +507,13 @@ details explicitly: `response.error == None`
 does not independently validate the handler list, and a nonempty handler list
 alone does not mean refusal. These are SDK implementation limits, not new
 observations of server coverage or product trading permission.
+
+**Seen** (demo, 2026-10-28, same fork). One product RMS read returned 44 product
+rows with handler code `["0"]` and empty response codes, followed by one
+terminal row with empty handler codes and response code `["0"]`. The collected
+SDK return retained all 45 decoded replies. This is one selected account's
+finite reply, not proof of an exhaustive product universe, an exchange mapping
+or trading permission.
 
 At the same fork revision, these read replies take different paths:
 
