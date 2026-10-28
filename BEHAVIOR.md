@@ -19,9 +19,10 @@ The observations have two client-source scopes:
 | Sessions | Client | Source protocol / template |
 | --- | --- | --- |
 | Earlier October 2026 | 3.2.0 and then-current `main` | 0.89.0.0 / 5.42 |
-| 2026-10-26 | 3.3.0, fork `3ac0773` | 0.90.0.0 / 5.55 |
+| 2026-10-26 and 2026-10-28 | 3.3.0, fork `3ac0773` | 0.90.0.0 / 5.55 |
 
-The later round trip and read-only session used [this fork revision][later-source].
+The later round trip, read-only session and held-position recording used
+[this fork revision][later-source].
 
 These are client-source versions, not values proven by a captured login
 negotiation. The later fork's definitions do not describe the earlier recordings
@@ -305,6 +306,19 @@ history window. This observation establishes neither full retention nor a
 complete trading-day history.
 
 ### Positions and PnL
+
+**Seen** (demo, 2026-10-28): during a held MNQ position, all 43 recorded
+account PnL rows satisfied `account_balance = cash_on_hand + day_pnl`.
+Eight rows stating every component also satisfied
+`account_balance = cash_on_hand + closed_position_pnl + open_position_pnl - rms_account_commission`.
+The stated `account_balance` changed alongside unrealized PnL: it was a
+marked total in this recording, not an isolated cash figure.
+
+These observed relations establish neither a universal provider formula
+nor that `cash_on_hand` is current settled cash. A balance change measured
+between flat positions, including the earlier round trip's wallet
+shorthand, does not establish the cash or equity meaning while a position
+is open. Preserve the separately stated fields and their absence.
 
 **Seen.** Position statements trail the fill that changes them. After each
 fill the PnL plant restated the old net two or three times, then sent the new
