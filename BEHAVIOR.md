@@ -30,7 +30,8 @@ or change the protocol bundled on this repository's `main`.
 
 - **Environment:** a Rithmic demo (paper trading) system.
 - **Instruments:** CME micro futures for execution; FESX/EUREX reference-data
-  search only. The later round trip traded MNQ only.
+  search only. The 2026-10-26 round trip traded MNQ; the later
+  2026-10-28 same-session round trips traded MNQ and MES.
 - **Evidence:** order and PnL plant messages, recorded in receipt order.
   The later captures contain decoded SDK DTOs re-encoded after receipt, not
   original WebSocket frames. Two local observation paths can record the same
@@ -292,8 +293,9 @@ when you did not. See [When the connection drops](#when-the-connection-drops).
   To check a replayed fill against fill history, sum the basket's partial
   fills first; one history row alone will not match.
 - **No fill states a fee or a realized PnL.** **Seen** live and in history.
-- **Commission is only a running total** for the account:
-  `rms_account_commission` on the account PnL row.
+- **Charged commission was observed as an account running total:**
+  `rms_account_commission` on the account PnL row. A notification
+  commission rate is a separate field, not a charged fill amount.
 - **Fill history** takes up to 10,000 records per request. With
   `max_record_count` set to `None` the server picks the cap. **Seen:** it
   spells sides `B` and `S`, where notifications use numbers.
@@ -322,6 +324,19 @@ or its fills are absent, not complete history, and not a general statement
 that historical queries are unavailable for every account or connection.
 Inspect errors on returned response frames as well as an outer request
 error; this refusal was retained on a response frame.
+
+**Seen** (demo, 2026-10-28; fork revision `3ac0773`): sequential one-contract
+MNQ and MES round trips used one retained SDK client. The caller followed MNQ
+trades and requested no MES market-data follow; order-plant notifications
+included the fills for both contracts. That subscription choice is established
+by the caller's source and completed setup, rather than a full ticker-wire audit.
+Independent application and R Trader plugin interoperability remain unverified.
+
+The fill notifications stated `commission_fill_rate = 0.51`. This is a rate;
+the captured fill and history rows supplied no charged per-fill fee or realized
+PnL amount. The account's stated aggregate commission rose from 1.02 to 3.06
+across the four fills. Preserve those observations separately instead of assigning
+the aggregate change to individual fills.
 
 ### Positions and PnL
 
@@ -387,6 +402,40 @@ already includes.
 `total_unfilled_size` as optional `uint64`. Width belongs to the particular
 message field; it cannot be inferred from an observed zero or applied to
 all quantity fields.
+
+### Across a trading-day boundary
+
+**Seen** (demo, 2026-10-28; fork revision `3ac0773`): a flat account remained
+connected across the scheduled CME session close at 21:00 UTC and reopen at
+22:00 UTC. The sampled MNQ counters and bounded replay changed as follows.
+Basket and history counts below are distinct returned identities:
+
+| Sample (UTC) | Bought / sold | Net | Replay baskets | History fills |
+| --- | --- | --- | --- | --- |
+| 20:30, before close | 18 / 18 | 0 | 20 | 18 |
+| 21:02, after close | 18 / 18 | 0 | 20 | 18 |
+| 22:02, after reopen | 0 / 0 | 0 | 0 | 18 |
+| After one buy and one sell | 1 / 1 | 0 | 2 | 20 |
+
+The reset was observed after the 21:02 sample and by the 22:02 sample. These
+reads do not identify its exact instant. The older fill-history rows remained
+available in the returned range while the observed order replay shortened.
+The final read used overlapping history queries that returned two and twenty
+rows; the two were already among the twenty, so those were twenty distinct
+fills, not twenty-two.
+
+Before the round trip, `account_balance` stayed 49235.00 while `cash_on_hand`
+changed from 49286.86 to 49235.00 and `day_pnl` from -51.86 to 0.00. The one-lot
+buy at 29758.75 and sell at 29758.00 gave -1.50 USD gross. The final total was
+49232.48, with separately stated new-day aggregate commission 1.02, open PnL
+0.00, closed PnL -1.50 and day PnL -2.52. Snapshot commission remained absent.
+These are separately stated fields and observations, not a settled-cash formula
+or allocated per-fill fees.
+
+> [!IMPORTANT]
+> This was one flat-account boundary recording. The exact reset instant,
+> behavior with a position held across it, and venue-complete order or fill
+> history remain unproven. An empty bounded replay is not a retention guarantee.
 
 ### Native brackets
 
@@ -539,8 +588,9 @@ not a direct witness of buffered DTO contents or a live receipt guarantee.
 
 ## Known gaps and unproven
 
-- **Day reset.** Whether the fill counts reset when a trading day starts.
-  They do not reset when flat, and they carry across sessions within one day.
+- **Day reset timing and scope.** The flat-account recording above observed
+  a reset between its after-close and after-open samples. Its exact instant
+  and behavior with a position held across the boundary remain unproven.
 - **Snapshot cut.** Whether a PnL snapshot can leave out a fill stamped before
   the snapshot row's own timestamp.
 - **Fill history size.** How many fills come back with no cap set.
