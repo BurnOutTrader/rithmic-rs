@@ -465,6 +465,31 @@ What an integration has to handle, in the order it tends to bite:
     fill.
 11. **Hold one session.** Share it rather than logging in again.
 
+### Multi-part read evidence
+
+**Source-inspected** ([library commit][later-source], checked 2026-10-28).
+For the product RMS multi-part reply (template 307), the
+[request handler](src/request_handler.rs) buffers parts until the terminal
+reply. A successful API return supplies the collected decoded responses.
+An outer `Err` result or a cancelled caller wait does not return that partial
+vector. Those non-update parts are not broadcast as subscription
+updates. The caller owns its deadline; the product read API does not start
+its own reply deadline.
+
+Keep the actual failure and mark the partial prefix unavailable. An
+unavailable prefix is not an empty product list. Re-encoding the returned SDK
+message preserves its decoded fields, not the original framed wire bytes or
+unknown fields the decoder did not retain.
+
+The [response decoder](src/api/receiver_api.rs) uses `rp_code` for its error
+metadata and the presence of `rq_handler_rp_code` for `has_more`, which
+indicates whether another part follows.
+Keep both original lists within your evidence bounds and report omitted
+details explicitly: `response.error == None`
+does not independently validate the handler list, and a nonempty handler list
+alone does not mean refusal. These are SDK implementation limits, not new
+observations of server coverage or product trading permission.
+
 ## Known gaps and unproven
 
 - **Day reset.** Whether the fill counts reset when a trading day starts.
