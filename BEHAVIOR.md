@@ -29,7 +29,8 @@ negotiation. The later fork's definitions do not describe the earlier recordings
 or change the protocol bundled on this repository's `main`.
 
 - **Environment:** a Rithmic demo (paper trading) system.
-- **Instruments:** CME micro futures; the later round trip traded MNQ only.
+- **Instruments:** CME micro futures for execution; FESX/EUREX reference-data
+  search only. The later round trip traded MNQ only.
 - **Evidence:** order and PnL plant messages, recorded in receipt order.
   The later captures contain decoded SDK DTOs re-encoded after receipt, not
   original WebSocket frames. Two local observation paths can record the same
@@ -111,6 +112,11 @@ A search can return product alias rows beside the contracts. An alias row
 can name an old contract, so trust one only when the same search also lists
 the contract it names. A product with no designated front month is answered
 with the no-data code `7`.
+
+**Seen** (demo, 2026-10-28, client error log). A search returned FESX contracts
+on EUREX, while the front-month lookup reported `[13] permission denied`.
+Search results did not establish access to the front-month query or permission
+to trade. No FESX order was sent in this recording.
 
 **Seen.** Rithmic spells a dated CME contract with a one-digit year, for
 example `MNQZ6`.
