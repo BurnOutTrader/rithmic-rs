@@ -56,10 +56,16 @@ position, balance) and never sends a fill.
 ### One session per user
 
 Each plant is its own WebSocket and its own login, and one user can have all
-four trading plants connected at once. Do not plan on a second, parallel
-session for the same user, for example a separate read-only login for
-checks. We were told the system does not allow it, so we never tried. Share
-the session you have.
+four trading plants connected at once. The recorded setup was reported to
+allow only one session per user; parallel-client behavior remains unverified.
+Reuse the existing session for read-only checks.
+
+**Source-inspected.** Concurrent handles on one running plant share one login
+request. That does not establish support for independent applications.
+
+Rithmic documents [Plugin Mode through R Trader Pro](https://www.rithmic.com/platforms/guides)
+for sharing a data feed. The pinned SDK uses direct WebSocket plants; plugin
+interoperability and concurrent order-only connectivity remain unverified.
 
 ### Plants fail on their own
 
