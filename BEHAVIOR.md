@@ -305,6 +305,18 @@ did not name their earlier basket. These reads need not expose the same
 history window. This observation establishes neither full retention nor a
 complete trading-day history.
 
+**Seen** (demo, read-only session, 2026-10-28; fork revision `3ac0773`):
+one selected-basket `show_order_history` request (template322) received
+`ResponseShowOrderHistory` (template323) with
+`rp_code = ["13", "permission denied"]`. The returned response retained
+the SDK's `RequestRejected` error. No original order notifications arrived
+during the bounded collection window, and the connection shut down
+successfully. This is a refusal for that query, not evidence that the basket
+or its fills are absent, not complete history, and not a general statement
+that historical queries are unavailable for every account or connection.
+Inspect errors on returned response frames as well as an outer request
+error; this refusal was retained on a response frame.
+
 ### Positions and PnL
 
 **Seen** (demo, 2026-10-28): during a held MNQ position, all 43 recorded
