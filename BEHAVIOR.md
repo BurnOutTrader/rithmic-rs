@@ -479,7 +479,7 @@ What an integration has to handle, in the order it tends to bite:
 
 ### Multi-part read evidence
 
-**Source-inspected** ([library commit][later-source], checked 2026-10-28).
+**Source-inspected** ([library commit][later-source], checked 2026-10-29).
 For the product RMS multi-part reply (template 307), the
 [request handler](src/request_handler.rs) buffers parts until the terminal
 reply. A successful API return supplies the collected decoded responses.
@@ -501,6 +501,22 @@ details explicitly: `response.error == None`
 does not independently validate the handler list, and a nonempty handler list
 alone does not mean refusal. These are SDK implementation limits, not new
 observations of server coverage or product trading permission.
+
+At the same fork revision, these read replies take different paths:
+
+| Reply templates | SDK handling |
+| --- | --- |
+| 303, 305, 307, 339, 341, 3513 | Private non-update multi-part reply vector |
+| 321, 323, 403 | Single acknowledgements; updates arrive separately |
+
+Order notifications (351/352) and PnL updates (450/451) arrive independently.
+
+`collect_part` has no count/byte admission for that private vector. A caller's
+cutoff or retention cap applied after return does not bound its accumulation.
+
+The actor completes a Binary's decode/routing handling before processing a later
+Ping. A matching Pong for that later Ping supports an actor-progress inference,
+not a direct witness of buffered DTO contents or a live receipt guarantee.
 
 ## Known gaps and unproven
 
