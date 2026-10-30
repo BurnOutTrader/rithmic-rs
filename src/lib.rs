@@ -336,6 +336,9 @@ mod ping_manager;
 /// reconnecting them independently.
 pub mod plants;
 
+/// Raw inbound frame recording, before any decoding.
+pub mod raw_frames;
+
 mod request_handler;
 
 /// Rithmic protocol message definitions (protobuf-generated).

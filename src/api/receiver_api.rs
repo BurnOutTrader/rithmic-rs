@@ -55,6 +55,8 @@ impl RithmicReceiverApi {
     /// `error` holds the `ProtocolError`, and `request_id` is recovered if it can be.
     #[allow(clippy::result_large_err)]
     pub(crate) fn buf_to_message(&self, data: Bytes) -> Result<RithmicResponse, RithmicResponse> {
+        crate::raw_frames::observe(&self.source, &data);
+
         if data.len() < 4 {
             error!("Received message too short: {} bytes", data.len());
 
