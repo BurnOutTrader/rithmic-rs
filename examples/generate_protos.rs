@@ -1,39 +1,22 @@
-//! Regenerates `src/rti.rs` from a directory of vendor `.proto` files.
-//! Run via: `cargo run --example generate_protos -- /path/to/release/proto && cargo fmt`
-//! With no argument, reads `src/raw-proto/`.
+//! Regenerates `src/rti.rs` from the `.proto` files in `src/raw-proto/`.
+//! Run via: `cargo run --example generate_protos && cargo fmt`
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").map_err(
         |_| "CARGO_MANIFEST_DIR not set: run this via `cargo run --example generate_protos`",
     )?);
     let src_dir = manifest_dir.join("src");
-    let proto_dir = std::env::args_os()
-        .nth(1)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| src_dir.join("raw-proto"));
-    // 0.90 no longer ships otps_proto_pool.proto. Compile every supplied schema
-    // directly, including agreement and MessageType definitions omitted by older pools.
+    let proto_dir = src_dir.join("raw-proto");
+    // 0.90.0.0 dropped otps_proto_pool.proto, so compile every schema directly.
     let mut protos = std::fs::read_dir(&proto_dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<_>, _>>()?;
     protos.retain(|path| path.extension().is_some_and(|ext| ext == "proto"));
-    // These administrative password schemas have no template IDs in the
-    // published reference guide and are outside this client's supported surface.
+    // No template IDs in the Reference Guide, so the receiver could not decode them.
     protos.retain(|path| {
-        !matches!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some(
-                "request_change_password_on_behalf_of.proto"
-                    | "response_change_password_on_behalf_of.proto"
-            )
-        )
+        !path.ends_with("request_change_password_on_behalf_of.proto")
+            && !path.ends_with("response_change_password_on_behalf_of.proto")
     });
     protos.sort();
-    if protos.is_empty() {
-        return Err(format!("no .proto files in {}", proto_dir.display()).into());
-    }
-    // Keep the checked-in bindings intact until compilation and postprocessing
-    // both succeed, and avoid sharing temporary output with other generator runs.
-    let output_dir = tempfile::tempdir()?;
 
     let mut config = prost_build::Config::new();
     // Rithmic adds fields to existing messages in most template releases, so a
@@ -45,11 +28,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ".rti.ResponseListExchangePermissions.entitlement_flag",
         "#[deprecated = \"use level_1_market_data and level_2_market_data instead\"]",
     );
-    config.out_dir(output_dir.path());
+    config.out_dir(&src_dir);
     config.compile_protos(&protos, &[&proto_dir])?;
 
-    let pool_path = src_dir.join("rti.rs");
-    let code = std::fs::read_to_string(output_dir.path().join("rti.rs"))?;
+    let rti_path = src_dir.join("rti.rs");
+    let code = std::fs::read_to_string(&rti_path)?;
     let combined = format!("pub mod messages;\n\n{code}");
 
     // Some Rithmic comments contain tabs, which prost copies into doc comments
@@ -69,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         detabbed.push('\n');
     }
 
-    std::fs::write(&pool_path, detabbed)?;
+    std::fs::write(&rti_path, detabbed)?;
 
     println!("Generated src/rti.rs. Run `cargo fmt` to format it.");
     Ok(())

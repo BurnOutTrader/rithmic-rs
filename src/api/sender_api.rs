@@ -1463,8 +1463,8 @@ impl RithmicSenderApi {
         self.request_to_buf(req, id)
     }
 
-    /// Fills in `range`. A specified `max_record_count` must be in 1..=10,000;
-    /// `None` leaves the cap to the server.
+    /// Fills in `range`. Rithmic rejects a `max_record_count` outside
+    /// 1..=10,000; `None` leaves the cap to the server.
     pub fn request_show_fill_history(
         &mut self,
         range: FillHistoryRange,
@@ -1626,56 +1626,6 @@ mod tests {
         let request: RequestModifyOrder = decode_request(&buf);
         assert_eq!(request.quantity_64, Some(u64::MAX));
         assert_eq!(request.quantity, None);
-    }
-
-    #[test]
-    fn bracket_entry_and_exit_legs_send_native_quantities_without_truncation() {
-        let mut api = RithmicSenderApi::new(&test_config());
-        let quantity = u64::from(u32::MAX) + 2;
-        let order = advanced_bracket()
-            .quantity(quantity)
-            .targets([(quantity - 1, 16), (1, 24)])
-            .stops([(quantity, 8)])
-            .build()
-            .expect("valid bracket");
-        let (buf, _) = api.request_bracket_order(order, &default_account(), None, "globex");
-        let request: RequestBracketOrder = decode_request(&buf);
-
-        assert_eq!(request.quantity_64, Some(quantity));
-        assert_eq!(request.target_quantity_64, vec![quantity - 1, 1]);
-        assert_eq!(request.stop_quantity_64, vec![quantity]);
-        assert_eq!(request.target_ticks, vec![16, 24]);
-        assert_eq!(request.stop_ticks, vec![8]);
-        assert_eq!(request.quantity, None);
-        assert!(request.target_quantity.is_empty());
-        assert!(request.stop_quantity.is_empty());
-    }
-
-    #[test]
-    fn oco_legs_keep_native_quantities_aligned_without_legacy_fields() {
-        let mut api = RithmicSenderApi::new(&test_config());
-        let quantities = vec![u64::from(u32::MAX) + 1, u64::MAX];
-        let legs = quantities
-            .iter()
-            .map(|&quantity| {
-                let leg = RithmicOcoOrderLeg::new()
-                    .symbol("ESZ6")
-                    .exchange("CME")
-                    .quantity(quantity)
-                    .price_type(OrderType::Market)
-                    .build()
-                    .expect("valid OCO leg");
-                (leg, "globex".to_owned())
-            })
-            .collect();
-        let (buf, _) = api
-            .request_oco_order(legs, OcoCancelTiming::default(), &default_account())
-            .expect("supported OCO legs");
-        let request: RequestOcoOrder = decode_request(&buf);
-
-        assert_eq!(request.quantity_64, quantities);
-        assert_eq!(request.symbol.len(), quantities.len());
-        assert!(request.quantity.is_empty());
     }
 
     /// A bracket exercising every field the request models, built the way

@@ -550,10 +550,10 @@ impl From<BracketType> for request_bracket_order::BracketType {
 /// The `order_operation_type` of a bracket order, added in template
 /// version 5.37: which event on one order of the bracket cancels the rest.
 ///
-/// Rithmic documents only the wire spellings: "AFOCCA, FOCCA, CCA, FCA or
-/// OCA". The reading on each variant is async_rithmic's annotation of the
-/// same field, not Rithmic's own words; Rithmic's C++ SDK declares the same
-/// constants without comment.
+/// Rithmic documents only the wire spellings: "AFOCCA, FOCCA, CCA, or FCA"
+/// (0.90.0.0 dropped OCA). The reading on each variant is async_rithmic's
+/// annotation of the same field, not Rithmic's own words; Rithmic's C++ SDK
+/// declares the same constants without comment.
 ///
 /// Leave [`RithmicBracketOrder::operation_type`] unset unless a specific
 /// grouping is wanted. The server then applies its default, and
@@ -574,7 +574,8 @@ pub enum BracketOperationType {
     /// Sent as `FCA`, read as "fill cancels all".
     Fca,
     /// Sent as `OCA`, read as "one cancels all", the classic OCO grouping.
-    /// The one value Rithmic's C++ SDK declares no constant for.
+    /// Rithmic's C++ SDK declares no constant for it, and the 0.90.0.0 proto
+    /// no longer lists it.
     Oca,
 }
 

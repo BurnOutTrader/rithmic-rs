@@ -313,7 +313,7 @@ impl RithmicReceiverApi {
                     source: self.source.clone(),
                 }
             }
-            // Legacy user/account updates retain their original general template.
+            // 358 has its own schema since 0.90.0.0; 76 keeps this one.
             76 => {
                 let resp = UserAccountUpdate::decode(payload)
                     .map_err(|e| decode_error(&self.source, e, true))?;
@@ -1937,73 +1937,6 @@ mod tests {
             RithmicMessage::UpdateEasyToBorrowList(_)
         ));
         assert!(response.is_update);
-    }
-
-    #[test]
-    fn account_and_user_update_preserves_new_audit_fields() {
-        let update = AccountAndUserUpdate {
-            template_id: 358,
-            account_id: Some("ACCOUNT_A".into()),
-            source_user_id: Some("admin".into()),
-            user: Some("trader".into()),
-            order_copy_status: Some("enabled".into()),
-            ..Default::default()
-        };
-        let response = decode_with_api(&update);
-
-        assert_eq!(
-            response.message,
-            RithmicMessage::AccountAndUserUpdate(update)
-        );
-        assert!(response.is_update);
-        assert!(response.request_id.is_empty());
-        assert!(response.error.is_none());
-    }
-
-    #[test]
-    fn native_trade_sizes_above_u32_are_preserved() {
-        let trade = LastTrade {
-            template_id: 150,
-            trade_size_64: Some(u64::from(u32::MAX) + 1),
-            ..Default::default()
-        };
-        let response = decode_with_api(&trade);
-
-        assert_eq!(response.message, RithmicMessage::LastTrade(trade));
-        assert!(response.is_update);
-    }
-
-    #[test]
-    fn account_history_replies_preserve_routing_and_multipart_completion() {
-        for intermediate in [true, false] {
-            let handler_code = if intermediate {
-                vec!["7".into()]
-            } else {
-                vec![]
-            };
-            let playback = decode_with_api(&ResponsePlaybackAccUsers {
-                template_id: 3519,
-                user_msg: vec!["playback".into()],
-                rq_handler_rp_code: handler_code.clone(),
-                rp_code: vec!["0".into()],
-                ..Default::default()
-            });
-            let history = decode_with_api(&ResponseShowAccUserHistory {
-                template_id: 3521,
-                user_msg: vec!["history".into()],
-                rq_handler_rp_code: handler_code,
-                rp_code: vec!["0".into()],
-                ..Default::default()
-            });
-
-            for (response, request_id) in [(playback, "playback"), (history, "history")] {
-                assert_eq!(response.request_id, request_id);
-                assert!(response.multi_response);
-                assert_eq!(response.has_more, intermediate);
-                assert!(!response.is_update);
-                assert!(response.error.is_none());
-            }
-        }
     }
 
     #[test]

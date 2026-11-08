@@ -7,34 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The bundled protos move to R | Protocol API 0.90.0.0 (template version 5.55).
+Order quantities become `u64` and go out in Rithmic's new 64-bit fields.
+[MIGRATING.md](MIGRATING.md) covers each change.
+
+### Behavior changes the compiler will not catch
+
+- Template 358 decodes as `RithmicMessage::AccountAndUserUpdate`. A
+  `UserAccountUpdate` arm still sees template 76 but no longer sees 358.
+- Order requests send only `quantity_64`, `target_quantity_64` and
+  `stop_quantity_64`. The 32-bit fields Rithmic deprecated are left unset.
+- `show_fill_history(.., Some(0))` returns `RithmicError::InvalidArgument`.
+  The 0.90.0.0 schema requires a cap from 1 to 10,000.
+
+### Breaking Changes
+
+- `RithmicOrder`, `RithmicModifyOrder`, `RithmicBracketOrder` and
+  `RithmicOcoOrderLeg` quantities are `u64`. Bracket `target_quantity` and
+  `stop_quantity` are `Vec<u64>`, and `targets()`/`stops()` take `(u64, i32)`
+  pairs. Tick distances stay `i32`.
+- `RithmicMessage::DepthByOrderEndEvent` and template 161 are gone. Rithmic
+  removed the schema.
+- `rti::last_trade::PresenceBits::PrecentChange` is now `PercentChange`, after
+  Rithmic fixed the spelling. The value is still 4.
+
 ### Added
 
-- Protocol API 0.90 account/user playback and history bindings, plus decoding of
-  account/user, entitlement, session configuration and flow-control messages.
-- Native 64-bit quantity and market-data size fields in `rti` messages.
-
-### Changed
-
-- Regenerated protocol bindings from R | Protocol API 0.90.0.0 and send template
-  version 5.55 on login. Template 358 now yields `AccountAndUserUpdate`;
-  `UserAccountUpdate` remains available for legacy template 76.
-- The proto generator accepts a vendor schema directory without a pool file.
-- Order, modify, bracket and OCO quantities now use `u64` and are sent in the
-  native `quantity_64` fields. Bracket exit quantities use `Vec<u64>` and the
-  native target/stop fields; tick distances remain `i32`.
-- The generated `last_trade::PresenceBits::PrecentChange` variant is now
-  `PercentChange`; its protobuf spelling is corrected to `PERCENT_CHANGE`.
-
-### Removed
-
-- `DepthByOrderEndEvent` and template 161 decoding, matching the removal of its
-  schema in Protocol API 0.90.0.0.
-
-### Fixed
-
-- Fill-history record caps reject zero as required by the 0.90 schema. Use `None`
-  to omit the cap, or a value from 1 through 10,000.
-- Examples and documentation read native 64-bit trade, quote and fill sizes.
+- `RithmicMessage::AccountAndUserUpdate` for template 358, filtered by account
+  like `UserAccountUpdate`.
+- 64-bit size fields in `rti`, such as `trade_size_64`, `bid_size_64` and
+  `fill_size_64`. They replace the 32-bit ones Rithmic deprecated.
+- `RithmicMessage` variants for the new account/user history, entitlement,
+  session config and flow control replies. The crate does not send the
+  matching requests yet.
 
 ## [3.3.0]
 
