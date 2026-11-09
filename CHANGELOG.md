@@ -30,6 +30,8 @@ Order quantities become `u64` and go out in Rithmic's new 64-bit fields.
   removed the schema.
 - `rti::last_trade::PresenceBits::PrecentChange` is now `PercentChange`, after
   Rithmic fixed the spelling. The value is still 4.
+- `BracketOperationType::Oca` is gone. The 0.90.0.0 proto no longer lists `OCA`
+  as an `order_operation_type`.
 
 ### Added
 

@@ -573,10 +573,6 @@ pub enum BracketOperationType {
     Cca,
     /// Sent as `FCA`, read as "fill cancels all".
     Fca,
-    /// Sent as `OCA`, read as "one cancels all", the classic OCO grouping.
-    /// Rithmic's C++ SDK declares no constant for it, and the 0.90.0.0 proto
-    /// no longer lists it.
-    Oca,
 }
 
 impl BracketOperationType {
@@ -587,7 +583,6 @@ impl BracketOperationType {
             Self::Focca => "FOCCA",
             Self::Cca => "CCA",
             Self::Fca => "FCA",
-            Self::Oca => "OCA",
         }
     }
 }

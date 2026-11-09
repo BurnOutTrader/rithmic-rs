@@ -1664,7 +1664,7 @@ mod tests {
             .release_at(35900, 125000)
             .cancel_at(37000, 750000)
             .cancel_after_secs(120)
-            .operation_type(BracketOperationType::Oca)
+            .operation_type(BracketOperationType::Fca)
             .build()
             .expect("valid bracket")
     }
@@ -1753,7 +1753,7 @@ mod tests {
         assert_eq!(request.trigger_price, None);
         assert_eq!(request.user_tag.as_deref(), Some("bracket-1"));
         // An unset operation type must stay off the wire: a server-side default
-        // is not the same request as an explicit OCA.
+        // is not the same request as an explicit one.
         assert_eq!(request.order_operation_type, None);
     }
 
@@ -1770,7 +1770,7 @@ mod tests {
         assert_eq!(request.account_id.as_deref(), Some("ACCOUNT_B"));
         assert_eq!(request.trade_route.as_deref(), Some("globex"));
         assert_eq!(request.user_tag.as_deref(), Some("advanced-bracket-1"));
-        assert_eq!(request.order_operation_type.as_deref(), Some("OCA"));
+        assert_eq!(request.order_operation_type.as_deref(), Some("FCA"));
     }
 
     #[test]

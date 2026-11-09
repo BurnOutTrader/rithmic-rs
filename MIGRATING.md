@@ -21,6 +21,9 @@ size fields. These changes apply on top of the 3.0 migration guide below.
 - Rename `rti::last_trade::PresenceBits::PrecentChange` to `PercentChange`.
   `as_str_name()` now returns the corrected `PERCENT_CHANGE` spelling; the
   numeric value remains 4.
+- `BracketOperationType::Oca` is removed, since 0.90.0.0 no longer lists `OCA`.
+  Pick one of the remaining variants, or leave `operation_type` unset for the
+  server default.
 
 # Migrating to 3.0.0
 
