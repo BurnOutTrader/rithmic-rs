@@ -550,15 +550,11 @@ impl From<BracketType> for request_bracket_order::BracketType {
 /// The `order_operation_type` of a bracket order, added in template
 /// version 5.37: which event on one order of the bracket cancels the rest.
 ///
-/// Rithmic documents only the wire spellings: "AFOCCA, FOCCA, CCA, or FCA"
-/// (0.90.0.0 dropped OCA). The reading on each variant is async_rithmic's
-/// annotation of the same field, not Rithmic's own words; Rithmic's C++ SDK
-/// declares the same constants without comment.
+/// Rithmic documents only the wire spellings. The reading on each variant is
+/// async_rithmic's annotation of the same field, not Rithmic's own words.
 ///
 /// Leave [`RithmicBracketOrder::operation_type`] unset unless a specific
-/// grouping is wanted. The server then applies its default, and
-/// async_rithmic reverted sending `OCA` on every bracket after it broke
-/// bracket orders.
+/// grouping is wanted. The server then applies its default.
 ///
 /// [`RithmicBracketOrder::operation_type`]: crate::RithmicBracketOrder::operation_type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

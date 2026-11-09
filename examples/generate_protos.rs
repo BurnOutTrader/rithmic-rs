@@ -6,7 +6,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?);
     let src_dir = manifest_dir.join("src");
     let proto_dir = src_dir.join("raw-proto");
-    // 0.90.0.0 dropped otps_proto_pool.proto, so compile every schema directly.
     let mut protos = std::fs::read_dir(&proto_dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<_>, _>>()?;
