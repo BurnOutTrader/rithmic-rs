@@ -3239,7 +3239,7 @@ mod tests {
         assert_eq!(request.if_touched_price, None);
     }
 
-    /// Expected ids are the Reference Guide's template tables (0.89; 504 and 508
+    /// Expected ids are the Reference Guide's template tables (0.90; 504 and 508
     /// from the 0.84 guide), not the numbers the builders hard-code.
     #[test]
     fn every_request_builder_sends_its_documented_template_id() {
