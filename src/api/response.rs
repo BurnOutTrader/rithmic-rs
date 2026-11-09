@@ -107,6 +107,7 @@ impl RithmicResponse {
             RithmicMessage::ResponseTickBarReplay(m) => m.request_key.as_deref(),
             RithmicMessage::ResponseTimeBarReplay(m) => m.request_key.as_deref(),
             RithmicMessage::ResponseVolumeProfileMinuteBars(m) => m.request_key.as_deref(),
+            RithmicMessage::ResponseShowFillHistory(m) => m.request_key.as_deref(),
             _ => None,
         };
 

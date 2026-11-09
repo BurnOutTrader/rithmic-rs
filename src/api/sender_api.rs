@@ -18,22 +18,23 @@ use crate::{
         RequestAccountRmsUpdates, RequestAuxilliaryReferenceData, RequestBracketOrder,
         RequestCancelAllOrders, RequestCancelOrder, RequestDepthByOrderSnapshot,
         RequestDepthByOrderUpdates, RequestEasyToBorrowList, RequestExitPosition,
-        RequestFrontMonthContract, RequestGetInstrumentByUnderlying, RequestGetUserInfo,
-        RequestGetVolumeAtPrice, RequestGiveTickSizeTypeTable, RequestHeartbeat, RequestLinkOrders,
-        RequestListAcceptedAgreements, RequestListExchangePermissions,
-        RequestListUnacceptedAgreements, RequestLogin, RequestLoginInfo, RequestLogout,
-        RequestMarketDataUpdate, RequestMarketDataUpdateByUnderlying, RequestModifyOrder,
-        RequestModifyOrderReferenceData, RequestNewOrder, RequestOcoOrder,
-        RequestOrderSessionConfig, RequestPnLPositionSnapshot, RequestPnLPositionUpdates,
-        RequestProductCodes, RequestProductRmsInfo, RequestReferenceData, RequestReplayExecutions,
-        RequestResumeBars, RequestRithmicSystemGatewayInfo, RequestRithmicSystemInfo,
-        RequestSearchSymbols, RequestSetRithmicMrktDataSelfCertStatus, RequestShowAgreement,
-        RequestShowBracketStops, RequestShowBrackets, RequestShowFillHistory,
+        RequestFlowControl, RequestFrontMonthContract, RequestGetInstrumentByUnderlying,
+        RequestGetUserInfo, RequestGetVolumeAtPrice, RequestGiveTickSizeTypeTable,
+        RequestHeartbeat, RequestLinkOrders, RequestListAcceptedAgreements,
+        RequestListExchangePermissions, RequestListUnacceptedAgreements, RequestLogin,
+        RequestLoginInfo, RequestLogout, RequestMarketDataUpdate,
+        RequestMarketDataUpdateByUnderlying, RequestModifyOrder, RequestModifyOrderReferenceData,
+        RequestNewOrder, RequestOcoOrder, RequestOrderSessionConfig, RequestPlaybackAccUsers,
+        RequestPnLPositionSnapshot, RequestPnLPositionUpdates, RequestProductCodes,
+        RequestProductRmsInfo, RequestReferenceData, RequestReplayExecutions, RequestResumeBars,
+        RequestRithmicSystemGatewayInfo, RequestRithmicSystemInfo, RequestSearchSymbols,
+        RequestSessionConfig, RequestSetRithmicMrktDataSelfCertStatus, RequestShowAccUserHistory,
+        RequestShowAgreement, RequestShowBracketStops, RequestShowBrackets, RequestShowFillHistory,
         RequestShowOrderHistory, RequestShowOrderHistoryDates, RequestShowOrderHistoryDetail,
         RequestShowOrderHistorySummary, RequestShowOrders, RequestSubscribeForOrderUpdates,
         RequestSubscribeToBracketUpdates, RequestTickBarReplay, RequestTickBarUpdate,
         RequestTimeBarReplay, RequestTimeBarUpdate, RequestTradeRoutes,
-        RequestUpdateStopBracketLevel, RequestUpdateTargetBracketLevel,
+        RequestUpdateStopBracketLevel, RequestUpdateTargetBracketLevel, RequestUserEntitlements,
         RequestVolumeProfileMinuteBars, request_account_rms_updates, request_bracket_order,
         request_cancel_all_orders, request_cancel_order, request_depth_by_order_updates,
         request_easy_to_borrow_list, request_exit_position,
@@ -45,8 +46,9 @@ use crate::{
         request_tick_bar_update, request_time_bar_replay, request_time_bar_update,
     },
     types::{
-        EasyToBorrowRequest, FillHistoryRange, OrderType, RmsUpdateBits, TickBarReplayRequest,
-        TimeBarReplayRequest, VolumeProfileMinuteBarsRequest,
+        EasyToBorrowRequest, EntitlementKind, FillHistoryRange, OrderType, PlaybackKind,
+        RmsUpdateBits, SessionConfig, TickBarReplayRequest, TimeBarReplayRequest,
+        VolumeProfileMinuteBarsRequest,
     },
 };
 
@@ -59,6 +61,11 @@ pub(crate) const TEMPLATE_VERSION: &str = "5.55";
 /// absent field, so it is left off the wire rather than sent as `""`.
 fn omit_if_empty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
+}
+
+/// Rithmic's spelling for an on/off string field.
+fn enabled_or_disabled(enabled: bool) -> String {
+    if enabled { "enabled" } else { "disabled" }.to_string()
 }
 
 /// Slot `i` prices leg `i`, so once any leg has a price the rest get `0.0`.
@@ -880,6 +887,42 @@ impl RithmicSenderApi {
         self.request_to_buf(req, id)
     }
 
+    /// Ask for the next batch of a flow-controlled reply. `request_key` comes
+    /// from the frame that paused it.
+    pub fn request_flow_control(&mut self, request_key: &str) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestFlowControl {
+            template_id: 22,
+            user_msg: vec![id.clone()],
+            request_key: Some(request_key.to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Order plant settings when `session_type` is `"op"`, PnL plant settings
+    /// when it is `"pnl"`.
+    pub fn request_session_config(
+        &mut self,
+        session_type: &str,
+        config: &SessionConfig,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestSessionConfig {
+            template_id: 24,
+            user_msg: vec![id.clone()],
+            session_type: Some(session_type.to_string()),
+            add_proto_srvr_timestamp: config.add_proto_srvr_timestamp.map(enabled_or_disabled),
+            should_defer_request: config.should_defer_request,
+            push_user_updates: config.push_user_updates.map(enabled_or_disabled),
+            push_account_updates: config.push_account_updates.map(enabled_or_disabled),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
     pub fn request_depth_by_order_snapshot(
         &mut self,
         symbol: &str,
@@ -1471,6 +1514,26 @@ impl RithmicSenderApi {
         max_record_count: Option<i32>,
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
+        self.fill_history(range, max_record_count, None, account)
+    }
+
+    /// Every fill in `range`, in batches the server pauses between. Rithmic
+    /// requires `max_record_count` to be unset when flow control is on.
+    pub fn request_load_fill_history(
+        &mut self,
+        range: FillHistoryRange,
+        account: &RithmicAccount,
+    ) -> (Vec<u8>, String) {
+        self.fill_history(range, None, Some(enabled_or_disabled(true)), account)
+    }
+
+    fn fill_history(
+        &mut self,
+        range: FillHistoryRange,
+        max_record_count: Option<i32>,
+        flow_control: Option<String>,
+        account: &RithmicAccount,
+    ) -> (Vec<u8>, String) {
         let id = self.get_next_message_id();
 
         let req = RequestShowFillHistory {
@@ -1483,7 +1546,74 @@ impl RithmicSenderApi {
             start_index: Some(range.start()),
             finish_index: Some(range.finish()),
             max_record_count,
-            ..Default::default()
+            flow_control,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// `user` defaults to the logged-in user on the server side.
+    pub fn request_user_entitlements(
+        &mut self,
+        user: Option<&str>,
+        kind: EntitlementKind,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestUserEntitlements {
+            template_id: 3516,
+            user_msg: vec![id.clone()],
+            user: user.map(str::to_string),
+            entitlements: Some(kind.as_str_name().to_string()),
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Account and user changes from `start_index_sec`, to `finish_index_sec`
+    /// or now.
+    pub fn request_playback_acc_users(
+        &mut self,
+        kind: PlaybackKind,
+        start_index_sec: i32,
+        finish_index_sec: Option<i32>,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let req = RequestPlaybackAccUsers {
+            template_id: 3518,
+            user_msg: vec![id.clone()],
+            playback: Some(kind.as_str_name().to_string()),
+            start_index: Some(start_index_sec),
+            finish_index: finish_index_sec,
+        };
+
+        self.request_to_buf(req, id)
+    }
+
+    /// Change history of `account`, or of `user` when one is given. Rithmic
+    /// needs the account ids for the first and only `user_target` for the
+    /// second.
+    pub fn request_show_acc_user_history(
+        &mut self,
+        user: Option<&str>,
+        start_index_sec: i32,
+        finish_index_sec: i32,
+        account: &RithmicAccount,
+    ) -> (Vec<u8>, String) {
+        let id = self.get_next_message_id();
+
+        let account_ids = |field: &String| user.is_none().then(|| field.clone());
+
+        let req = RequestShowAccUserHistory {
+            template_id: 3520,
+            user_msg: vec![id.clone()],
+            fcm_id: account_ids(&account.fcm_id),
+            ib_id: account_ids(&account.ib_id),
+            account_id: account_ids(&account.account_id),
+            user_target: user.map(str::to_string),
+            start_index: Some(start_index_sec),
+            finish_index: Some(finish_index_sec),
         };
 
         self.request_to_buf(req, id)
@@ -1822,6 +1952,64 @@ mod tests {
         assert_eq!(request.start_index, Some(20_260_801));
         assert_eq!(request.finish_index, Some(20_260_804));
         assert_eq!(request.max_record_count, None);
+        assert_eq!(request.flow_control, None);
+    }
+
+    #[test]
+    fn load_fill_history_turns_on_flow_control_without_a_record_cap() {
+        let mut api = RithmicSenderApi::new(&test_config());
+        let range = FillHistoryRange::Ssboe {
+            start: 1_700_000_000,
+            finish: 1_700_003_600,
+        };
+
+        let (buf, _) = api.request_load_fill_history(range, &default_account());
+        let request: RequestShowFillHistory = decode_request(&buf);
+
+        assert_eq!(request.flow_control.as_deref(), Some("enabled"));
+        assert_eq!(request.max_record_count, None);
+        assert_eq!(request.start_index, Some(1_700_000_000));
+    }
+
+    #[test]
+    fn session_config_sends_set_flags_as_rithmic_keywords_and_leaves_unset_ones_off() {
+        let mut api = RithmicSenderApi::new(&test_config());
+        let config = SessionConfig::new()
+            .add_proto_srvr_timestamp(true)
+            .should_defer_request(false)
+            .push_account_updates(false);
+
+        let (buf, _) = api.request_session_config("op", &config);
+        let request: RequestSessionConfig = decode_request(&buf);
+
+        assert_eq!(request.session_type.as_deref(), Some("op"));
+        assert_eq!(request.add_proto_srvr_timestamp.as_deref(), Some("enabled"));
+        assert_eq!(request.should_defer_request, Some(false));
+        assert_eq!(request.push_account_updates.as_deref(), Some("disabled"));
+        assert_eq!(request.push_user_updates, None);
+    }
+
+    #[test]
+    fn account_history_sends_account_ids_and_user_history_sends_only_the_user() {
+        let mut api = RithmicSenderApi::new(&test_config());
+
+        let (buf, _) = api.request_show_acc_user_history(None, 1, 2, &override_account());
+        let request: RequestShowAccUserHistory = decode_request(&buf);
+        assert_eq!(request.fcm_id.as_deref(), Some("FCM_B"));
+        assert_eq!(request.ib_id.as_deref(), Some("IB_B"));
+        assert_eq!(request.account_id.as_deref(), Some("ACCOUNT_B"));
+        assert_eq!(request.user_target, None);
+
+        let (buf, _) = api.request_show_acc_user_history(Some("trader"), 1, 2, &override_account());
+        let request: RequestShowAccUserHistory = decode_request(&buf);
+        assert_eq!(request.user_target.as_deref(), Some("trader"));
+        assert_eq!(request.fcm_id, None);
+        assert_eq!(request.ib_id, None);
+        assert_eq!(request.account_id, None);
+        assert_eq!(
+            (request.start_index, request.finish_index),
+            (Some(1), Some(2))
+        );
     }
 
     #[test]
@@ -3268,6 +3456,8 @@ mod tests {
             (14, api.request_reference_data("ESZ6", "CME")),
             (16, api.request_rithmic_system_info()),
             (18, api.request_heartbeat()),
+            (22, api.request_flow_control("key")),
+            (24, api.request_session_config("op", &SessionConfig::new())),
             (20, api.request_rithmic_system_gateway_info(None)),
             (
                 100,
@@ -3443,6 +3633,19 @@ mod tests {
             ),
             (3510, api.request_get_user_info(None, &account)),
             (3512, api.request_show_fill_history(fills, None, &account)),
+            (3512, api.request_load_fill_history(fills, &account)),
+            (
+                3516,
+                api.request_user_entitlements(None, EntitlementKind::All),
+            ),
+            (
+                3518,
+                api.request_playback_acc_users(PlaybackKind::All, 0, None),
+            ),
+            (
+                3520,
+                api.request_show_acc_user_history(None, 0, 1, &account),
+            ),
         ];
 
         for (expected, (buf, _)) in requests {

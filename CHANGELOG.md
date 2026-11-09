@@ -40,8 +40,21 @@ Order quantities become `u64` and go out in Rithmic's new 64-bit fields.
 - 64-bit size fields in `rti`, such as `trade_size_64`, `bid_size_64` and
   `fill_size_64`. They replace the 32-bit ones Rithmic deprecated.
 - `RithmicMessage` variants for the new account/user history, entitlement,
-  session config and flow control replies. The crate does not send the
-  matching requests yet.
+  session config and flow control replies.
+- Order plant `set_session_config(SessionConfig)` (template 24), with the new
+  `push_user_updates` and `push_account_updates` flags. PnL plant
+  `set_session_config` sends the same request with session type `pnl`.
+- Order plant `load_fill_history(range)`: fill history with Rithmic's flow
+  control on and no record cap. The plant sends `RequestFlowControl`
+  (template 22) each time the server pauses.
+- Order plant `get_user_entitlements` (3516), `playback_account_users` (3518),
+  and `show_account_history` / `show_user_history` (3520), with the
+  `EntitlementKind` and `PlaybackKind` enums.
+
+### Deprecated
+
+- `RithmicOrderPlantHandle::get_order_session_config()`: Rithmic deprecated
+  template 3502 in favor of session config. Use `set_session_config()`.
 
 ## [3.3.0]
 

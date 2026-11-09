@@ -27,9 +27,12 @@ use crate::{
         tag::answer_caller,
         trade_routes::TradeRouteCache,
     },
-    request_handler::{RequestResult, Responder},
+    request_handler::{PendingReplay, RequestResult, Responder},
     rti::{TradeRoute, messages::RithmicMessage, request_login::SysInfraType},
-    types::{EasyToBorrowRequest, FillHistoryRange, RmsUpdateBits},
+    types::{
+        EasyToBorrowRequest, EntitlementKind, FillHistoryRange, PlaybackKind, RmsUpdateBits,
+        SessionConfig,
+    },
 };
 
 /// Subscription channel capacity used when the config sets none.
@@ -188,6 +191,33 @@ pub(crate) enum OrderPlantCommand {
     ShowFillHistory {
         range: FillHistoryRange,
         max_record_count: Option<i32>,
+        account: Arc<RithmicAccount>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
+    },
+    LoadFillHistory {
+        range: FillHistoryRange,
+        account: Arc<RithmicAccount>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
+    },
+    SetSessionConfig {
+        config: SessionConfig,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
+    },
+    GetUserEntitlements {
+        user: Option<String>,
+        kind: EntitlementKind,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
+    },
+    PlaybackAccountUsers {
+        kind: PlaybackKind,
+        start_index_sec: i32,
+        finish_index_sec: Option<i32>,
+        response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
+    },
+    ShowAccountUserHistory {
+        user: Option<String>,
+        start_index_sec: i32,
+        finish_index_sec: i32,
         account: Arc<RithmicAccount>,
         response_sender: oneshot::Sender<Result<Vec<RithmicResponse>, RithmicError>>,
     },
@@ -835,6 +865,60 @@ impl PlantKind for OrderPlant {
                 response_sender,
             } => cx.send_for(
                 |api| api.request_show_fill_history(range, max_record_count, &account),
+                response_sender,
+            ),
+
+            OrderPlantCommand::LoadFillHistory {
+                range,
+                account,
+                response_sender,
+            } => cx.send_replay(
+                |api| api.request_load_fill_history(range, &account),
+                PendingReplay::new(response_sender),
+            ),
+
+            OrderPlantCommand::SetSessionConfig {
+                config,
+                response_sender,
+            } => cx.send_for(
+                |api| api.request_session_config("op", &config),
+                response_sender,
+            ),
+
+            OrderPlantCommand::GetUserEntitlements {
+                user,
+                kind,
+                response_sender,
+            } => cx.send_for(
+                |api| api.request_user_entitlements(user.as_deref(), kind),
+                response_sender,
+            ),
+
+            OrderPlantCommand::PlaybackAccountUsers {
+                kind,
+                start_index_sec,
+                finish_index_sec,
+                response_sender,
+            } => cx.send_for(
+                |api| api.request_playback_acc_users(kind, start_index_sec, finish_index_sec),
+                response_sender,
+            ),
+
+            OrderPlantCommand::ShowAccountUserHistory {
+                user,
+                start_index_sec,
+                finish_index_sec,
+                account,
+                response_sender,
+            } => cx.send_for(
+                |api| {
+                    api.request_show_acc_user_history(
+                        user.as_deref(),
+                        start_index_sec,
+                        finish_index_sec,
+                        &account,
+                    )
+                },
                 response_sender,
             ),
 
@@ -1909,6 +1993,10 @@ impl RithmicOrderPlantHandle {
     /// # Arguments
     /// * `should_defer_request` - If true, the server defers requests while it
     ///   loads reference data it does not have. `None` leaves the field off.
+    #[deprecated(
+        since = "4.0.0",
+        note = "Rithmic deprecated template 3502; use `set_session_config`"
+    )]
     pub async fn get_order_session_config(
         &self,
         should_defer_request: Option<bool>,
@@ -2001,6 +2089,151 @@ impl RithmicOrderPlantHandle {
         let command = OrderPlantCommand::ShowFillHistory {
             range,
             max_record_count,
+            account: self.account.clone(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        await_all_responses(rx).await
+    }
+
+    /// Load the account's whole fill history, with the server's flow control
+    /// on (template 3512).
+    ///
+    /// Unlike [`Self::show_fill_history`] there is no record cap: the server
+    /// sends the history in pieces and the plant asks for each next piece
+    /// (template 22) until it ends.
+    pub async fn load_fill_history(
+        &self,
+        range: FillHistoryRange,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+
+        let command = OrderPlantCommand::LoadFillHistory {
+            range,
+            account: self.account.clone(),
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        await_all_responses(rx).await
+    }
+
+    /// Configure this order plant session (template 24).
+    ///
+    /// Replaces the deprecated
+    /// [`get_order_session_config`](Self::get_order_session_config).
+    pub async fn set_session_config(
+        &self,
+        config: SessionConfig,
+    ) -> Result<RithmicResponse, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+
+        let command = OrderPlantCommand::SetSessionConfig {
+            config,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        await_first_response(rx).await
+    }
+
+    /// List a user's exchange or application entitlements (template 3516).
+    ///
+    /// # Arguments
+    /// * `user` - The user to look up. `None` asks about the logged-in user.
+    /// * `kind` - Which entitlements to list
+    pub async fn get_user_entitlements(
+        &self,
+        user: Option<&str>,
+        kind: EntitlementKind,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+
+        let command = OrderPlantCommand::GetUserEntitlements {
+            user: user.map(str::to_string),
+            kind,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        await_all_responses(rx).await
+    }
+
+    /// Replay the accounts or users added, changed or removed since
+    /// `start_index_sec` (template 3518).
+    ///
+    /// # Arguments
+    /// * `kind` - Whether to replay accounts, users or both
+    /// * `start_index_sec` - Start time in unix seconds
+    /// * `finish_index_sec` - End time in unix seconds. `None` leaves the
+    ///   field off.
+    pub async fn playback_account_users(
+        &self,
+        kind: PlaybackKind,
+        start_index_sec: i32,
+        finish_index_sec: Option<i32>,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+
+        let command = OrderPlantCommand::PlaybackAccountUsers {
+            kind,
+            start_index_sec,
+            finish_index_sec,
+            response_sender: tx,
+        };
+
+        let _ = self.sender.send(command).await;
+
+        await_all_responses(rx).await
+    }
+
+    /// Show this account's change history in a time window (template 3520).
+    ///
+    /// # Arguments
+    /// * `start_index_sec` - Start time in unix seconds
+    /// * `finish_index_sec` - End time in unix seconds
+    pub async fn show_account_history(
+        &self,
+        start_index_sec: i32,
+        finish_index_sec: i32,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.show_account_user_history(None, start_index_sec, finish_index_sec)
+            .await
+    }
+
+    /// Show a user's change history in a time window (template 3520).
+    ///
+    /// # Arguments
+    /// * `user` - The user whose history to show
+    /// * `start_index_sec` - Start time in unix seconds
+    /// * `finish_index_sec` - End time in unix seconds
+    pub async fn show_user_history(
+        &self,
+        user: &str,
+        start_index_sec: i32,
+        finish_index_sec: i32,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        self.show_account_user_history(Some(user), start_index_sec, finish_index_sec)
+            .await
+    }
+
+    async fn show_account_user_history(
+        &self,
+        user: Option<&str>,
+        start_index_sec: i32,
+        finish_index_sec: i32,
+    ) -> Result<Vec<RithmicResponse>, RithmicError> {
+        let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
+
+        let command = OrderPlantCommand::ShowAccountUserHistory {
+            user: user.map(str::to_string),
+            start_index_sec,
+            finish_index_sec,
             account: self.account.clone(),
             response_sender: tx,
         };

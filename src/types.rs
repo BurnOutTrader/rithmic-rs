@@ -647,6 +647,117 @@ impl FillHistoryRange {
     }
 }
 
+/// Which entitlements a user-entitlements request (template 3516) reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
+pub enum EntitlementKind {
+    /// Market data entitlements, one response per exchange.
+    Exchange,
+    /// Application entitlements.
+    Application,
+    /// Both.
+    All,
+}
+
+impl EntitlementKind {
+    /// The spelling sent on the wire.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Exchange => "exchange",
+            Self::Application => "application",
+            Self::All => "all",
+        }
+    }
+}
+
+impl fmt::Display for EntitlementKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str_name())
+    }
+}
+
+/// Which changes a playback request (template 3518) replays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
+pub enum PlaybackKind {
+    /// Changes to accounts.
+    Accounts,
+    /// Changes to users.
+    Users,
+    /// Both.
+    All,
+}
+
+impl PlaybackKind {
+    /// The spelling sent on the wire.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Accounts => "accounts",
+            Self::Users => "users",
+            Self::All => "all",
+        }
+    }
+}
+
+impl fmt::Display for PlaybackKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str_name())
+    }
+}
+
+/// Settings for a session config request (template 24).
+///
+/// Unset fields are left off the request. Rithmic applies only
+/// `add_proto_srvr_timestamp` to PnL plant sessions, and every push field
+/// only to FCM and IB logins.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
+#[must_use = "a session config does nothing until passed to a plant handle"]
+pub struct SessionConfig {
+    /// Stamp updates with the server's receive time (`proto_srvr_rcvd_*`).
+    pub add_proto_srvr_timestamp: Option<bool>,
+    /// Defer requests while the server loads reference data it lacks.
+    pub should_defer_request: Option<bool>,
+    /// Have the server push user changes to this session.
+    pub push_user_updates: Option<bool>,
+    /// Have the server push account changes to this session.
+    pub push_account_updates: Option<bool>,
+}
+
+impl SessionConfig {
+    /// Start a config with every field unset.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stamp updates with the server's receive time (`proto_srvr_rcvd_*`).
+    pub fn add_proto_srvr_timestamp(mut self, enabled: bool) -> Self {
+        self.add_proto_srvr_timestamp = Some(enabled);
+        self
+    }
+
+    /// Defer requests while the server loads reference data it lacks.
+    pub fn should_defer_request(mut self, defer: bool) -> Self {
+        self.should_defer_request = Some(defer);
+        self
+    }
+
+    /// Have the server push user changes to this session.
+    pub fn push_user_updates(mut self, enabled: bool) -> Self {
+        self.push_user_updates = Some(enabled);
+        self
+    }
+
+    /// Have the server push account changes to this session.
+    pub fn push_account_updates(mut self, enabled: bool) -> Self {
+        self.push_account_updates = Some(enabled);
+        self
+    }
+}
+
 /// Subscribe to or unsubscribe from the easy-to-borrow list (template 348).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

@@ -24,6 +24,9 @@ size fields. These changes apply on top of the 3.0 migration guide below.
 - `BracketOperationType::Oca` is removed, since 0.90.0.0 no longer lists `OCA`.
   Pick one of the remaining variants, or leave `operation_type` unset for the
   server default.
+- `get_order_session_config(Some(defer))` is deprecated, as Rithmic deprecated
+  template 3502. Call
+  `set_session_config(SessionConfig::new().should_defer_request(defer))`.
 
 # Migrating to 3.0.0
 
