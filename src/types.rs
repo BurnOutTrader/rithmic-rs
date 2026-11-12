@@ -710,8 +710,10 @@ impl fmt::Display for PlaybackKind {
 /// Settings for a session config request (template 24).
 ///
 /// Unset fields are left off the request. Rithmic applies only
-/// `add_proto_srvr_timestamp` to PnL plant sessions, and every push field
-/// only to FCM and IB logins.
+/// `add_proto_srvr_timestamp` to PnL plant sessions; every field but
+/// `should_defer_request` needs a login with `user_type` `Fcm` or `Ib` —
+/// the broker's own credentials, not a trader login, which is refused as
+/// `["13", "an error occurred while parsing data."]`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[non_exhaustive]

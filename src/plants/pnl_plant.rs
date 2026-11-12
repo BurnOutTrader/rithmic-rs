@@ -528,7 +528,8 @@ impl RithmicPnlPlantHandle {
     }
 
     /// Configure this PnL plant session (template 24). Rithmic applies only
-    /// `add_proto_srvr_timestamp` here.
+    /// `add_proto_srvr_timestamp` here, and only on a `user_type` `Fcm` or
+    /// `Ib` login; without it updates carry no `proto_srvr_rcvd_*` stamps.
     pub async fn set_session_config(
         &self,
         config: SessionConfig,
