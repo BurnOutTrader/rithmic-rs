@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 The bundled protos move to R | Protocol API 0.90.0.0 (template version 5.55).
 Order quantities become `u64` and go out in Rithmic's new 64-bit fields.
-[MIGRATING.md](MIGRATING.md) covers each change.
+[MIGRATING.md](MIGRATING.md) covers each change. The new
+`change_password_on_behalf_of` messages are not generated, since the Reference
+Guide gives them no template id.
 
 ### Behavior changes the compiler will not catch
 
@@ -38,7 +40,8 @@ Order quantities become `u64` and go out in Rithmic's new 64-bit fields.
 - `RithmicMessage::AccountAndUserUpdate` for template 358, filtered by account
   like `UserAccountUpdate`.
 - 64-bit size fields in `rti`, such as `trade_size_64`, `bid_size_64` and
-  `fill_size_64`. They replace the 32-bit ones Rithmic deprecated.
+  `fill_size_64`. Rithmic deprecated the 32-bit ones, which are still
+  generated.
 - `RithmicMessage` variants for the new account/user history, entitlement,
   session config and flow control replies.
 - Order plant `set_session_config(SessionConfig)` (template 24), with the new

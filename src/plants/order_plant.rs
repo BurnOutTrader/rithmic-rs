@@ -354,8 +354,6 @@ pub struct RithmicOrderPlant {
     pub(crate) connection_handle: JoinHandle<()>,
     sender: mpsc::Sender<OrderPlantCommand>,
     subscription_sender: broadcast::Sender<RithmicResponse>,
-    /// The login user, baked into handles for requests that default to it.
-    user: Arc<String>,
 }
 
 impl RithmicOrderPlant {
@@ -382,8 +380,6 @@ impl RithmicOrderPlant {
     ) -> Result<RithmicOrderPlant, RithmicError> {
         let (req_tx, req_rx) = mpsc::channel::<OrderPlantCommand>(64);
 
-        let user = Arc::new(config.user.clone());
-
         let capacity = config
             .subscription_capacity
             .unwrap_or(DEFAULT_SUBSCRIPTION_CAPACITY);
@@ -407,7 +403,6 @@ impl RithmicOrderPlant {
             connection_handle,
             sender: req_tx,
             subscription_sender: sub_tx,
-            user,
         })
     }
 }
@@ -433,7 +428,6 @@ impl RithmicOrderPlant {
 
         RithmicOrderPlantHandle {
             account,
-            user: Arc::clone(&self.user),
             sender: self.sender.clone(),
             subscription_receiver: SubscriptionFilter::new(
                 account_for_filter,
@@ -1051,8 +1045,6 @@ impl PlantKind for OrderPlant {
 /// as order status or cancels, arrives later on the subscription receiver.
 pub struct RithmicOrderPlantHandle {
     account: Arc<RithmicAccount>,
-    /// The login user, sent on requests that default to it.
-    user: Arc<String>,
     sender: mpsc::Sender<OrderPlantCommand>,
     /// Updates for this handle's account, plus connection health events and
     /// updates that name no account, such as `TradeRoute`.
@@ -2155,8 +2147,7 @@ impl RithmicOrderPlantHandle {
     /// List a user's exchange or application entitlements (template 3516).
     ///
     /// # Arguments
-    /// * `user` - The user to look up. `None` sends the logged-in user's
-    ///   name; the server rejects the request when the field is left off.
+    /// * `user` - The user to look up. `None` sends the login user's name.
     /// * `kind` - Which entitlements to list
     pub async fn get_user_entitlements(
         &self,
@@ -2166,7 +2157,7 @@ impl RithmicOrderPlantHandle {
         let (tx, rx) = oneshot::channel::<Result<Vec<RithmicResponse>, RithmicError>>();
 
         let command = OrderPlantCommand::GetUserEntitlements {
-            user: Some(user.unwrap_or(&self.user).to_string()),
+            user: user.map(str::to_string),
             kind,
             response_sender: tx,
         };
@@ -2177,9 +2168,8 @@ impl RithmicOrderPlantHandle {
     }
 
     /// Replay the accounts or users added, changed or removed since
-    /// `start_index_sec` (template 3518). Refused on trader logins as
-    /// `["13", "an error occurred while parsing data."]`; `user_type`
-    /// `Fcm` or `Ib` only.
+    /// `start_index_sec` (template 3518). A trader login on Rithmic paper
+    /// trading was refused with `["13", "an error occurred while parsing data."]`.
     ///
     /// # Arguments
     /// * `kind` - Whether to replay accounts, users or both
@@ -2330,7 +2320,6 @@ impl Clone for RithmicOrderPlantHandle {
     fn clone(&self) -> Self {
         RithmicOrderPlantHandle {
             account: Arc::clone(&self.account),
-            user: Arc::clone(&self.user),
             sender: self.sender.clone(),
             subscription_receiver: self.subscription_receiver.resubscribe(),
         }

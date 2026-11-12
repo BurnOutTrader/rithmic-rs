@@ -89,6 +89,7 @@ fn zero_fill_prices(prices: Vec<Option<f64>>) -> Vec<f64> {
 pub(crate) struct RithmicSenderApi {
     app_name: String,
     app_version: String,
+    user: String,
     message_id_counter: u64,
 }
 
@@ -97,6 +98,7 @@ impl RithmicSenderApi {
         RithmicSenderApi {
             app_name: config.app_name.clone(),
             app_version: config.app_version.clone(),
+            user: config.user.clone(),
             message_id_counter: 0,
         }
     }
@@ -1552,7 +1554,7 @@ impl RithmicSenderApi {
         self.request_to_buf(req, id)
     }
 
-    /// The server rejects the request when `user` is `None`.
+    /// `None` sends the login user; Rithmic rejects the request without one.
     pub fn request_user_entitlements(
         &mut self,
         user: Option<&str>,
@@ -1563,15 +1565,15 @@ impl RithmicSenderApi {
         let req = RequestUserEntitlements {
             template_id: 3516,
             user_msg: vec![id.clone()],
-            user: user.map(str::to_string),
+            user: Some(user.unwrap_or(&self.user).to_string()),
             entitlements: Some(kind.as_str_name().to_string()),
         };
 
         self.request_to_buf(req, id)
     }
 
-    /// Account and user changes from `start_index_sec`, to `finish_index_sec`
-    /// or now.
+    /// Account and user changes from `start_index_sec`. `None` leaves
+    /// `finish_index_sec` off.
     pub fn request_playback_acc_users(
         &mut self,
         kind: PlaybackKind,
@@ -1987,6 +1989,19 @@ mod tests {
         assert_eq!(request.should_defer_request, Some(false));
         assert_eq!(request.push_account_updates.as_deref(), Some("disabled"));
         assert_eq!(request.push_user_updates, None);
+    }
+
+    #[test]
+    fn user_entitlements_default_to_the_login_user() {
+        let mut api = RithmicSenderApi::new(&test_config());
+
+        let (buf, _) = api.request_user_entitlements(None, EntitlementKind::All);
+        let request: RequestUserEntitlements = decode_request(&buf);
+        assert_eq!(request.user.as_deref(), Some("user"));
+
+        let (buf, _) = api.request_user_entitlements(Some("other"), EntitlementKind::All);
+        let request: RequestUserEntitlements = decode_request(&buf);
+        assert_eq!(request.user.as_deref(), Some("other"));
     }
 
     #[test]
