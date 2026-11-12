@@ -1552,7 +1552,7 @@ impl RithmicSenderApi {
         self.request_to_buf(req, id)
     }
 
-    /// `user` defaults to the logged-in user on the server side.
+    /// The server rejects the request when `user` is `None`.
     pub fn request_user_entitlements(
         &mut self,
         user: Option<&str>,

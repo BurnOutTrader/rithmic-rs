@@ -2112,6 +2112,9 @@ impl RithmicOrderPlantHandle {
     /// Unlike [`Self::show_fill_history`] there is no record cap: the server
     /// sends the history in pieces and the plant asks for each next piece
     /// (template 22) until it ends.
+    ///
+    /// The pause handling is inferred from the protos and has not been seen
+    /// live.
     pub async fn load_fill_history(
         &self,
         range: FillHistoryRange,

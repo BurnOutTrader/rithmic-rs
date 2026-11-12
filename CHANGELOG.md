@@ -46,7 +46,8 @@ Order quantities become `u64` and go out in Rithmic's new 64-bit fields.
   `set_session_config` sends the same request with session type `pnl`.
 - Order plant `load_fill_history(range)`: fill history with Rithmic's flow
   control on and no record cap. The plant sends `RequestFlowControl`
-  (template 22) each time the server pauses.
+  (template 22) each time the server pauses. The pause handling is inferred
+  from the protos and has not been seen live.
 - Order plant `get_user_entitlements` (3516), `playback_account_users` (3518),
   and `show_account_history` / `show_user_history` (3520), with the
   `EntitlementKind` and `PlaybackKind` enums.
