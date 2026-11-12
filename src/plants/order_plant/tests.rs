@@ -22,6 +22,7 @@ fn test_handle() -> (RithmicOrderPlantHandle, mpsc::Receiver<OrderPlantCommand>)
 
     let handle = RithmicOrderPlantHandle {
         account: account.clone(),
+        user: Arc::new("user".to_string()),
         sender,
         subscription_receiver: SubscriptionFilter::new(account, subscription_receiver),
     };
@@ -144,6 +145,37 @@ async fn show_fill_history_forwards_valid_boundaries_and_an_omitted_cap() {
 }
 
 #[tokio::test]
+async fn get_user_entitlements_defaults_to_the_logged_in_user() {
+    for user in [None, Some("other")] {
+        let (handle, mut command_receiver) = test_handle();
+
+        // The call parks on its response channel until the actor answers, so
+        // it runs alongside the receive below rather than before it.
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(
+                handle.get_user_entitlements(user, crate::types::EntitlementKind::All),
+                async {
+                    match command_receiver.recv().await {
+                        Some(OrderPlantCommand::GetUserEntitlements {
+                            user: sent,
+                            response_sender,
+                            ..
+                        }) => {
+                            assert_eq!(sent.as_deref(), user.or(Some("user")));
+                            response_sender.send(Ok(vec![])).unwrap();
+                        }
+                        _ => panic!("expected an entitlements request"),
+                    }
+                }
+            )
+        })
+        .await
+        .expect("the request must reach the actor");
+        assert!(result.unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
 async fn place_oco_order_forwards_two_or_more_legs() {
     let (handle, mut command_receiver) = test_handle();
 
@@ -232,6 +264,7 @@ async fn place_order_through_the_handle_after_close_requested_reports_connection
 
     let handle = RithmicOrderPlantHandle {
         account: Arc::clone(&account),
+        user: Arc::new("user".to_string()),
         sender: command_sender,
         subscription_receiver: SubscriptionFilter::new(
             account,
@@ -308,6 +341,7 @@ async fn running_plant() -> (RithmicOrderPlant, TcpStream) {
         connection_handle,
         sender,
         subscription_sender,
+        user: Arc::new("user".to_string()),
     };
 
     (plant, client)
@@ -1615,6 +1649,7 @@ async fn subscribe_all_retains_every_account() {
         sender,
         subscription_sender,
         connection_handle: tokio::spawn(async {}),
+        user: Arc::new("user".to_string()),
     };
 
     let mut receiver = plant.subscribe_all();
