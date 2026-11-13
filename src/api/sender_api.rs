@@ -1488,8 +1488,8 @@ impl RithmicSenderApi {
         self.request_to_buf(req, id)
     }
 
-    /// A user's profile; `None` asks about the logged-in user. Only the FCM
-    /// and IB ids are read from `account`.
+    /// A user's profile; `None` sends the login user. Only the FCM and IB
+    /// ids are read from `account`.
     pub fn request_get_user_info(
         &mut self,
         user: Option<&str>,
@@ -1502,7 +1502,7 @@ impl RithmicSenderApi {
             user_msg: vec![id.clone()],
             fcm_id: Some(account.fcm_id.clone()),
             ib_id: Some(account.ib_id.clone()),
-            user: user.map(str::to_string),
+            user: Some(user.unwrap_or(&self.user).to_string()),
         };
 
         self.request_to_buf(req, id)
@@ -1916,6 +1916,19 @@ mod tests {
         assert_eq!(request.fcm_id.as_deref(), Some("FCM_A"));
         assert_eq!(request.ib_id.as_deref(), Some("IB_A"));
         assert_eq!(request.user.as_deref(), Some("someone_else"));
+    }
+
+    #[test]
+    fn user_info_defaults_to_the_login_user() {
+        let mut api = RithmicSenderApi::new(&test_config());
+
+        let (buf, _) = api.request_get_user_info(None, &default_account());
+        let request: RequestGetUserInfo = decode_request(&buf);
+        assert_eq!(request.user.as_deref(), Some("user"));
+
+        let (buf, _) = api.request_get_user_info(Some("other"), &default_account());
+        let request: RequestGetUserInfo = decode_request(&buf);
+        assert_eq!(request.user.as_deref(), Some("other"));
     }
 
     #[test]

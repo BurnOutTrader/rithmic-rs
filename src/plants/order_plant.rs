@@ -2042,10 +2042,11 @@ impl RithmicOrderPlantHandle {
     }
 
     /// Look up a user's profile: name, contact details, entitlement status,
-    /// and session limits.
+    /// and session limits. A trader login on Rithmic paper trading was
+    /// refused with `["13", "permission denied"]`.
     ///
     /// # Arguments
-    /// * `user` - The user to look up. `None` asks about the logged-in user.
+    /// * `user` - The user to look up. `None` sends the login user's name.
     pub async fn get_user_info(
         &self,
         user: Option<&str>,
