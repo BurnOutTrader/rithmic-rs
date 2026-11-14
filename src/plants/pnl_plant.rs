@@ -527,9 +527,15 @@ impl RithmicPnlPlantHandle {
         await_first_response(rx).await
     }
 
-    /// Configure this PnL plant session (template 24). Rithmic applies only
-    /// `add_proto_srvr_timestamp` here, and only on a `user_type` `Fcm` or
-    /// `Ib` login; without it updates carry no `proto_srvr_rcvd_*` stamps.
+    /// Configure this PnL plant session (template 24).
+    ///
+    /// Rithmic applies only `add_proto_srvr_timestamp` here, and only on a
+    /// `user_type` `Fcm` or `Ib` login. Without that flag, updates carry no
+    /// `proto_srvr_rcvd_*` stamps.
+    ///
+    /// # Returns
+    /// The server's acknowledgement. A refusal is `Ok` with
+    /// [`error`](RithmicResponse::error) set.
     pub async fn set_session_config(
         &self,
         config: SessionConfig,

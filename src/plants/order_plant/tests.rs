@@ -122,6 +122,7 @@ async fn show_fill_history_forwards_valid_boundaries_and_an_omitted_cap() {
             start: 0,
             finish: 1,
         };
+
         let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             tokio::join!(handle.show_fill_history(range, count), async {
                 match command_receiver.recv().await {
@@ -133,12 +134,14 @@ async fn show_fill_history_forwards_valid_boundaries_and_an_omitted_cap() {
                         assert_eq!(max_record_count, count);
                         response_sender.send(Ok(vec![])).unwrap();
                     }
+
                     _ => panic!("expected a fill-history request"),
                 }
             })
         })
         .await
         .expect("valid record caps must reach the actor");
+
         assert!(result.unwrap().is_empty());
     }
 }

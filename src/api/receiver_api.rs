@@ -1325,7 +1325,7 @@ impl RithmicReceiverApi {
                     .map_err(|e| decode_error(&self.source, e, true))?;
 
                 RithmicResponse {
-                    request_id: String::new(),
+                    request_id: "".to_string(),
                     message: RithmicMessage::AccountAndUserUpdate(resp),
                     is_update: true,
                     has_more: false,

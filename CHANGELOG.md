@@ -62,8 +62,8 @@ Guide gives them no template id.
 
 ### Fixed
 
-- `get_user_info(None)` sends the login user. Rithmic rejected it with
-  `["1001", "user field is missing."]`.
+- `get_user_info(None)` sends the login user. It used to leave `user` off,
+  which Rithmic rejected with `["1001", "user field is missing."]`.
 
 ## [3.3.0]
 

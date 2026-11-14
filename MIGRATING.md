@@ -1,23 +1,24 @@
 # Migrating to Protocol API 0.90 (unreleased)
 
-The client now announces template 5.55 and uses the native 64-bit quantity and
-size fields. These changes apply on top of the 3.0 migration guide below.
+The client now sends template version 5.55, and quantities are `u64`. The 3.0
+guide below still applies.
 
 - `RithmicOrder`, `RithmicModifyOrder`, `RithmicBracketOrder` and
   `RithmicOcoOrderLeg` quantities and their setters now take `u64`.
 - Bracket `target_quantity` and `stop_quantity` are `Vec<u64>`. The `targets()`
-  and `stops()` setters take `(u64, i32)` pairs: quantities are unsigned 64-bit,
-  while tick distances stay `i32`. Integer literals continue to work. Convert
-  signed variables with `u64::try_from()` so negative quantities are rejected.
-- Requests send only the native `quantity_64`, `target_quantity_64` and
-  `stop_quantity_64` fields. Consumers should read the corresponding `*_64`
-  trade, quote, depth and fill sizes from responses.
+  and `stops()` setters take `(u64, i32)` pairs. Tick distances stay `i32`.
+  Integer literals still work. Convert signed variables with `u64::try_from()`
+  so negative quantities are rejected.
+- Requests send only `quantity_64`, `target_quantity_64` and
+  `stop_quantity_64`. Read sizes from the `*_64` fields, such as
+  `trade_size_64`, `bid_size_64` and `fill_size_64`; the 32-bit ones are
+  deprecated.
 - `show_fill_history()` accepts `None` or a cap in `1..=10_000`; `Some(0)` is now
   rejected locally.
-- Match template 358 as `RithmicMessage::AccountAndUserUpdate`. The older
-  `UserAccountUpdate` schema remains in the vendor bundle for template 76.
-- `DepthByOrderEndEvent` and its `RithmicMessage` variant are removed with the
-  vendor schema.
+- Match template 358 as `RithmicMessage::AccountAndUserUpdate`.
+  `UserAccountUpdate` now matches only template 76.
+- Rithmic removed template 161, so `DepthByOrderEndEvent` and its
+  `RithmicMessage` variant are gone.
 - Rename `rti::last_trade::PresenceBits::PrecentChange` to `PercentChange`.
   `as_str_name()` now returns the corrected `PERCENT_CHANGE` spelling; the
   numeric value remains 4.

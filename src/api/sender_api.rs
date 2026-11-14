@@ -1519,14 +1519,14 @@ impl RithmicSenderApi {
         self.fill_history(range, max_record_count, None, account)
     }
 
-    /// Every fill in `range`, in batches the server pauses between. Rithmic
+    /// Every fill in `range`, sent in batches with flow control on. Rithmic
     /// requires `max_record_count` to be unset when flow control is on.
     pub fn request_load_fill_history(
         &mut self,
         range: FillHistoryRange,
         account: &RithmicAccount,
     ) -> (Vec<u8>, String) {
-        self.fill_history(range, None, Some(enabled_or_disabled(true)), account)
+        self.fill_history(range, None, Some("enabled".to_string()), account)
     }
 
     fn fill_history(
@@ -1730,36 +1730,6 @@ mod tests {
         T::decode(&buf[4..]).expect("decode request")
     }
 
-    #[test]
-    fn new_and_modified_orders_send_full_width_native_quantities() {
-        let mut api = RithmicSenderApi::new(&test_config());
-        let account = default_account();
-        let order = RithmicOrder::new()
-            .symbol("ESZ6")
-            .exchange("CME")
-            .quantity(u64::MAX)
-            .price_type(OrderType::Market)
-            .build()
-            .expect("valid market order");
-        let (buf, _) = api.request_order(&order, &account, "globex");
-        let request: RequestNewOrder = decode_request(&buf);
-        assert_eq!(request.quantity_64, Some(u64::MAX));
-        assert_eq!(request.quantity, None);
-
-        let modify = RithmicModifyOrder::new()
-            .id("basket-1")
-            .symbol("ESZ6")
-            .exchange("CME")
-            .quantity(u64::MAX)
-            .price_type(OrderType::Market)
-            .build()
-            .expect("valid market modification");
-        let (buf, _) = api.request_modify_order(&modify, &account);
-        let request: RequestModifyOrder = decode_request(&buf);
-        assert_eq!(request.quantity_64, Some(u64::MAX));
-        assert_eq!(request.quantity, None);
-    }
-
     /// A bracket exercising every field the request models, built the way
     /// callers build one.
     fn advanced_bracket() -> RithmicBracketOrder {
@@ -1799,6 +1769,40 @@ mod tests {
             .operation_type(BracketOperationType::Fca)
             .build()
             .expect("valid bracket")
+    }
+
+    #[test]
+    fn order_and_modify_requests_send_only_quantity_64() {
+        let mut api = RithmicSenderApi::new(&test_config());
+        let account = default_account();
+        let order = RithmicOrder::new()
+            .symbol("ESZ6")
+            .exchange("CME")
+            .quantity(u64::MAX)
+            .price_type(OrderType::Market)
+            .build()
+            .expect("valid market order");
+
+        let (buf, _) = api.request_order(&order, &account, "globex");
+        let request: RequestNewOrder = decode_request(&buf);
+
+        assert_eq!(request.quantity_64, Some(u64::MAX));
+        assert_eq!(request.quantity, None);
+
+        let modify = RithmicModifyOrder::new()
+            .id("basket-1")
+            .symbol("ESZ6")
+            .exchange("CME")
+            .quantity(u64::MAX)
+            .price_type(OrderType::Market)
+            .build()
+            .expect("valid market modification");
+
+        let (buf, _) = api.request_modify_order(&modify, &account);
+        let request: RequestModifyOrder = decode_request(&buf);
+
+        assert_eq!(request.quantity_64, Some(u64::MAX));
+        assert_eq!(request.quantity, None);
     }
 
     #[test]
@@ -1924,6 +1928,7 @@ mod tests {
 
         let (buf, _) = api.request_get_user_info(None, &default_account());
         let request: RequestGetUserInfo = decode_request(&buf);
+
         assert_eq!(request.user.as_deref(), Some("user"));
     }
 
@@ -2006,10 +2011,12 @@ mod tests {
 
         let (buf, _) = api.request_user_entitlements(None, EntitlementKind::All);
         let request: RequestUserEntitlements = decode_request(&buf);
+
         assert_eq!(request.user.as_deref(), Some("user"));
 
         let (buf, _) = api.request_user_entitlements(Some("other"), EntitlementKind::All);
         let request: RequestUserEntitlements = decode_request(&buf);
+
         assert_eq!(request.user.as_deref(), Some("other"));
     }
 
@@ -2019,6 +2026,7 @@ mod tests {
 
         let (buf, _) = api.request_show_acc_user_history(None, 1, 2, &override_account());
         let request: RequestShowAccUserHistory = decode_request(&buf);
+
         assert_eq!(request.fcm_id.as_deref(), Some("FCM_B"));
         assert_eq!(request.ib_id.as_deref(), Some("IB_B"));
         assert_eq!(request.account_id.as_deref(), Some("ACCOUNT_B"));
@@ -2026,14 +2034,13 @@ mod tests {
 
         let (buf, _) = api.request_show_acc_user_history(Some("trader"), 1, 2, &override_account());
         let request: RequestShowAccUserHistory = decode_request(&buf);
+
         assert_eq!(request.user_target.as_deref(), Some("trader"));
         assert_eq!(request.fcm_id, None);
         assert_eq!(request.ib_id, None);
         assert_eq!(request.account_id, None);
-        assert_eq!(
-            (request.start_index, request.finish_index),
-            (Some(1), Some(2))
-        );
+        assert_eq!(request.start_index, Some(1));
+        assert_eq!(request.finish_index, Some(2));
     }
 
     #[test]
@@ -3480,9 +3487,9 @@ mod tests {
             (14, api.request_reference_data("ESZ6", "CME")),
             (16, api.request_rithmic_system_info()),
             (18, api.request_heartbeat()),
+            (20, api.request_rithmic_system_gateway_info(None)),
             (22, api.request_flow_control("key")),
             (24, api.request_session_config("op", &SessionConfig::new())),
-            (20, api.request_rithmic_system_gateway_info(None)),
             (
                 100,
                 api.request_market_data_update(

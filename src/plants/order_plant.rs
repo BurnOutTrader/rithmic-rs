@@ -1985,7 +1985,8 @@ impl RithmicOrderPlantHandle {
         await_first_response(rx).await
     }
 
-    /// Set the order session config (template 3502).
+    /// Deprecated: Rithmic deprecated template 3502. Use
+    /// [`set_session_config`](Self::set_session_config).
     ///
     /// Despite the name, nothing is read back: the response carries only a
     /// response code.
@@ -2042,8 +2043,8 @@ impl RithmicOrderPlantHandle {
     }
 
     /// Look up a user's profile: name, contact details, entitlement status,
-    /// and session limits. A trader login on Rithmic paper trading was
-    /// refused with `["13", "permission denied"]`.
+    /// and session limits. Rithmic Paper Trading refuses a trader login with
+    /// `["13", "permission denied"]`.
     ///
     /// # Arguments
     /// * `user` - The user to look up. `None` sends the login user's name.
@@ -2099,15 +2100,12 @@ impl RithmicOrderPlantHandle {
         await_all_responses(rx).await
     }
 
-    /// Load the account's whole fill history, with the server's flow control
-    /// on (template 3512).
+    /// Every fill in `range`, with Rithmic's flow control on and no record cap
+    /// (template 3512). The plant asks for each next batch (template 22). The
+    /// pause handling is inferred from the protos and has not been seen live.
     ///
-    /// Unlike [`Self::show_fill_history`] there is no record cap: the server
-    /// sends the history in pieces and the plant asks for each next piece
-    /// (template 22) until it ends.
-    ///
-    /// The pause handling is inferred from the protos and has not been seen
-    /// live.
+    /// # Arguments
+    /// * `range` - The window to report on
     pub async fn load_fill_history(
         &self,
         range: FillHistoryRange,
@@ -2129,6 +2127,9 @@ impl RithmicOrderPlantHandle {
     ///
     /// Replaces the deprecated
     /// [`get_order_session_config`](Self::get_order_session_config).
+    ///
+    /// # Arguments
+    /// * `config` - The settings to send
     pub async fn set_session_config(
         &self,
         config: SessionConfig,
@@ -2169,8 +2170,8 @@ impl RithmicOrderPlantHandle {
     }
 
     /// Replay the accounts or users added, changed or removed since
-    /// `start_index_sec` (template 3518). A trader login on Rithmic paper
-    /// trading was refused with `["13", "an error occurred while parsing data."]`.
+    /// `start_index_sec` (template 3518). Rithmic Paper Trading refuses a
+    /// trader login with `["13", "an error occurred while parsing data."]`.
     ///
     /// # Arguments
     /// * `kind` - Whether to replay accounts, users or both

@@ -553,8 +553,7 @@ impl From<BracketType> for request_bracket_order::BracketType {
 /// Rithmic documents only the wire spellings. The reading on each variant is
 /// async_rithmic's annotation of the same field, not Rithmic's own words.
 ///
-/// Leave [`RithmicBracketOrder::operation_type`] unset unless a specific
-/// grouping is wanted. The server then applies its default.
+/// Leave [`RithmicBracketOrder::operation_type`] unset for the server default.
 ///
 /// [`RithmicBracketOrder::operation_type`]: crate::RithmicBracketOrder::operation_type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -707,13 +706,9 @@ impl fmt::Display for PlaybackKind {
     }
 }
 
-/// Settings for a session config request (template 24).
-///
-/// Unset fields are left off the request. Rithmic applies only
-/// `add_proto_srvr_timestamp` to PnL plant sessions; every field but
-/// `should_defer_request` needs a login with `user_type` `Fcm` or `Ib` —
-/// the broker's own credentials, not a trader login, which is refused as
-/// `["13", "an error occurred while parsing data."]`.
+/// Settings for a session config request (template 24); unset fields are left
+/// off. Every field but `should_defer_request` needs a `user_type` `Fcm` or
+/// `Ib` login. A trader login is refused with error 13.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[non_exhaustive]

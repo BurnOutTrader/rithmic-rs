@@ -810,13 +810,12 @@ mod tests {
         let (mut plant, _sub_rx) = make_test_plant(MockMessageSink::ready(), reader);
         let mut rx = plant.core.request_handler.register_test_replay("fh-1");
 
-        let frame_of = |message: &dyn Fn(&mut Vec<u8>)| {
-            let mut payload = Vec::new();
-            message(&mut payload);
-            let mut framed = (payload.len() as u32).to_be_bytes().to_vec();
-            framed.extend(payload);
+        fn frame_of(message: &impl prost::Message) -> Message {
+            let mut framed = (message.encoded_len() as u32).to_be_bytes().to_vec();
+            message.encode(&mut framed).unwrap();
             Message::Binary(framed.into())
-        };
+        }
+
         let fill = |rq_handler_rp_code: &[&str], rp_code: &[&str], key: Option<&str>| {
             let message = ResponseShowFillHistory {
                 template_id: 3513,
@@ -827,7 +826,7 @@ mod tests {
                 fill_id: key.is_none().then(|| "f".to_string()),
                 ..Default::default()
             };
-            frame_of(&|buf| message.encode(buf).unwrap())
+            frame_of(&message)
         };
 
         plant
@@ -850,9 +849,7 @@ mod tests {
             user_msg: request.user_msg.clone(),
             rp_code: vec!["0".to_string()],
         };
-        plant
-            .handle_rithmic_message(Ok(frame_of(&|buf| ack.encode(buf).unwrap())))
-            .await;
+        plant.handle_rithmic_message(Ok(frame_of(&ack))).await;
         assert!(!plant.core.request_handler.resuming(), "the ack is matched");
 
         plant
