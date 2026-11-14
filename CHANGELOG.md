@@ -60,6 +60,11 @@ Guide gives them no template id.
 - `RithmicOrderPlantHandle::get_order_session_config()`: Rithmic deprecated
   template 3502 in favor of session config. Use `set_session_config()`.
 
+### Fixed
+
+- `get_user_info(None)` sends the login user. Rithmic rejected it with
+  `["1001", "user field is missing."]`.
+
 ## [3.3.0]
 
 The order plant's agreement methods are gone. They moved to the new repository

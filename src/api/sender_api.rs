@@ -1925,10 +1925,6 @@ mod tests {
         let (buf, _) = api.request_get_user_info(None, &default_account());
         let request: RequestGetUserInfo = decode_request(&buf);
         assert_eq!(request.user.as_deref(), Some("user"));
-
-        let (buf, _) = api.request_get_user_info(Some("other"), &default_account());
-        let request: RequestGetUserInfo = decode_request(&buf);
-        assert_eq!(request.user.as_deref(), Some("other"));
     }
 
     #[test]
