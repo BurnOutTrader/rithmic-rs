@@ -21,6 +21,9 @@ pub(crate) struct PendingReplay {
     /// sending frames for it after it is released. An abandoned replay is only
     /// released once this is set.
     sent: bool,
+    /// The marker whose first later bar completes the reply, if the caller
+    /// asked past the part it needs.
+    complete_past: Option<i32>,
 }
 
 impl PendingReplay {
@@ -30,12 +33,34 @@ impl PendingReplay {
             responses: Vec::new(),
             used_keys: HashSet::new(),
             sent: false,
+            complete_past: None,
         }
+    }
+
+    /// Complete the reply on its first bar past `marker`, when one is given.
+    pub(crate) fn complete_past(mut self, marker: Option<i32>) -> Self {
+        self.complete_past = marker;
+        self
     }
 
     /// Whether the caller stopped waiting (it dropped its future).
     fn caller_stopped_waiting(&self) -> bool {
         self.responder.is_closed()
+    }
+
+    /// Whether `response` is a bar past the marker the caller asked to
+    /// complete on. Bars replay oldest first, so every earlier bar is in.
+    fn passes_end(&self, response: &RithmicResponse) -> bool {
+        let Some(end) = self.complete_past else {
+            return false;
+        };
+
+        response.error.is_none()
+            && matches!(
+                &response.message,
+                RithmicMessage::ResponseTimeBarReplay(bar)
+                    if bar.marker.is_some_and(|marker| marker > end)
+            )
     }
 
     fn finish(self, reply: RequestResult) {
@@ -73,6 +98,20 @@ impl<T: RequestTag> RithmicRequestHandler<T> {
     pub(crate) fn register_test_replay(&mut self, id: &str) -> oneshot::Receiver<RequestResult> {
         let (tx, rx) = oneshot::channel();
         assert!(self.register_replay(id.to_string(), PendingReplay::new(tx)));
+        rx
+    }
+
+    /// Register a replay for a test that completes on its first bar past
+    /// `marker`, and return its reply channel.
+    #[cfg(test)]
+    pub(crate) fn register_test_replay_past(
+        &mut self,
+        id: &str,
+        marker: i32,
+    ) -> oneshot::Receiver<RequestResult> {
+        let (tx, rx) = oneshot::channel();
+        let replay = PendingReplay::new(tx).complete_past(Some(marker));
+        assert!(self.register_replay(id.to_string(), replay));
         rx
     }
 
@@ -169,6 +208,21 @@ impl<T: RequestTag> RithmicRequestHandler<T> {
         Some(parts)
     }
 
+    /// Answer replay `id` with the frames so far, its last a bar past the
+    /// marker it was asked past. The rest of the reply, the server's end marker
+    /// included, is counted without a log line.
+    fn complete_past_end(&mut self, id: String) {
+        let Some(mut replay) = self.replay_map.remove(&id) else {
+            return;
+        };
+
+        self.forget_resumes_of(&id);
+        let responses = std::mem::take(&mut replay.responses);
+        replay.finish(Ok(responses));
+        self.completed_past.insert(id.clone());
+        self.expect_late_frames(id);
+    }
+
     /// Fail every replay because the connection is gone.
     pub(super) fn drain_replays(&mut self) {
         for (_, replay) in self.replay_map.drain() {
@@ -216,7 +270,13 @@ impl<T: RequestTag> RithmicRequestHandler<T> {
         }
 
         if response.has_more {
+            let complete = replay.passes_end(&response);
             replay.responses.push(response);
+
+            if complete {
+                self.complete_past_end(id);
+            }
+
             return None;
         }
 
@@ -493,6 +553,70 @@ mod tests {
         handler.release_abandoned_replays();
         assert!(handler.replay_map.is_empty());
         assert_eq!(handler.late_continuations.get("replay"), Some(&0));
+    }
+
+    fn markers(reply: &[RithmicResponse]) -> Vec<Option<i32>> {
+        reply
+            .iter()
+            .map(|response| match &response.message {
+                RithmicMessage::ResponseTimeBarReplay(bar) => bar.marker,
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A server has been seen sending every bar of a replay and never its end
+    /// marker. A bar past the asked marker still completes the reply.
+    #[test]
+    fn a_replay_asked_past_a_marker_completes_on_its_first_bar_after_it() {
+        let mut handler = RithmicRequestHandler::<Tag>::new();
+        let mut rx = handler.register_test_replay_past("original", 120);
+        handler.mark_sent("original");
+
+        handler.route(frame("original", Some(60), &[], None));
+        handler.route(frame("original", Some(120), &[], None));
+        assert!(
+            rx.try_recv().is_err(),
+            "a bar closing at the marker leaves later bars of the window possible"
+        );
+
+        handler.route(frame("original", Some(180), &[], None));
+
+        let reply = rx.try_recv().unwrap().unwrap();
+        assert_eq!(markers(&reply), [Some(60), Some(120), Some(180)]);
+        assert!(handler.replay_map.is_empty());
+    }
+
+    #[test]
+    fn the_rest_of_a_replay_completed_past_its_marker_is_counted_quietly() {
+        let mut handler = RithmicRequestHandler::<Tag>::new();
+        let _rx = handler.register_test_replay_past("original", 120);
+        handler.mark_sent("original");
+        handler.route(frame("original", Some(180), &[], None));
+
+        let (_, logged) = crate::request_handler::log_capture::capture(|| {
+            handler.route(frame("original", Some(240), &[], None));
+            handler.route(frame("original", None, &["0"], None));
+        });
+
+        assert!(logged.is_empty(), "{logged}");
+        assert!(handler.late_continuations.is_empty());
+        assert!(handler.completed_past.is_empty());
+    }
+
+    #[test]
+    fn a_replay_asked_past_a_marker_still_ends_on_the_servers_end_marker() {
+        let mut handler = RithmicRequestHandler::<Tag>::new();
+        let mut rx = handler.register_test_replay_past("original", 120);
+        handler.mark_sent("original");
+
+        handler.route(frame("original", Some(60), &[], None));
+        handler.route(frame("original", None, &["0"], None));
+
+        let reply = rx.try_recv().unwrap().unwrap();
+        assert_eq!(markers(&reply), [Some(60), None]);
+        assert!(handler.late_continuations.is_empty());
+        assert!(handler.completed_past.is_empty());
     }
 
     #[test]

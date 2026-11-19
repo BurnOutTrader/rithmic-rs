@@ -54,6 +54,11 @@ Guide gives them no template id.
 - Order plant `get_user_entitlements` (3516), `playback_account_users` (3518),
   and `show_account_history` / `show_user_history` (3520), with the
   `EntitlementKind` and `PlaybackKind` enums.
+- `TimeBarReplayRequest::complete_past(marker)`: the reply completes on its
+  first bar past `marker` instead of waiting for the server's end marker. A
+  server has been seen sending every bar of a replay and never its end marker,
+  which left the load waiting for good. Ask past the part you need, and such a
+  reply still completes. The server's late end marker is counted at `debug`.
 
 ### Deprecated
 

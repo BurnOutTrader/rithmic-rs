@@ -320,14 +320,23 @@ impl PlantKind for HistoryPlant {
             HistoryPlantCommand::Replay {
                 query,
                 response_sender,
-            } => cx.send_replay(
-                |api| match query {
-                    ReplayQuery::Time(query) => api.request_time_bar_replay(&query),
-                    ReplayQuery::Tick(query) => api.request_tick_bar_replay(&query),
-                    ReplayQuery::Volume(query) => api.request_volume_profile_minute_bars(&query),
-                },
-                PendingReplay::new(response_sender),
-            ),
+            } => {
+                let complete_past = match &query {
+                    ReplayQuery::Time(query) => query.complete_past,
+                    ReplayQuery::Tick(_) | ReplayQuery::Volume(_) => None,
+                };
+
+                cx.send_replay(
+                    |api| match query {
+                        ReplayQuery::Time(query) => api.request_time_bar_replay(&query),
+                        ReplayQuery::Tick(query) => api.request_tick_bar_replay(&query),
+                        ReplayQuery::Volume(query) => {
+                            api.request_volume_profile_minute_bars(&query)
+                        }
+                    },
+                    PendingReplay::new(response_sender).complete_past(complete_past),
+                )
+            }
 
             HistoryPlantCommand::ResumeBars {
                 request_key,

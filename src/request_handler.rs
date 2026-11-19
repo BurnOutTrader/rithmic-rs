@@ -1,8 +1,8 @@
 use tokio::sync::oneshot;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use std::{
-    collections::{HashMap, hash_map::Entry},
+    collections::{HashMap, HashSet, hash_map::Entry},
     time::Duration,
 };
 
@@ -96,6 +96,11 @@ pub(crate) struct RithmicRequestHandler<T> {
     /// minute later. That final response removes the entry.
     late_continuations: HashMap<String, u64>,
 
+    /// Replays answered on a bar past the marker they were asked past, whose
+    /// end marker is still to come. That end marker is expected, so it is not
+    /// logged as the server streaming on after nothing was waiting.
+    completed_past: HashSet<String>,
+
     /// In-flight resume request ids, mapped to the replay each continues.
     resumes: HashMap<String, String>,
 }
@@ -107,6 +112,7 @@ impl<T: RequestTag> RithmicRequestHandler<T> {
             response_vec_map: HashMap::new(),
             replay_map: HashMap::new(),
             late_continuations: HashMap::new(),
+            completed_past: HashSet::new(),
             resumes: HashMap::new(),
         }
     }
@@ -347,7 +353,14 @@ impl<T: RequestTag> RithmicRequestHandler<T> {
             return;
         }
 
+        let expected = self.completed_past.remove(&response.request_id);
+
         match self.late_continuations.remove(&response.request_id) {
+            Some(parts) if expected => debug!(
+                "request_id {}: the end marker of a reply answered on a bar past its marker \
+                 arrived after {} more parts, rp_code {:?}",
+                response.request_id, parts, rp_code
+            ),
             Some(parts) => info!(
                 "request_id {}: the server kept streaming after nothing was waiting: {} more \
                  parts, then a final response with rp_code {:?}",
@@ -373,6 +386,7 @@ impl<T: RequestTag> RithmicRequestHandler<T> {
 
         self.response_vec_map.clear();
         self.late_continuations.clear();
+        self.completed_past.clear();
         self.resumes.clear();
 
         self.handle_map.drain().map(|(_, tag)| tag).collect()

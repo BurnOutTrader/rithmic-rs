@@ -1174,6 +1174,15 @@ pub struct TimeBarReplayRequest {
     /// `Some(true)` lifts the server's 10,000 record cap, so the whole window
     /// replays on this one request.
     pub resume_bars: Option<bool>,
+    /// Completes the reply on its first bar whose `marker` is after this one,
+    /// without waiting for the server's end marker. Not sent to the server.
+    ///
+    /// Bars replay oldest first, so a later bar shows every bar up to this
+    /// marker has been served. A server has been seen to send every bar of a
+    /// replay and never its end marker; asking past the part you need lets
+    /// such a reply still complete. Whatever the server sends after that bar,
+    /// its end marker included, is counted and dropped.
+    pub complete_past: Option<i32>,
 }
 
 impl TimeBarReplayRequest {
@@ -1230,8 +1239,15 @@ impl TimeBarReplayRequest {
         self
     }
 
-    /// Requires a symbol, an exchange, a bar type, a bar period, and a positive,
-    /// ordered window.
+    /// Complete the reply on its first bar past `marker`; see
+    /// [`complete_past`](Self::complete_past).
+    pub fn complete_past(mut self, marker: i32) -> Self {
+        self.complete_past = Some(marker);
+        self
+    }
+
+    /// Requires a symbol, an exchange, a bar type, a bar period, a positive,
+    /// ordered window, and any `complete_past` marker inside that window.
     pub fn validate(&self) -> Result<(), RithmicError> {
         validate_replay_window(
             "time bar replay",
@@ -1253,11 +1269,23 @@ impl TimeBarReplayRequest {
             ));
         }
 
+        // A bar past a marker at or after the end cannot be in the window, and
+        // one before the start would complete the reply on its first bar.
+        if self
+            .complete_past
+            .is_some_and(|marker| !(self.start_time_sec..self.end_time_sec).contains(&marker))
+        {
+            return Err(RithmicError::InvalidArgument(
+                "complete_past must lie inside the window, from its start up to its end"
+                    .to_string(),
+            ));
+        }
+
         Ok(())
     }
 
-    /// Requires a symbol, an exchange, a bar type, a bar period, and a positive,
-    /// ordered window.
+    /// Requires a symbol, an exchange, a bar type, a bar period, a positive,
+    /// ordered window, and any `complete_past` marker inside that window.
     pub fn build(self) -> Result<Self, RithmicError> {
         self.validate()?;
         Ok(self)
@@ -1600,5 +1628,33 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("bar_type_period must be at least 1"), "{err}");
+    }
+
+    #[test]
+    fn a_time_replay_completes_past_a_marker_only_inside_its_window() {
+        assert!(
+            time_replay()
+                .complete_past(1_750_000_000)
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            time_replay()
+                .complete_past(1_750_003_599)
+                .validate()
+                .is_ok()
+        );
+
+        for marker in [1_749_999_999, 1_750_003_600, 1_750_007_200] {
+            let err = time_replay()
+                .complete_past(marker)
+                .build()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("complete_past must lie inside the window"),
+                "{marker}: {err}"
+            );
+        }
     }
 }
